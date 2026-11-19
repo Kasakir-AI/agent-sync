@@ -31,6 +31,7 @@ class Config:
     mirror_mcp: bool = True                                  # user-level MCP servers
     mirror_skills: bool = True                               # your own skills (not from a package) in the source tool
     skip_skills: list[str] = field(default_factory=list)     # skill names never mirrored
+    plugin_skills: list[str] = field(default_factory=list)   # Claude Code plugins whose skills go to Codex and Cursor
     mirror_instructions: bool = False                        # CLAUDE.md <-> AGENTS.md <-> a Cursor rule
     warn_models: list[str] = field(default_factory=list)     # warn when a model name containing one of these appears
     update_clis: bool | list[str] = True                     # true, false, or a list like ["claude", "codex"]
@@ -61,8 +62,8 @@ class Config:
 
 
 KEYS = ("source", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
-        "mirror_mcp", "mirror_skills", "skip_skills", "mirror_instructions", "warn_models", "update_clis",
-        "update_plugins", "cli_commands", "install_commands", "extra_steps", "log_days")
+        "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "mirror_instructions", "warn_models",
+        "update_clis", "update_plugins", "cli_commands", "install_commands", "extra_steps", "log_days")
 
 
 def config_path(home: Path) -> Path:
@@ -73,10 +74,13 @@ def config_path(home: Path) -> Path:
 def load(path: Path | None = None, home: Path | None = None) -> Config:
     home = home or Path.home()
     path = path or config_path(home)
+    return parse(path.read_text() if path.exists() else "", path, home)
+
+
+def parse(text: str, path: Path, home: Path) -> Config:
+    """The settings in `text` (the contents of `path`). Raises ValueError (tomllib's errors are ValueErrors too)."""
     cfg = Config(home=home)
-    if not path.exists():
-        return cfg
-    data = tomllib.loads(path.read_text())
+    data = tomllib.loads(text)
     unknown = set(data) - set(KEYS) - {"agent_models"}
     if unknown:
         raise ValueError(f"unknown setting(s) in {path}: {', '.join(sorted(unknown))}")

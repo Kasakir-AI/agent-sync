@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- `agent-sync config` (or `agent-sync settings`): change every setting by answering questions in the terminal,
+  with an explanation and examples for each. It also changes the pstack model roles and opens your global
+  instructions in your editor. Nothing is written until you save; saving keeps the comments in your settings
+  file, leaves the old file as `config.toml.bak`, and offers a dry run afterwards.
+- Skills inside Claude Code plugins can be copied to Codex and Cursor: name the plugins in `plugin_skills`
+  (opt-in, because most plugins only make sense in Claude Code). A copy goes away when you take the plugin off
+  the list or uninstall it. `agent-sync status` lists the installed plugins that have skills.
+- A link in a skills folder that agent-sync didn't make is now left alone with a warning, instead of making the
+  run fail.
+
 ## 0.2.0 (2026-11-19)
 
 - `agent-sync setup` installs what is missing, after asking: Homebrew (on a Mac, with an administrator's

@@ -12,6 +12,9 @@ agent-sync makes the other two match it, once a day:
 - **Your own skills** (the ones you made in the source tool, not from a package) are copied to the other tools.
   A copy is marked as agent-sync's, so it follows the source and goes away with it; a folder you made by hand in
   the other tool is never touched.
+- **Skills inside Claude Code plugins** (optional, per plugin): the skills of the plugins you pick are copied to
+  Codex and Cursor. Most plugins only make sense in Claude Code, so none are copied until you name them in
+  `plugin_skills`.
 - **pstack model roles** (`feature, refactoring: <model>` and the rest) are copied from the source tool's
   `pstack-models` file to the others, and each tool keeps its own notes on how to run each model.
 - **MCP servers** at user level are added to the tools that don't have them yet. Nothing is ever deleted, and
@@ -28,8 +31,7 @@ agent-sync makes the other two match it, once a day:
 It runs hourly and at login but only does the work once every 20 hours, so a day the Mac was off is caught up
 soon after it starts.
 
-> Status: 0.1.0, the first release. macOS (launchd) and Linux (systemd user timer). See the
-> [roadmap](docs/ROADMAP.md).
+> Status: 0.2.0. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
 
 ## Install
 
@@ -41,6 +43,7 @@ folder on your PATH.
 ```sh
 brew install kasakir-ai/tap/agent-sync      # or: pipx install git+https://github.com/Kasakir-AI/agent-sync.git
 agent-sync setup                  # install whatever is missing: git, Node, Claude Code, Codex, Cursor Agent
+agent-sync config                 # change the settings by answering questions (optional)
 agent-sync run --dry-run          # see what it would change first
 agent-sync run --force --echo     # first run, with every step on screen
 agent-sync install --launcher     # schedule it (hourly + at login, works once a day); --launcher adds
@@ -59,13 +62,20 @@ run while you are logged out.
 
 `agent-sync run --dry-run` shows everything a run would change (files it would write, commands it would run)
 and changes nothing: no log, no state, no package cache. `agent-sync status` shows the last run, the log
-location and the installed CLI versions.
-`agent-sync uninstall` removes the schedule and the launcher.
+location and the installed CLI versions, and which Claude Code plugins have skills you could offer to Codex and
+Cursor. `agent-sync uninstall` removes the schedule and the launcher.
 
 ## Configure
 
-Copy [`config.example.toml`](config.example.toml) to `~/.config/agent-sync/config.toml` and change what you need.
-Every key is optional:
+The easy way: run `agent-sync config` (or `agent-sync settings`). It shows every setting with its current value,
+explains each one with examples, and asks what you want to change: the source tool, skill packages, which
+plugins' skills go to Codex and Cursor, which parts to keep in step, agent models and notes, model warnings,
+update and install commands, extra steps, and the pstack model roles. It also opens your global instructions in
+your editor. Nothing is written until you save; saving keeps the comments in your file, leaves the old one next to
+it as `config.toml.bak`, and then offers a dry run so you can see what the next upkeep would do.
+
+Or edit the file yourself: copy [`config.example.toml`](config.example.toml) to `~/.config/agent-sync/config.toml`
+and change what you need. Every key is optional:
 
 | key | default | what it does |
 | --- | --- | --- |
@@ -75,6 +85,7 @@ Every key is optional:
 | `remove_dropped_skills` | `true` | uninstall skills a package no longer ships |
 | `mirror_roles` / `mirror_mcp` / `mirror_skills` / `update_plugins` | `true` | switch parts off |
 | `skip_skills` | `[]` | your own skills that stay in the source tool only |
+| `plugin_skills` | `[]` | Claude Code plugins whose skills are copied to Codex and Cursor, e.g. `["my-plugin"]` or `["my-plugin@marketplace"]` |
 | `mirror_instructions` | `false` | copy the source tool's global instructions to the others |
 | `warn_models` | `[]` | warn when a model name containing one of these appears, e.g. `["preview-"]` |
 | `update_clis` | `true` | `false`, or a list such as `["claude", "codex"]` |
@@ -90,17 +101,20 @@ and `XDG_STATE_HOME` when set.
 
 ## Make it yours
 
-- **Settings first.** Most changes need only the config file: other skill packages (`skill_packages =
-  ["you/your-skills", "backnotprop/pstack"]`), another source tool, your own models for each tool's agents, parts
-  switched off, your own update commands, notes on agents, or extra steps at the end.
-- **Try changes safely.** `agent-sync run --dry-run` after every config change shows exactly what would happen.
+- **Settings first.** Most changes need only the config file, and `agent-sync config` walks you through them:
+  other skill packages (`skill_packages = ["you/your-skills", "backnotprop/pstack"]`), another source tool, your
+  own models for each tool's agents, plugin skills for Codex and Cursor, parts switched off, your own update
+  commands, notes on agents, or extra steps at the end.
+- **Try changes safely.** `agent-sync run --dry-run` after every config change shows exactly what would happen
+  (`agent-sync config` offers it after you save).
 - **Change the code.** Each part is one small module in `agent_sync/` with no dependencies: `agents.py` (agent
-  formats per tool), `skills.py` (your own skills, dropped package skills), `roles.py` (pstack model roles),
-  `mcp.py` (MCP servers), `instructions.py` (global instructions), `tools.py` (skill packages, plugins, CLI
-  updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd, launcher), `setup.py` (installing what
-  is missing), `cli.py` (the order of the steps). To add a step, write a function that takes `log` and
-  `dry`, never writes when `dry` is true, and call it from `run()` in `cli.py`. `tests/` shows how to test a part
-  against a throwaway home folder (`python -m pytest`).
+  formats per tool), `skills.py` (your own skills, plugin skills, dropped package skills), `roles.py` (pstack
+  model roles), `mcp.py` (MCP servers), `instructions.py` (global instructions), `tools.py` (skill packages,
+  plugins, CLI updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd, launcher),
+  `setup.py` (installing what is missing), `configure.py` and `tomledit.py` (the settings editor), `cli.py` (the
+  order of the steps). To add a step, write a function that takes `log` and `dry`, never writes when `dry` is
+  true, and call it from `run()` in `cli.py`. `tests/` shows how to test a part against a throwaway home folder
+  (`python -m pytest`).
 
 ## Moving from your own upkeep scripts
 
