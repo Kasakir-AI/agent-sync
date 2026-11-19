@@ -22,12 +22,11 @@
 
 - [x] `agent-sync setup`: install what is missing (Homebrew, git, Node, Claude Code, Codex, Cursor Agent).
 
-Next:
+0.3.0 (published 2026-11-19):
 
 - [x] Skills that come inside Claude Code plugins, offered to Codex and Cursor (opt-in per plugin with
       `plugin_skills`; most plugins only make sense in the tool they were written for).
 - [x] `agent-sync config`: change the settings by answering questions in the terminal.
-- [ ] Publish 0.3.0.
 
 Later:
 

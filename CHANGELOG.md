@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-11-19)
 
 - `agent-sync config` (or `agent-sync settings`): change every setting by answering questions in the terminal,
   with an explanation and examples for each. It also changes the pstack model roles and opens your global
