@@ -2,7 +2,9 @@
 
 - macOS: a launchd agent, ~/Library/LaunchAgents/io.github.agent-sync.plist
 - Linux: a systemd user timer, ~/.config/systemd/user/agent-sync.{service,timer}
-- Launcher (macOS): ~/Desktop/Agent Upkeep.command, which runs the upkeep now with every step on screen.
+- Launcher (macOS): ~/Desktop/Agent Upkeep.command, which runs the upkeep now with every step on screen. With
+  `launcher = true` in the config, every run puts it back when it is missing and rewrites it when a new version
+  writes it differently.
 """
 from __future__ import annotations
 
@@ -14,17 +16,19 @@ import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+from . import __version__
+
 LABEL = "io.github.agent-sync"
 LAUNCHER_MARK = "# made by agent-sync install --launcher"
 
 
-def command() -> tuple[list[str], str | None]:
+def command(path: str | None = None) -> tuple[list[str], str | None]:
     """How the schedule starts agent-sync, and the PYTHONPATH it needs (None: none).
 
-    The `agent-sync` command on PATH comes first: it is a link that stays put when Homebrew or pipx upgrade the
-    package, while this Python's own path can change with every version. From a source checkout with no
-    command installed, this Python runs this copy of the package."""
-    exe = shutil.which("agent-sync")
+    The `agent-sync` command on PATH (or on `path`) comes first: it is a link that stays put when Homebrew or pipx
+    upgrade the package, while this Python's own path can change with every version. From a source checkout with
+    no command installed, this Python runs this copy of the package."""
+    exe = shutil.which("agent-sync", path=path)
     if exe:
         return [exe], None
     return [sys.executable, "-m", "agent_sync"], str(Path(__file__).resolve().parents[1])
@@ -91,22 +95,44 @@ WantedBy=timers.target
     }
 
 
-def launcher() -> str:
-    cmd, pythonpath = command()
-    run = " ".join(shlex.quote(a) for a in [*cmd, "run", "--force", "--echo"])
+def launcher(path: str | None = None) -> str:
+    cmd, pythonpath = command(path)
+    start = " ".join(shlex.quote(a) for a in cmd)
     if pythonpath:
-        run = f"PYTHONPATH={shlex.quote(pythonpath)} {run}"
+        start = f"PYTHONPATH={shlex.quote(pythonpath)} {start}"
     return f"""#!/bin/bash
 {LAUNCHER_MARK}
-# Double-click to run agent-sync now, with every step on screen.
+# Written by agent-sync {__version__}; agent-sync rewrites this file when a new version changes it.
+# Double-click to run the upkeep now, with every step on screen.
 printf '\\033]0;Agent Upkeep\\007'
-{run}
+{start} run --force --echo
 status=$?
 echo
 [ "$status" -eq 0 ] && echo "Finished." || echo "Finished with problems (exit $status); see the lines above."
-read -n 1 -s -r -p "Press any key to close this window."
 echo
+read -n 1 -s -r -p "Press s to change the settings, or any other key to close this window. " key
+echo
+if [ "$key" = s ] || [ "$key" = S ]; then
+    {start} config
+fi
 """
+
+
+def refresh_launcher(home: Path, dry: bool = False, path: str | None = None) -> str | None:
+    """Put the launcher on the Desktop, or rewrite it when this version writes it differently.
+    Returns a change line, a "WARN ..." line when a file agent-sync did not make has its name, or None."""
+    p = launcher_path(home)
+    text = launcher(path)
+    if p.exists() and LAUNCHER_MARK not in p.read_text(errors="replace"):
+        return f"WARN  {p} has the Desktop launcher's name, but agent-sync did not make it; left alone"
+    if p.exists() and p.read_text() == text:
+        return None
+    verb = ("would update" if p.exists() else "would add") if dry else ("updated" if p.exists() else "added")
+    if not dry:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+        p.chmod(0o755)
+    return f"{verb} the Desktop launcher {p}"
 
 
 def install(home: Path, state_dir: Path, with_launcher: bool = False) -> list[str]:
@@ -135,11 +161,11 @@ def install(home: Path, state_dir: Path, with_launcher: bool = False) -> list[st
         if sys.platform != "darwin":
             done.append("The Desktop launcher is macOS-only; run `agent-sync run --force --echo` instead.")
         else:
-            p = launcher_path(home)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(launcher())
-            p.chmod(0o755)
-            done.append(f"Launcher: {p} (double-click to run now)")
+            line = refresh_launcher(home)
+            if line and line.startswith("WARN"):
+                done.append(line.removeprefix("WARN  "))
+            else:
+                done.append(f"Launcher: {launcher_path(home)} (double-click to run now; kept up to date by every run)")
     return done
 
 

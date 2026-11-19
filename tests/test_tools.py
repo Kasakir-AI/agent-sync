@@ -50,3 +50,48 @@ def test_dry_run_does_not_start_a_cli_that_never_ran(tmp_path, monkeypatch):
     assert lines == [("dry", "cursor-agent has never been started in this account; a real run would update it")]
     assert not (tmp_path / "calls.log").exists()
     assert tools.version("cursor-agent", tmp_path) == "installed, never started in this account"
+
+
+def test_how_agent_sync_was_installed(tmp_path):
+    cellar = tmp_path / "opt/homebrew/Cellar/agent-sync/0.3.0/libexec"
+    cellar.mkdir(parents=True)
+    assert tools.how_installed(str(cellar)) == ("homebrew", os.path.realpath(tmp_path / "opt/homebrew"))
+    pipx = tmp_path / ".local/pipx/venvs/agent-sync"
+    pipx.mkdir(parents=True)
+    assert tools.how_installed(str(pipx))[0] == "pipx"
+
+
+def run_update_self(monkeypatch, kind, where, outdated=""):
+    calls, lines = [], []
+    monkeypatch.setattr(tools, "how_installed", lambda: (kind, where))
+    monkeypatch.setattr(tools, "brew_writable", lambda prefix: True)
+
+    def sh(args, timeout=900, cwd=None):
+        calls.append(args)
+        if args[:2] == ["brew", "outdated"]:
+            return 0, outdated
+        if args[-1] == "--version":
+            return 0, "agent-sync 9.9.9"
+        return 0, ""
+    monkeypatch.setattr(tools, "sh", sh)
+    upgraded = tools.update_self(lambda kind, text: lines.append(f"{kind} {text}"))
+    return upgraded, calls, lines
+
+
+def test_update_self_homebrew(monkeypatch):
+    upgraded, calls, lines = run_update_self(monkeypatch, "homebrew", "/opt/homebrew")
+    assert not upgraded and ["brew", "upgrade", "--formula", "agent-sync"] not in calls
+    assert lines[-1] == f"ok agent-sync {tools.__version__} is current (Homebrew)"
+    upgraded, calls, lines = run_update_self(monkeypatch, "homebrew", "/opt/homebrew", outdated="agent-sync")
+    assert upgraded and ["brew", "upgrade", "--formula", "agent-sync"] in calls
+    assert lines[-1] == f"info agent-sync: {tools.__version__} -> 9.9.9"
+
+
+def test_update_self_other_installs(monkeypatch):
+    _, calls, _ = run_update_self(monkeypatch, "pipx", "")
+    assert ["pipx", "upgrade", "agent-sync"] in calls
+    _, calls, _ = run_update_self(monkeypatch, "git", "https://github.com/o/agent-sync.git")
+    assert calls[0][-1] == "git+https://github.com/o/agent-sync.git"
+    upgraded, calls, lines = run_update_self(monkeypatch, "other", "it runs from a source checkout")
+    assert not upgraded and calls == []
+    assert lines == ["skip agent-sync can't update itself: it runs from a source checkout"]

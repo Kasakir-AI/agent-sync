@@ -16,6 +16,32 @@ def test_plist_and_systemd_units_are_valid(tmp_path):
 def test_launcher_runs_with_echo_and_force():
     text = schedule.launcher()
     assert text.startswith("#!/bin/bash\n" + schedule.LAUNCHER_MARK) and "run --force --echo" in text
+    assert f"agent-sync {schedule.__version__}" in text and " config\n" in text   # s opens the settings
+
+
+def test_launcher_is_added_kept_current_and_never_replaces_a_stranger(tmp_path, monkeypatch):
+    p = schedule.launcher_path(tmp_path)
+    assert schedule.refresh_launcher(tmp_path, dry=True) == f"would add the Desktop launcher {p}"
+    assert not p.exists()
+    assert schedule.refresh_launcher(tmp_path) == f"added the Desktop launcher {p}"
+    assert p.stat().st_mode & 0o111 and schedule.refresh_launcher(tmp_path) is None
+    monkeypatch.setattr(schedule, "__version__", "99.0")              # a new version writes it differently
+    assert schedule.refresh_launcher(tmp_path) == f"updated the Desktop launcher {p}"
+    assert "agent-sync 99.0" in p.read_text()
+    p.write_text("#!/bin/bash\necho mine\n")
+    assert schedule.refresh_launcher(tmp_path) == (f"WARN  {p} has the Desktop launcher's name, but agent-sync "
+                                                   "did not make it; left alone")
+    assert p.read_text() == "#!/bin/bash\necho mine\n"
+
+
+def test_save_setting_keeps_the_file(tmp_path):
+    from agent_sync.config import config_path, save_setting
+    path = config_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("# mine\nsource = \"claude\"\n")
+    save_setting(tmp_path, "launcher", True)
+    assert path.read_text() == "# mine\nsource = \"claude\"\nlauncher = true\n"
+    assert load(path, home=tmp_path).launcher is True
 
 
 def test_unknown_setting_is_an_error(tmp_path):

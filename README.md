@@ -25,13 +25,18 @@ agent-sync makes the other two match it, once a day:
   added to Codex, and the Cursor plugin marketplaces you added (Cursor manages its built-in ones itself).
 - **The three CLIs** are updated: Claude Code and Cursor Agent through Homebrew when installed that way,
   otherwise through their own updaters, and Codex with `codex update`.
+- **agent-sync itself** is updated the way you installed it: `brew upgrade` for the Homebrew formula,
+  `pipx upgrade`, or a fresh install from GitHub for a pip install from the repository.
+- **A double-click launcher** (macOS, optional): "Agent Upkeep" on the Desktop runs the upkeep with every step on
+  screen, then lets you press `s` to change the settings. Every run puts it back if it is missing and rewrites it
+  when a new version of agent-sync changes it.
 - **A small log** with a timestamp on every line keeps the last 7 days, and warns when a model you listed in
   `warn_models` (one you have no subscription for, say) shows up in any tool's settings.
 
 It runs hourly and at login but only does the work once every 20 hours, so a day the Mac was off is caught up
 soon after it starts.
 
-> Status: 0.3.0. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
+> Status: 0.4.0. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
 
 ## Install
 
@@ -48,6 +53,7 @@ agent-sync run --dry-run          # see what it would change first
 agent-sync run --force --echo     # first run, with every step on screen
 agent-sync install --launcher     # schedule it (hourly + at login, works once a day); --launcher adds
                                   # a double-click "Agent Upkeep" to the Desktop (macOS)
+agent-sync launcher               # just the Desktop launcher, if you want it without reinstalling
 ```
 
 `agent-sync setup` installs only what is missing, and asks first (`--dry-run` lists it, `--yes` skips the
@@ -63,7 +69,8 @@ run while you are logged out.
 `agent-sync run --dry-run` shows everything a run would change (files it would write, commands it would run)
 and changes nothing: no log, no state, no package cache. `agent-sync status` shows the last run, the log
 location and the installed CLI versions, and which Claude Code plugins have skills you could offer to Codex and
-Cursor. `agent-sync uninstall` removes the schedule and the launcher.
+Cursor. `agent-sync uninstall` removes the schedule and the launcher (and switches the launcher setting off, so
+the next run doesn't bring it back).
 
 ## Configure
 
@@ -92,6 +99,8 @@ and change what you need. Every key is optional:
 | `[cli_commands]` | none | your own update command for a CLI, e.g. `codex = ["npm", "install", "-g", "@openai/codex@latest"]` |
 | `[install_commands]` | none | your own install command for `agent-sync setup`, per item: `homebrew`, `git`, `node`, `claude`, `codex`, `cursor` |
 | `[[extra_steps]]` | none | your own commands, run at the end of every upkeep |
+| `update_self` | `true` | update agent-sync itself (Homebrew, pipx, or a pip install from GitHub) |
+| `launcher` | `false` | keep the double-click "Agent Upkeep" on the Desktop and up to date (macOS); `install --launcher` and `agent-sync launcher` switch it on |
 | `log_days` | `7` | how long log lines are kept |
 | `[agent_models]` | `opus` / `claude-opus-5-5-high-fast` / `gpt-6.2-sol` | the model each tool's copy of an agent uses |
 | `[agent_notes]` | none | text added to the end of an agent's prompt in every tool, e.g. `poteto-agent = "..."` |

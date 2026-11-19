@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 (2026-11-19)
+
+- agent-sync now updates itself as part of the upkeep, the way you installed it: `brew upgrade` for the Homebrew
+  formula, `pipx upgrade`, or a fresh install from GitHub. `update_self = false` turns this off.
+- The Desktop launcher stays put and up to date: with `launcher = true` (set by `install --launcher` and the new
+  `agent-sync launcher`), every run puts "Agent Upkeep" back if it is missing and rewrites it when a new version
+  changes it, right after agent-sync updates itself.
+- The launcher runs the upkeep, then lets you press `s` to change the settings.
+- `agent-sync uninstall` switches the launcher setting off, so the launcher stays gone.
+
 ## 0.3.0 (2026-11-19)
 
 - `agent-sync config` (or `agent-sync settings`): change every setting by answering questions in the terminal,

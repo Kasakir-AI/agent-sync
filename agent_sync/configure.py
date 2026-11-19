@@ -26,6 +26,8 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("mirror_instructions", "Copy the global instructions (CLAUDE.md / AGENTS.md) to the other tools"),
     ("update_plugins", "Update plugin marketplaces and plugins in all three tools"),
     ("remove_dropped_skills", "Uninstall skills a skill package stops shipping"),
+    ("update_self", "Update agent-sync itself when a new version is out"),
+    ("launcher", "Keep the double-click \"Agent Upkeep\" launcher on the Desktop (macOS)"),
 ]
 INSTALL_ITEMS = ("homebrew", "git", "node", "claude", "codex", "cursor")
 
@@ -236,6 +238,8 @@ class Editor:
             pick = self.choose(options, "Switch which on/off")
             if pick is None:
                 return
+            if pick == "launcher" and not self.cfg.launcher:
+                self.say("  The next upkeep puts it on the Desktop (or run: agent-sync launcher).")
             if pick == "mirror_instructions" and not self.cfg.mirror_instructions:
                 self.say("  This writes a marked block into the other tools' instruction files; their own text stays.")
             self.set(pick, not getattr(self.cfg, pick))

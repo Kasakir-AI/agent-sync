@@ -28,6 +28,11 @@
       `plugin_skills`; most plugins only make sense in the tool they were written for).
 - [x] `agent-sync config`: change the settings by answering questions in the terminal.
 
+0.4.0 (published 2026-11-19):
+
+- [x] agent-sync updates itself (Homebrew, pipx, or a pip install from GitHub).
+- [x] The Desktop launcher is put back and rewritten by every run when `launcher = true`.
+
 Later:
 
 - Cursor as the source of global instructions (its User Rules live in the app's own database).

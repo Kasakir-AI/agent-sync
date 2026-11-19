@@ -6,7 +6,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+from importlib import metadata
 from pathlib import Path
+
+from . import __version__
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[─-◿]")
 # Where the CLIs usually live, added after your own PATH (a schedule starts with a bare PATH).
@@ -141,6 +145,55 @@ def update_clis(log, cfg, dry: bool = False) -> None:
             act(log, dry, f"{cmd} update", own)
         if not dry:
             log("info", f"{cmd}: {before} -> {version(cmd)}")
+
+
+def how_installed(prefix: str | None = None) -> tuple[str, str]:
+    """How this copy of agent-sync was installed: ("homebrew", brew prefix), ("pipx", ""), ("git", repo URL),
+    or ("other", why it can't update itself)."""
+    real = os.path.realpath(prefix or sys.prefix)
+    if "/Cellar/agent-sync/" in real + "/":
+        return "homebrew", real.split("/Cellar/")[0]
+    if "/pipx/venvs/agent-sync" in real:
+        return "pipx", ""
+    try:
+        direct = json.loads(metadata.distribution("agent-sync").read_text("direct_url.json") or "{}")
+    except (metadata.PackageNotFoundError, ValueError):
+        direct = {}
+    if direct.get("vcs_info", {}).get("vcs") == "git" and direct.get("url"):
+        return "git", direct["url"]
+    return "other", "it runs from a source checkout or a plain pip install"
+
+
+def update_self(log, dry: bool = False, home: Path | None = None) -> bool:
+    """Update agent-sync the way it was installed. Returns True when a new version was installed."""
+    kind, where = how_installed()
+    before = __version__
+    if kind == "homebrew":
+        if not brew_writable(Path(where)):
+            log("skip", f"agent-sync comes from Homebrew in {where}, which another account owns; update it there")
+            return False
+        if not dry:
+            code, out = sh(["brew", "update", "-q"])
+            log("ok" if code == 0 else "FAIL", f"brew update{': ' + out if code else ''}")
+        if "agent-sync" not in sh(["brew", "outdated", "--formula", "agent-sync"], timeout=300)[1]:
+            log("ok", f"agent-sync {before} is current (Homebrew)")
+            return False
+        args = ["brew", "upgrade", "--formula", "agent-sync"]
+    elif kind == "pipx":
+        args = ["pipx", "upgrade", "agent-sync"]
+    elif kind == "git":
+        args = [sys.executable, "-m", "pip", "install", "--quiet", "--upgrade", f"git+{where}"]
+    else:
+        log("skip", f"agent-sync can't update itself: {where}")
+        return False
+    act(log, dry, "agent-sync upgrade", args)
+    if dry:
+        return False
+    after = sh([shutil.which("agent-sync", path=PATH) or "agent-sync", "--version"], timeout=60)[1]
+    if after and after.split()[-1] != before:
+        log("info", f"agent-sync: {before} -> {after.split()[-1]}")
+        return True
+    return False
 
 
 def update_plugins(log, dry: bool = False, home: Path | None = None) -> None:

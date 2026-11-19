@@ -39,6 +39,8 @@ class Config:
     cli_commands: dict[str, list[str]] = field(default_factory=dict)   # your own update command per CLI
     install_commands: dict[str, list[str]] = field(default_factory=dict)  # your own install command for setup
     extra_steps: list[dict] = field(default_factory=list)    # [{name = "...", command = ["..."]}] run at the end
+    launcher: bool = False                                   # keep "Agent Upkeep" on the Desktop (macOS)
+    update_self: bool = True                                 # update agent-sync itself (Homebrew, pipx, git)
     log_days: int = 7
     home: Path = field(default_factory=Path.home)
 
@@ -63,7 +65,8 @@ class Config:
 
 KEYS = ("source", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
         "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "mirror_instructions", "warn_models",
-        "update_clis", "update_plugins", "cli_commands", "install_commands", "extra_steps", "log_days")
+        "update_clis", "update_plugins", "cli_commands", "install_commands", "extra_steps", "launcher",
+        "update_self", "log_days")
 
 
 def config_path(home: Path) -> Path:
@@ -75,6 +78,17 @@ def load(path: Path | None = None, home: Path | None = None) -> Config:
     home = home or Path.home()
     path = path or config_path(home)
     return parse(path.read_text() if path.exists() else "", path, home)
+
+
+def save_setting(home: Path, key: str, value) -> None:
+    """Write one top-level setting into the config file, keeping everything else in it."""
+    from .tomledit import set_value
+    path = config_path(home)
+    text = path.read_text() if path.exists() else ""
+    new = set_value(text, None, key, value)
+    if new != text:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(new)
 
 
 def parse(text: str, path: Path, home: Path) -> Config:

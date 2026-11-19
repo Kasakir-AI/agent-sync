@@ -5,6 +5,8 @@
     agent-sync install [--launcher]     schedule it: hourly + at login, so a missed day catches up
                                         (macOS launchd or a Linux systemd user timer); --launcher adds a
                                         double-click "Agent Upkeep" to the Desktop (macOS)
+    agent-sync launcher                 put the double-click "Agent Upkeep" on the Desktop (macOS); every run
+                                        then keeps it there and up to date
     agent-sync uninstall                remove the schedule and the launcher
     agent-sync setup [--dry-run] [--yes] install what is missing: Homebrew, git, Node, Claude Code, Codex, Cursor
     agent-sync config                   change the settings by answering questions (also: agent-sync settings)
@@ -22,7 +24,7 @@ import urllib.request
 from pathlib import Path
 
 from . import __version__, agents, checks, instructions, mcp, roles, schedule, skills, tools
-from .config import load
+from .config import load, save_setting
 from .log import Log
 
 DUE_HOURS = 20
@@ -63,6 +65,10 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         log("start", f"agent-sync {__version__}, source of truth: {cfg.source}"
             + ("  (dry run: nothing is changed)" if dry else ""))
         log("info", f"skills tool: {tools.skills(cfg.skills_cli, '--version')[1]}")
+        if cfg.launcher and cfg.macos:
+            line = schedule.refresh_launcher(cfg.home, dry, tools.PATH)
+            if line:
+                log("WARN" if line.startswith("WARN") else "sync", line.removeprefix("WARN  "))
         for package in cfg.skill_packages:
             dest = work / "packages" / package.replace("/", "__")
             code, out = tools.checkout(package, dest)
@@ -116,6 +122,11 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         if cfg.update_clis:
             tools.update_clis(log, cfg, dry)
         tools.extra_steps(log, cfg.extra_steps, dry)
+        if cfg.update_self and tools.update_self(log, dry, cfg.home) and cfg.launcher and cfg.macos:
+            # the new version writes its own launcher now, not at the next run
+            exe = shutil.which("agent-sync", path=tools.PATH)
+            if exe:
+                tools.act(log, dry, "Desktop launcher from the new version", [exe, "launcher"])
         for line in checks.unwanted_models(cfg.home, cfg.warn_models):
             log("WARN", line)
         if dry:
@@ -137,13 +148,33 @@ def install(launcher: bool) -> int:
     cfg = load()
     for line in schedule.install(cfg.home, cfg.state_dir, launcher):
         print(line)
+    if launcher and cfg.macos:
+        save_setting(cfg.home, "launcher", True)
     print(f"A run only does the work once every {DUE_HOURS} hours. Log: {cfg.log_file}")
     return 0
 
 
 def uninstall() -> int:
-    for line in schedule.uninstall(load().home):
+    cfg = load()
+    for line in schedule.uninstall(cfg.home):
         print(line)
+    if cfg.launcher:
+        save_setting(cfg.home, "launcher", False)
+    return 0
+
+
+def put_launcher() -> int:
+    cfg = load()
+    if not cfg.macos:
+        print("The Desktop launcher is macOS-only; run `agent-sync run --force --echo` instead.")
+        return 1
+    line = schedule.refresh_launcher(cfg.home, path=tools.PATH)
+    if line and line.startswith("WARN"):
+        print(line.removeprefix("WARN  "))
+        return 1
+    save_setting(cfg.home, "launcher", True)
+    print(f"Launcher: {schedule.launcher_path(cfg.home)} (double-click to run the upkeep; every run keeps it "
+          "up to date)" + ("" if line else ", already current"))
     return 0
 
 
@@ -175,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--dry-run", action="store_true", help="show what would change; change nothing")
     i = sub.add_parser("install", help="schedule the daily upkeep")
     i.add_argument("--launcher", action="store_true", help="also put a double-click launcher on the Desktop (macOS)")
+    sub.add_parser("launcher", help="put the double-click launcher on the Desktop and keep it up to date (macOS)")
     sub.add_parser("uninstall", help="remove the schedule and the launcher")
     s = sub.add_parser("setup", help="install what is missing (Homebrew, git, Node and the three CLIs)")
     s.add_argument("--dry-run", action="store_true", help="only list what is missing and how it would be installed")
@@ -192,4 +224,4 @@ def main(argv: list[str] | None = None) -> int:
         return configure.run(Path.home(), dry_run=lambda: run(force=False, echo=False, dry=True))
     if a.cmd == "install":
         return install(a.launcher)
-    return {"uninstall": uninstall, "status": status}[a.cmd]()
+    return {"uninstall": uninstall, "launcher": put_launcher, "status": status}[a.cmd]()

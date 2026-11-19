@@ -21,6 +21,8 @@ plugin_skills = []      # Claude Code plugins whose skills also go to Codex and 
 mirror_instructions = false  # copy CLAUDE.md into Codex's AGENTS.md (marked block) and a Cursor rule, or back
 update_plugins = true   # plugin marketplaces and plugins: Claude Code, Codex (Git marketplaces), Cursor (yours)
 warn_models = []        # warn when a model name containing one of these shows up, e.g. ["preview-"]
+update_self = true      # update agent-sync itself (Homebrew, pipx, or a pip install from GitHub)
+launcher = false        # keep "Agent Upkeep" on the Desktop and up to date (macOS); agent-sync launcher sets it
 log_days = 7            # keep this many days of log lines
 
 # The model each tool's copy of a mirrored agent runs on.
