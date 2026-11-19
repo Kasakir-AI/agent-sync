@@ -6,6 +6,7 @@
                                         (macOS launchd or a Linux systemd user timer); --launcher adds a
                                         double-click "Agent Upkeep" to the Desktop (macOS)
     agent-sync uninstall                remove the schedule and the launcher
+    agent-sync setup [--dry-run] [--yes] install what is missing: Homebrew, git, Node, Claude Code, Codex, Cursor
     agent-sync status                   last run, log location, installed versions
 """
 from __future__ import annotations
@@ -168,10 +169,16 @@ def main(argv: list[str] | None = None) -> int:
     i = sub.add_parser("install", help="schedule the daily upkeep")
     i.add_argument("--launcher", action="store_true", help="also put a double-click launcher on the Desktop (macOS)")
     sub.add_parser("uninstall", help="remove the schedule and the launcher")
+    s = sub.add_parser("setup", help="install what is missing (Homebrew, git, Node and the three CLIs)")
+    s.add_argument("--dry-run", action="store_true", help="only list what is missing and how it would be installed")
+    s.add_argument("--yes", action="store_true", help="don't ask before installing")
     sub.add_parser("status", help="show the last run and versions")
     a = ap.parse_args(argv)
     if a.cmd == "run":
         return run(a.force, a.echo, a.dry_run)
+    if a.cmd == "setup":
+        from . import setup
+        return setup.run(load(), a.dry_run, a.yes)
     if a.cmd == "install":
         return install(a.launcher)
     return {"uninstall": uninstall, "status": status}[a.cmd]()

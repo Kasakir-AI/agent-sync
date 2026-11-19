@@ -40,11 +40,19 @@ git+https://github.com/Kasakir-AI/agent-sync.git`, then link `~/.local/share/age
 folder on your PATH. 
 ```sh
 brew install kasakir-ai/tap/agent-sync      # or: pipx install git+https://github.com/Kasakir-AI/agent-sync.git
+agent-sync setup                  # install whatever is missing: git, Node, Claude Code, Codex, Cursor Agent
 agent-sync run --dry-run          # see what it would change first
 agent-sync run --force --echo     # first run, with every step on screen
 agent-sync install --launcher     # schedule it (hourly + at login, works once a day); --launcher adds
                                   # a double-click "Agent Upkeep" to the Desktop (macOS)
 ```
+
+`agent-sync setup` installs only what is missing, and asks first (`--dry-run` lists it, `--yes` skips the
+question). On a Mac without Homebrew it installs Homebrew first (that needs an administrator's password); then
+git, Node and the three CLIs come from Homebrew, the CLIs as the casks `claude-code`, `codex` and `cursor-cli`.
+Where Homebrew isn't available to your account, the CLIs come from their official per-user installers into
+`~/.local/bin` (no administrator needed), and setup tells you how to get git or Node. The daily run never
+installs anything; it notes a missing CLI instead.
 
 On Linux, `agent-sync install` sets up a systemd user timer instead; run `loginctl enable-linger` if it should also
 run while you are logged out.
@@ -71,6 +79,7 @@ Every key is optional:
 | `warn_models` | `[]` | warn when a model name containing one of these appears, e.g. `["preview-"]` |
 | `update_clis` | `true` | `false`, or a list such as `["claude", "codex"]` |
 | `[cli_commands]` | none | your own update command for a CLI, e.g. `codex = ["npm", "install", "-g", "@openai/codex@latest"]` |
+| `[install_commands]` | none | your own install command for `agent-sync setup`, per item: `homebrew`, `git`, `node`, `claude`, `codex`, `cursor` |
 | `[[extra_steps]]` | none | your own commands, run at the end of every upkeep |
 | `log_days` | `7` | how long log lines are kept |
 | `[agent_models]` | `opus` / `claude-opus-5-5-high-fast` / `gpt-6.2-sol` | the model each tool's copy of an agent uses |
@@ -88,8 +97,8 @@ and `XDG_STATE_HOME` when set.
 - **Change the code.** Each part is one small module in `agent_sync/` with no dependencies: `agents.py` (agent
   formats per tool), `skills.py` (your own skills, dropped package skills), `roles.py` (pstack model roles),
   `mcp.py` (MCP servers), `instructions.py` (global instructions), `tools.py` (skill packages, plugins, CLI
-  updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd, launcher), `cli.py` (the order
-  of the steps). To add a step, write a function that takes `log` and
+  updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd, launcher), `setup.py` (installing what
+  is missing), `cli.py` (the order of the steps). To add a step, write a function that takes `log` and
   `dry`, never writes when `dry` is true, and call it from `run()` in `cli.py`. `tests/` shows how to test a part
   against a throwaway home folder (`python -m pytest`).
 

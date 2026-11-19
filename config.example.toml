@@ -37,6 +37,11 @@ codex_effort = "high"
 # codex = ["npm", "install", "-g", "@openai/codex@latest"]
 # claude = ["claude", "update"]
 
+# Your own install command for `agent-sync setup`, replacing Homebrew / the official installer.
+# Items: homebrew, git, node, claude, codex, cursor.
+# [install_commands]
+# codex = ["npm", "install", "-g", "@openai/codex"]
+
 # Extra commands run at the end of every upkeep, in order. A dry run only prints them.
 # [[extra_steps]]
 # name = "refresh my dotfiles"

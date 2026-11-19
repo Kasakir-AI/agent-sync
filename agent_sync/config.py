@@ -36,6 +36,7 @@ class Config:
     update_clis: bool | list[str] = True                     # true, false, or a list like ["claude", "codex"]
     update_plugins: bool = True                              # plugin marketplaces and plugins of all three tools
     cli_commands: dict[str, list[str]] = field(default_factory=dict)   # your own update command per CLI
+    install_commands: dict[str, list[str]] = field(default_factory=dict)  # your own install command for setup
     extra_steps: list[dict] = field(default_factory=list)    # [{name = "...", command = ["..."]}] run at the end
     log_days: int = 7
     home: Path = field(default_factory=Path.home)
@@ -61,7 +62,7 @@ class Config:
 
 KEYS = ("source", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
         "mirror_mcp", "mirror_skills", "skip_skills", "mirror_instructions", "warn_models", "update_clis",
-        "update_plugins", "cli_commands", "extra_steps", "log_days")
+        "update_plugins", "cli_commands", "install_commands", "extra_steps", "log_days")
 
 
 def config_path(home: Path) -> Path:

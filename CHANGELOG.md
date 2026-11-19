@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 (2026-11-19)
+
+- `agent-sync setup` installs what is missing, after asking: Homebrew (on a Mac, with an administrator's
+  password), git, Node, and Claude Code, Codex and Cursor Agent. They come from Homebrew when your account can
+  use it, otherwise from each tool's official per-user installer. `--dry-run` lists what it would install;
+  `[install_commands]` in the config replaces any install command.
+- Codex installed with Homebrew (`codex` cask) is upgraded with Homebrew.
+- The daily run notes a missing CLI and points to `agent-sync setup`.
+- The Homebrew formula now brings Node along.
+
 ## 0.1.0 (2026-11-19)
 
 First release.

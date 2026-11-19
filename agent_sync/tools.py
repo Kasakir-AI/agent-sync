@@ -100,13 +100,13 @@ def act(log, dry: bool, label: str, args: list[str], timeout: int = 900) -> None
 
 DEFAULT_CLIS = (("claude", "claude-code", ["claude", "update"]),
                 ("cursor", "cursor-cli", ["cursor-agent", "update"]),
-                ("codex", None, ["codex", "update"]))
+                ("codex", "codex", ["codex", "update"]))
 COMMAND = {"claude": "claude", "cursor": "cursor-agent", "codex": "codex"}
 
 
 def update_clis(log, cfg, dry: bool = False) -> None:
-    """Claude Code and Cursor Agent: their Homebrew cask when installed that way, otherwise their own updater.
-    Codex: `codex update`. `cli_commands` in the config replaces the command for a tool."""
+    """Each CLI: its Homebrew cask when installed that way, otherwise its own updater (`claude update`,
+    `cursor-agent update`, `codex update`). `cli_commands` in the config replaces the command for a tool."""
     brew = shutil.which("brew", path=PATH)
     brew_updated = False
     for tool, cask, own in DEFAULT_CLIS:
@@ -114,7 +114,7 @@ def update_clis(log, cfg, dry: bool = False) -> None:
             continue
         cmd = COMMAND[tool]
         if not shutil.which(cmd, path=PATH):
-            log("skip", f"{cmd} not installed")
+            log("skip", f"{cmd} not installed (`agent-sync setup` installs it)")
             continue
         prefix = homebrew_prefix(cmd, cask) if cask else None
         if dry and not started(cmd, cfg.home):
