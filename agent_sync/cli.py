@@ -1,0 +1,177 @@
+"""agent-sync: keep Claude Code, Codex and Cursor in step.
+
+    agent-sync run [--force] [--echo]   do the upkeep (only when the last run is 20+ hours old, unless --force)
+    agent-sync run --dry-run            show everything a run would change, and change nothing
+    agent-sync install [--launcher]     schedule it: hourly + at login, so a missed day catches up
+                                        (macOS launchd or a Linux systemd user timer); --launcher adds a
+                                        double-click "Agent Upkeep" to the Desktop (macOS)
+    agent-sync uninstall                remove the schedule and the launcher
+    agent-sync status                   last run, log location, installed versions
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import tempfile
+import time
+import urllib.request
+from pathlib import Path
+
+from . import __version__, agents, checks, instructions, mcp, roles, schedule, skills, tools
+from .config import load
+from .log import Log
+
+DUE_HOURS = 20
+
+
+def online() -> bool:
+    try:
+        urllib.request.urlopen("https://github.com", timeout=15).close()
+        return True
+    except OSError:
+        return False
+
+
+def run(force: bool, echo: bool, dry: bool = False) -> int:
+    cfg = load()
+    log = Log(cfg.log_file, echo=echo or dry, write=not dry)
+    # A dry run works in a throwaway folder, so it leaves no state, lock or package cache behind.
+    work = Path(tempfile.mkdtemp(prefix="agent-sync-dry.")) if dry else cfg.state_dir
+    if dry:
+        os.environ["npm_config_cache"] = str(work / "npm-cache")   # npx keeps its downloads there too
+    stamp, lock = cfg.state_dir / "last-run", work / "lock"
+    work.mkdir(parents=True, exist_ok=True)
+    if not (force or dry) and stamp.exists() and time.time() - stamp.stat().st_mtime < DUE_HOURS * 3600:
+        return 0
+    try:
+        lock.mkdir()
+    except FileExistsError:
+        if time.time() - lock.stat().st_mtime < 7200:
+            if echo:
+                print("another agent-sync run is in progress")
+            return 0
+    try:
+        if not dry:
+            log.prune(cfg.log_days)
+        if not online():
+            log("skip", "no network; will try again at the next scheduled check")
+            return 0
+        log("start", f"agent-sync {__version__}, source of truth: {cfg.source}"
+            + ("  (dry run: nothing is changed)" if dry else ""))
+        log("info", f"skills tool: {tools.skills(cfg.skills_cli, '--version')[1]}")
+        for package in cfg.skill_packages:
+            dest = work / "packages" / package.replace("/", "__")
+            code, out = tools.checkout(package, dest)
+            log("ok" if code == 0 else "FAIL", f"fetch {package}{': ' + out if code else ''}")
+            tools.act(log, dry, f"skills from {package} for claude-code, codex, cursor",
+                      tools.skill_args(cfg.skills_cli, package))
+            if code == 0 and cfg.remove_dropped_skills:
+                for name in skills.dropped(cfg.home, package, dest):
+                    tools.act(log, dry, f"remove {name} (no longer in {package})",
+                              ["npx", "-y", "--prefer-online", cfg.skills_cli, "remove", "-g", "-s", name, "-y"])
+            if (dest / "agents").is_dir():
+                version = "0"
+                manifest = dest / ".cursor-plugin/plugin.json"
+                if manifest.exists():
+                    version = json.loads(manifest.read_text()).get("version", "0")
+                try:
+                    for line in agents.mirror(dest, package, cfg.home, cfg.agent_models, version, dry,
+                                              cfg.agent_notes):
+                        log("sync", line)
+                    log("ok", f"agents from {package} mirrored")
+                except (ValueError, OSError) as e:
+                    log("FAIL", f"agents from {package}: {e}")
+        if cfg.mirror_skills:
+            try:
+                for line in skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry):
+                    log("WARN" if line.startswith("WARN") else "sync", line.removeprefix("WARN  "))
+                log("ok", "your own skills mirrored")
+            except OSError as e:
+                log("FAIL", f"your own skills: {e}")
+        if cfg.mirror_roles:
+            for line in roles.mirror(cfg.home, cfg.source, dry):
+                kind = line.split()[0] if line.startswith(("WARN", "skip")) else "sync"
+                log(kind, line.removeprefix(kind).strip() if kind != "sync" else line)
+            log("ok", "model roles mirrored")
+        if cfg.mirror_mcp:
+            try:
+                for line in mcp.mirror(cfg.home, cfg.source, dry):
+                    log("sync", line)
+                log("ok", "MCP servers mirrored")
+            except (ValueError, OSError) as e:
+                log("FAIL", f"MCP servers: {e}")
+        if cfg.mirror_instructions:
+            try:
+                for line in instructions.mirror(cfg.home, cfg.source, dry):
+                    log("skip" if line.startswith("skip") else "sync", line.removeprefix("skip  "))
+                log("ok", "global instructions mirrored")
+            except OSError as e:
+                log("FAIL", f"global instructions: {e}")
+        if cfg.update_plugins:
+            tools.update_plugins(log, dry, cfg.home)
+        if cfg.update_clis:
+            tools.update_clis(log, cfg, dry)
+        tools.extra_steps(log, cfg.extra_steps, dry)
+        for line in checks.unwanted_models(cfg.home, cfg.warn_models):
+            log("WARN", line)
+        if dry:
+            log("done", "dry run finished: nothing was changed")
+            return 0
+        stamp.touch()
+        log("done", f"agent-sync finished, {log.problems} problem(s)")
+        return 1 if log.problems else 0
+    finally:
+        try:
+            lock.rmdir()
+        except OSError:
+            pass
+        if dry:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def install(launcher: bool) -> int:
+    cfg = load()
+    for line in schedule.install(cfg.home, cfg.state_dir, launcher):
+        print(line)
+    print(f"A run only does the work once every {DUE_HOURS} hours. Log: {cfg.log_file}")
+    return 0
+
+
+def uninstall() -> int:
+    for line in schedule.uninstall(load().home):
+        print(line)
+    return 0
+
+
+def status() -> int:
+    cfg = load()
+    stamp = cfg.state_dir / "last-run"
+    print(f"agent-sync {__version__}  source of truth: {cfg.source}  packages: {', '.join(cfg.skill_packages)}")
+    print(f"last run: {time.ctime(stamp.stat().st_mtime) if stamp.exists() else 'never'}")
+    print(f"log: {cfg.log_file}")
+    print(f"schedule: {'installed' if schedule.installed(cfg.home) else 'not installed'}")
+    for cmd in ("claude", "codex", "cursor-agent"):
+        print(f"{cmd}: {tools.version(cmd, cfg.home)}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="agent-sync", description=__doc__.split("\n")[0])
+    ap.add_argument("--version", action="version", version=f"agent-sync {__version__}")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run", help="do the upkeep")
+    r.add_argument("--force", action="store_true", help="run even if the last run is recent")
+    r.add_argument("--echo", action="store_true", help="also print each log line")
+    r.add_argument("--dry-run", action="store_true", help="show what would change; change nothing")
+    i = sub.add_parser("install", help="schedule the daily upkeep")
+    i.add_argument("--launcher", action="store_true", help="also put a double-click launcher on the Desktop (macOS)")
+    sub.add_parser("uninstall", help="remove the schedule and the launcher")
+    sub.add_parser("status", help="show the last run and versions")
+    a = ap.parse_args(argv)
+    if a.cmd == "run":
+        return run(a.force, a.echo, a.dry_run)
+    if a.cmd == "install":
+        return install(a.launcher)
+    return {"uninstall": uninstall, "status": status}[a.cmd]()

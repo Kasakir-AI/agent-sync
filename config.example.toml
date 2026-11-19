@@ -1,0 +1,44 @@
+# ~/.config/agent-sync/config.toml - every key is optional; these are the defaults.
+
+# The tool whose setup the others mirror: "claude", "codex" or "cursor".
+source = "claude"
+
+# Skill packages (GitHub owner/repo) installed for all three tools with the `skills` CLI.
+# A package with an agents/ folder also gets its agents mirrored.
+skill_packages = ["backnotprop/pstack"]
+
+# The skills CLI to run with npx. "skills@latest" always uses the newest release; pin a version to hold it.
+skills_cli = "skills@latest"
+remove_dropped_skills = true   # uninstall skills a package no longer ships
+
+mirror_roles = true     # copy pstack's per-role model lines from the source tool's pstack-models file
+mirror_mcp = true       # add the source tool's user-level MCP servers to the other tools (never deletes)
+update_clis = true      # update Claude Code, Codex and Cursor Agent; or a list, e.g. ["claude", "codex"]
+mirror_skills = true    # copy your own skills (not from a package) from the source tool to the others
+skip_skills = []        # your own skills that stay in the source tool, e.g. ["only-for-claude"]
+mirror_instructions = false  # copy CLAUDE.md into Codex's AGENTS.md (marked block) and a Cursor rule, or back
+update_plugins = true   # plugin marketplaces and plugins: Claude Code, Codex (Git marketplaces), Cursor (yours)
+warn_models = []        # warn when a model name containing one of these shows up, e.g. ["preview-"]
+log_days = 7            # keep this many days of log lines
+
+# The model each tool's copy of a mirrored agent runs on.
+[agent_models]
+claude = "opus"
+cursor = "claude-opus-5-5-high-fast"
+codex = "gpt-6.2-sol"
+codex_effort = "high"
+
+# Your own text added to the end of an agent's prompt, in every tool's copy of it.
+# [agent_notes]
+# poteto-agent = "On this machine pstack lives in ~/.agents/skills."
+
+# Your own update command for a CLI, replacing the built-in one (Homebrew or the tool's own updater).
+# [cli_commands]
+# codex = ["npm", "install", "-g", "@openai/codex@latest"]
+# claude = ["claude", "update"]
+
+# Extra commands run at the end of every upkeep, in order. A dry run only prints them.
+# [[extra_steps]]
+# name = "refresh my dotfiles"
+# command = ["git", "-C", "/path/to/dotfiles", "pull", "--ff-only"]
+# timeout = 300

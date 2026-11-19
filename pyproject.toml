@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-sync"
+dynamic = ["version"]
+description = "Keep Claude Code, Codex and Cursor in step: skill packages, agents, model roles, MCP servers and CLI updates."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+agent-sync = "agent_sync.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "agent_sync.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["agent_sync*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E702", "E741"]   # short `a; b` pairs and `l` as a line variable read fine here
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

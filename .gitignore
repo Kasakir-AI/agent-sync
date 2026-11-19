@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.DS_Store
+.hypothesis/
+.ruff_cache/
+# Agent skills and settings of whoever works on this repo stay on their machine.
+.claude/
+.agents/
+.codex/
+.cursor/

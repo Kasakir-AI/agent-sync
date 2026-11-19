@@ -1,0 +1,27 @@
+# Changelog
+
+## 0.1.0 (2026-11-19)
+
+First release.
+
+- Skill packages installed and updated for Claude Code, Codex and Cursor from one shared copy (`skills` CLI).
+- Package agents mirrored into each tool's format, with a model per tool; Cursor gets them as a local plugin.
+- pstack model roles mirrored from the source tool.
+- User-level MCP servers added to the tools that lack them (never deleted).
+- Claude Code, Codex and Cursor Agent updated (Homebrew when installed that way).
+- Plugin updates: Claude Code marketplaces and installed plugins, Cursor marketplaces you added.
+- `agent-sync run --dry-run` shows every file and command a run would change, and changes nothing.
+- Customization in the config: which CLIs to update, your own update command per CLI, and extra steps.
+- Your own skills (not from a package) copied from the source tool to the others, marked so they follow the source.
+- Skills a package stops shipping are uninstalled.
+- Your own notes on package agents (`[agent_notes]`), and warnings for models you never want (`warn_models`).
+- Global instructions mirrored on request: CLAUDE.md, Codex AGENTS.md (in a marked block) and a Cursor rule.
+- Codex plugin marketplaces are refreshed along with the Claude Code and Cursor ones.
+- Daily schedule on macOS (launchd) and Linux (systemd user timer): hourly and at login, works once every
+  20 hours; a 7-day log; `install --launcher` adds a double-click launcher on the Mac Desktop.
+- A misspelled setting is reported instead of ignored; Linux follows the XDG folders.
+- A CLI installed by a Homebrew that another account owns is left alone (with a note) instead of failing or being
+  reinstalled by its own updater; `brew update` only runs when a Homebrew copy will be upgraded.
+- A dry run and `status` never start a CLI that has not run in this account yet (it would create its settings).
+- The schedule and the launcher start the installed `agent-sync` command, so they keep working after upgrades.
+- `agent-sync --version`.

@@ -1,0 +1,170 @@
+"""The schedule (hourly and at login; a run only works when the last one is 20+ hours old) and the launcher.
+
+- macOS: a launchd agent, ~/Library/LaunchAgents/io.github.agent-sync.plist
+- Linux: a systemd user timer, ~/.config/systemd/user/agent-sync.{service,timer}
+- Launcher (macOS): ~/Desktop/Agent Upkeep.command, which runs the upkeep now with every step on screen.
+"""
+from __future__ import annotations
+
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from xml.sax.saxutils import escape
+
+LABEL = "io.github.agent-sync"
+LAUNCHER_MARK = "# made by agent-sync install --launcher"
+
+
+def command() -> tuple[list[str], str | None]:
+    """How the schedule starts agent-sync, and the PYTHONPATH it needs (None: none).
+
+    The `agent-sync` command on PATH comes first: it is a link that stays put when Homebrew or pipx upgrade the
+    package, while this Python's own path can change with every version. From a source checkout with no
+    command installed, this Python runs this copy of the package."""
+    exe = shutil.which("agent-sync")
+    if exe:
+        return [exe], None
+    return [sys.executable, "-m", "agent_sync"], str(Path(__file__).resolve().parents[1])
+
+
+def plist_path(home: Path) -> Path:
+    return home / "Library/LaunchAgents" / f"{LABEL}.plist"
+
+
+def systemd_dir(home: Path) -> Path:
+    xdg = os.environ.get("XDG_CONFIG_HOME") if home == Path.home() else None
+    return (Path(xdg) if xdg else home / ".config") / "systemd/user"
+
+
+def launcher_path(home: Path) -> Path:
+    return home / "Desktop/Agent Upkeep.command"
+
+
+def plist(log_out: Path) -> str:
+    cmd, pythonpath = command()
+    args = "".join(f"<string>{escape(a)}</string>" for a in [*cmd, "run"])
+    env = (f"\n  <key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>{escape(pythonpath)}</string></dict>"
+           if pythonpath else "")
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{LABEL}</string>
+  <key>ProgramArguments</key><array>{args}</array>{env}
+  <key>StartInterval</key><integer>3600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>LowPriorityIO</key><true/>
+  <key>StandardOutPath</key><string>{log_out}</string>
+  <key>StandardErrorPath</key><string>{log_out}</string>
+</dict></plist>
+"""
+
+
+def systemd_units() -> dict[str, str]:
+    cmd, pythonpath = command()
+    exec_start = " ".join(shlex.quote(a) for a in [*cmd, "run"])
+    env = f'Environment="PYTHONPATH={pythonpath}"\n' if pythonpath else ""
+    return {
+        "agent-sync.service": f"""[Unit]
+Description=agent-sync: keep Claude Code, Codex and Cursor in step
+After=network-online.target
+
+[Service]
+Type=oneshot
+{env}ExecStart={exec_start}
+Nice=10
+""",
+        "agent-sync.timer": """[Unit]
+Description=Run agent-sync hourly and soon after login (it works once every 20 hours)
+
+[Timer]
+OnStartupSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""",
+    }
+
+
+def launcher() -> str:
+    cmd, pythonpath = command()
+    run = " ".join(shlex.quote(a) for a in [*cmd, "run", "--force", "--echo"])
+    if pythonpath:
+        run = f"PYTHONPATH={shlex.quote(pythonpath)} {run}"
+    return f"""#!/bin/bash
+{LAUNCHER_MARK}
+# Double-click to run agent-sync now, with every step on screen.
+printf '\\033]0;Agent Upkeep\\007'
+{run}
+status=$?
+echo
+[ "$status" -eq 0 ] && echo "Finished." || echo "Finished with problems (exit $status); see the lines above."
+read -n 1 -s -r -p "Press any key to close this window."
+echo
+"""
+
+
+def install(home: Path, state_dir: Path, with_launcher: bool = False) -> list[str]:
+    done = []
+    if sys.platform == "darwin":
+        p = plist_path(home)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        p.write_text(plist(state_dir / "launchd.out"))
+        domain = f"gui/{os.getuid()}"
+        subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)
+        subprocess.run(["launchctl", "bootstrap", domain, str(p)], check=True)
+        done.append(f"Scheduled: {p} (hourly and at login)")
+    elif sys.platform.startswith("linux"):
+        d = systemd_dir(home)
+        d.mkdir(parents=True, exist_ok=True)
+        for name, text in systemd_units().items():
+            (d / name).write_text(text)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "--user", "enable", "--now", "agent-sync.timer"], check=True)
+        done.append(f"Scheduled: {d}/agent-sync.timer (hourly and after login). "
+                    "To keep it running while you are logged out: loginctl enable-linger")
+    else:
+        raise SystemExit(f"No scheduler support for {sys.platform}; run `agent-sync run` from your own scheduler.")
+    if with_launcher:
+        if sys.platform != "darwin":
+            done.append("The Desktop launcher is macOS-only; run `agent-sync run --force --echo` instead.")
+        else:
+            p = launcher_path(home)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(launcher())
+            p.chmod(0o755)
+            done.append(f"Launcher: {p} (double-click to run now)")
+    return done
+
+
+def uninstall(home: Path) -> list[str]:
+    done = []
+    if sys.platform == "darwin":
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"], capture_output=True)
+        if plist_path(home).exists():
+            plist_path(home).unlink()
+            done.append("Schedule removed.")
+    elif sys.platform.startswith("linux"):
+        subprocess.run(["systemctl", "--user", "disable", "--now", "agent-sync.timer"], capture_output=True)
+        for name in systemd_units():
+            if (systemd_dir(home) / name).exists():
+                (systemd_dir(home) / name).unlink()
+                done.append(f"Removed {systemd_dir(home) / name}")
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    p = launcher_path(home)
+    if p.exists() and LAUNCHER_MARK in p.read_text():
+        p.unlink()
+        done.append(f"Removed {p}")
+    return done or ["Nothing was installed."]
+
+
+def installed(home: Path) -> bool:
+    if sys.platform == "darwin":
+        return plist_path(home).exists()
+    return (systemd_dir(home) / "agent-sync.timer").exists()
