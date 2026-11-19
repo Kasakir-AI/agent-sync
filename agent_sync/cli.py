@@ -7,6 +7,7 @@
                                         double-click "Agent Upkeep" to the Desktop (macOS)
     agent-sync uninstall                remove the schedule and the launcher
     agent-sync setup [--dry-run] [--yes] install what is missing: Homebrew, git, Node, Claude Code, Codex, Cursor
+    agent-sync config                   change the settings by answering questions (also: agent-sync settings)
     agent-sync status                   last run, log location, installed versions
 """
 from __future__ import annotations
@@ -86,9 +87,9 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                     log("FAIL", f"agents from {package}: {e}")
         if cfg.mirror_skills:
             try:
-                for line in skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry):
+                for line in skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry, cfg.plugin_skills):
                     log("WARN" if line.startswith("WARN") else "sync", line.removeprefix("WARN  "))
-                log("ok", "your own skills mirrored")
+                log("ok", "your own skills" + (" and plugin skills" if cfg.plugin_skills else "") + " mirrored")
             except OSError as e:
                 log("FAIL", f"your own skills: {e}")
         if cfg.mirror_roles:
@@ -155,6 +156,12 @@ def status() -> int:
     print(f"schedule: {'installed' if schedule.installed(cfg.home) else 'not installed'}")
     for cmd in ("claude", "codex", "cursor-agent"):
         print(f"{cmd}: {tools.version(cmd, cfg.home)}")
+    chosen = set(cfg.plugin_skills)
+    for pid, root in skills.plugins(cfg.home).items():
+        names = sorted(skills.plugin_skill_dirs(root))
+        if names:
+            offered = "offered to Codex and Cursor" if chosen & {pid, pid.split("@")[0]} else "Claude Code only"
+            print(f"plugin {pid}: {len(names)} skill(s), {offered}")
     return 0
 
 
@@ -172,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("setup", help="install what is missing (Homebrew, git, Node and the three CLIs)")
     s.add_argument("--dry-run", action="store_true", help="only list what is missing and how it would be installed")
     s.add_argument("--yes", action="store_true", help="don't ask before installing")
+    sub.add_parser("config", aliases=["settings"], help="change the settings by answering questions")
     sub.add_parser("status", help="show the last run and versions")
     a = ap.parse_args(argv)
     if a.cmd == "run":
@@ -179,6 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "setup":
         from . import setup
         return setup.run(load(), a.dry_run, a.yes)
+    if a.cmd in ("config", "settings"):
+        from . import configure
+        return configure.run(Path.home(), dry_run=lambda: run(force=False, echo=False, dry=True))
     if a.cmd == "install":
         return install(a.launcher)
     return {"uninstall": uninstall, "status": status}[a.cmd]()

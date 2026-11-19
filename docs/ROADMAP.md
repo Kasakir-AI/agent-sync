@@ -1,6 +1,6 @@
 # Roadmap
 
-Planned before 0.1.0 is published:
+0.1.0 (published 2026-11-19):
 
 - [x] Plugins: Claude Code marketplaces and installed plugins, and the Cursor marketplaces the user added.
 - [x] Plugins: Codex Git plugin marketplaces (`codex plugin marketplace upgrade`).
@@ -14,12 +14,20 @@ Planned before 0.1.0 is published:
 - [x] Linux: a systemd user timer (`agent-sync install` on Linux) and XDG locations.
 - [x] Checked end to end in an empty home folder (real package install, stubbed CLIs).
 - [x] Verified on a fresh macOS user account (standard user, no setup): install, dry run, first run, launchd at
-      login, launcher, uninstall. The run started at login was stopped by the cleanup before it finished.
+      login, launcher, uninstall.
 - [x] CI: lint (ruff) and the tests on macOS and Linux.
-- [ ] Publish 0.1.0 (GitHub release, Homebrew tap formula).
+- [x] Publish 0.1.0 (GitHub release, Homebrew tap formula).
+
+0.2.0 (published 2026-11-19):
+
+- [x] `agent-sync setup`: install what is missing (Homebrew, git, Node, Claude Code, Codex, Cursor Agent).
+
+0.3.0 (published 2026-11-19):
+
+- [x] Skills that come inside Claude Code plugins, offered to Codex and Cursor (opt-in per plugin with
+      `plugin_skills`; most plugins only make sense in the tool they were written for).
+- [x] `agent-sync config`: change the settings by answering questions in the terminal.
 
 Later:
 
-- Skills that come inside Claude Code plugins, offered to Codex and Cursor (opt-in per plugin; most plugins only
-  make sense in the tool they were written for).
 - Cursor as the source of global instructions (its User Rules live in the app's own database).

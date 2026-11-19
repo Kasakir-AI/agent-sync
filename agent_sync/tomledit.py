@@ -1,0 +1,171 @@
+"""Change single settings in a TOML file and keep everything else in it: comments, blank lines, order.
+
+Python reads TOML (tomllib) but cannot write it, and rewriting the whole file would drop the user's comments. So a
+change here replaces only the text of the one value (or table) it touches. Handles what config.toml uses: strings,
+numbers, booleans, arrays (also across lines), tables like [agent_models] and the [[extra_steps]] array of tables.
+"""
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+
+HEADER = re.compile(r"^[ \t]*\[(\[?)[ \t]*([A-Za-z0-9_.\"-]+)[ \t]*\]\]?[ \t]*(#.*)?$")
+KEY = re.compile(r"[ \t]*([A-Za-z0-9_-]+|\"(?:[^\"\\]|\\.)*\")[ \t]*=[ \t]*")
+BARE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def key_text(key: str) -> str:
+    return key if BARE.match(key) else json.dumps(key)
+
+
+def value_text(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    if isinstance(value, str):
+        return json.dumps(value)        # a JSON string is a valid TOML basic string
+    if isinstance(value, list):
+        return "[" + ", ".join(value_text(v) for v in value) + "]"
+    raise TypeError(f"can't write {type(value).__name__} to TOML")
+
+
+def value_end(text: str, i: int) -> int:
+    """Index just past the value starting at text[i], before any comment after it on its last line."""
+    depth, last = 0, i
+    while i < len(text):
+        quote = next((q for q in ('"""', "'''", '"', "'") if text.startswith(q, i)), None)
+        if quote:
+            i += len(quote)
+            while i < len(text) and not text.startswith(quote, i):
+                i += 2 if quote[0] == '"' and text[i] == "\\" else 1
+            i += len(quote)
+            last = i
+            continue
+        c = text[i]
+        if c == "#" or (c == "\n" and depth <= 0):
+            if depth <= 0:
+                return last
+            i = text.find("\n", i) if c == "#" else i + 1
+            i = len(text) if i < 0 else i
+            continue
+        depth += c in "[{"
+        depth -= c in "]}"
+        i += 1
+        if not c.isspace():
+            last = i
+    return last
+
+
+@dataclass
+class Section:
+    name: str | None        # None: the settings before the first [table]
+    array: bool             # an [[array]] table
+    start: int              # where its header line starts (0 for the top)
+    body: int               # where the lines after the header start
+    end: int
+    keys: list[tuple[str, int, int, int]]   # (key, line start, value start, value end)
+
+
+def sections(text: str) -> list[Section]:
+    out = [Section(None, False, 0, 0, len(text), [])]
+    i = 0
+    while i < len(text):
+        eol = text.find("\n", i)
+        eol = len(text) if eol < 0 else eol
+        line = text[i:eol]
+        m = HEADER.match(line)
+        k = KEY.match(text, i)
+        if m:
+            out[-1].end = i
+            out.append(Section(m.group(2).strip('"'), bool(m.group(1)), i, min(eol + 1, len(text)), len(text), []))
+        elif k and k.start() == i:
+            ve = value_end(text, k.end())
+            out[-1].keys.append((json.loads(k.group(1)) if k.group(1).startswith('"') else k.group(1),
+                                 i, k.end(), ve))
+            eol = text.find("\n", ve)
+            eol = len(text) if eol < 0 else eol
+        i = eol + 1
+    return out
+
+
+def section(text: str, table: str | None) -> Section | None:
+    return next((s for s in sections(text) if s.name == table and not s.array), None)
+
+
+def append_block(text: str, block: str) -> str:
+    if not text.strip():
+        return block
+    return text.rstrip("\n") + "\n\n" + block
+
+
+def set_value(text: str, table: str | None, key: str, value) -> str:
+    """`key = value` at the top (table None) or in [table]: the old value replaced, or a new line added."""
+    line = f"{key_text(key)} = {value_text(value)}"
+    s = section(text, table)
+    if s is None:
+        return append_block(text, f"[{table}]\n{line}\n")
+    hit = next((k for k in s.keys if k[0] == key), None)
+    if hit:
+        return text[:hit[1]] + line + text[hit[3]:]
+    if s.keys:                                    # after the last setting of the section
+        at = text.find("\n", s.keys[-1][3])
+        at = len(text) if at < 0 else at + 1
+    elif table is not None:                       # right under the [table] line
+        at = s.body
+    else:                                         # top: before the comments that lead into the first table
+        lines = text[:s.end].splitlines(keepends=True)
+        while lines and (not lines[-1].strip() or lines[-1].lstrip().startswith("#")) and s.end < len(text):
+            lines.pop()
+        at = sum(map(len, lines))
+        if at == 0 and s.end == len(text):
+            at = len(text)
+    before = text[:at]
+    if before and not before.endswith("\n"):
+        before += "\n"
+    after = text[at:]
+    if table is None and not s.keys and after.strip():
+        return before + line + "\n\n" + after
+    return before + line + "\n" + after
+
+
+def remove_value(text: str, table: str | None, key: str) -> str:
+    s = section(text, table)
+    hit = next((k for k in s.keys if k[0] == key), None) if s else None
+    if not hit:
+        return text
+    eol = text.find("\n", hit[3])
+    return text[:hit[1]] + (text[eol + 1:] if eol >= 0 else "")
+
+
+def set_table(text: str, table: str, values: dict) -> str:
+    """Make [table] hold exactly `values`: changed keys replaced in place, removed keys deleted, new ones added.
+    An empty `values` removes the table's settings (and the [table] line when nothing else is under it)."""
+    s = section(text, table)
+    for key in [k[0] for k in s.keys] if s else []:
+        if key not in values:
+            text = remove_value(text, table, key)
+    for key, value in values.items():
+        text = set_value(text, table, key, value)
+    s = section(text, table)
+    if s and not values and not text[s.body:s.end].strip():
+        text = text[:s.start].rstrip("\n") + "\n" + ("\n" + text[s.end:].lstrip("\n") if text[s.end:].strip() else "")
+    return text
+
+
+def set_array_tables(text: str, name: str, items: list[dict]) -> str:
+    """Replace every [[name]] table with `items`, written where the first one was (or at the end)."""
+    block = "\n".join(f"[[{name}]]\n" + "".join(f"{key_text(k)} = {value_text(v)}\n" for k, v in item.items())
+                      for item in items)
+    spans = [(s.start, s.end) for s in sections(text) if s.name == name and s.array]
+    if not spans:
+        return append_block(text, block) if items else text
+    for start, end in reversed(spans[1:]):
+        text = text[:start] + text[end:]
+    start, end = spans[0]
+    rest = text[end:].lstrip("\n")
+    head = text[:start]
+    if not block:
+        return head.rstrip("\n") + "\n" + ("\n" + rest if rest else "")
+    return head + block + ("\n" + rest if rest else "")

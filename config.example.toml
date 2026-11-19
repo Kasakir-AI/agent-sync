@@ -1,4 +1,5 @@
 # ~/.config/agent-sync/config.toml - every key is optional; these are the defaults.
+# `agent-sync config` changes these settings by asking questions, and keeps your comments.
 
 # The tool whose setup the others mirror: "claude", "codex" or "cursor".
 source = "claude"
@@ -16,6 +17,7 @@ mirror_mcp = true       # add the source tool's user-level MCP servers to the ot
 update_clis = true      # update Claude Code, Codex and Cursor Agent; or a list, e.g. ["claude", "codex"]
 mirror_skills = true    # copy your own skills (not from a package) from the source tool to the others
 skip_skills = []        # your own skills that stay in the source tool, e.g. ["only-for-claude"]
+plugin_skills = []      # Claude Code plugins whose skills also go to Codex and Cursor, e.g. ["my-plugin"]
 mirror_instructions = false  # copy CLAUDE.md into Codex's AGENTS.md (marked block) and a Cursor rule, or back
 update_plugins = true   # plugin marketplaces and plugins: Claude Code, Codex (Git marketplaces), Cursor (yours)
 warn_models = []        # warn when a model name containing one of these shows up, e.g. ["preview-"]
