@@ -99,3 +99,20 @@ def test_run_shares_the_review_lock_but_dry_run_uses_its_own(upkeep_home, capsys
         assert "dry run finished: nothing was changed" in capsys.readouterr().out
         assert lock.is_dir() and not (cfg.state_dir / "last-run").exists() and not cfg.log_file.exists()
     assert not lock.exists()
+
+
+def test_tool_made_skills_are_listed_but_not_counted(upkeep_home, capsys):
+    claude = put(upkeep_home, ".claude/skills/clipper/SKILL.md", "---\nallowed-tools: Bash\n---\nRead the inbox.\n")
+    codex = put(upkeep_home, ".agents/skills/clipper/SKILL.md", "Read the inbox with the command.\n")
+    for path, when in ((claude, 100), (codex, 90_000)):
+        os.utime(path, (when, when))
+    put(upkeep_home, ".claude/CLAUDE.md", "Use the checklist.\n")
+    put(upkeep_home, ".codex/AGENTS.md", "Use the checklist.\nCodex note.\n")
+    assert cli.main(["review", "--list"]) == 0
+    output = capsys.readouterr().out
+    assert output.startswith("0 differ, 1 only in one tool, 1 the same (1 made for each tool)\n")
+    tailored = "clipper (skill, tailored)\n  Each tool has a version made for it; Claude Code's uses allowed-tools"
+    assert tailored in output
+    assert "Global instructions (instructions, missing)\n  Codex keeps 1 line of its own\n" in output
+    assert cli.main(["run", "--force", "--echo"]) == 0
+    assert '0 settings differ between the tools and 1 is only in one' in capsys.readouterr().out

@@ -164,9 +164,17 @@ def review_settings(list_only: bool, no_open: bool) -> int:
     if not list_only:
         from . import reviewpage
         return reviewpage.serve(cfg.home, cfg, open_browser=not no_open)
-    for group in review.scan(cfg.home, cfg).groups:
+    groups = review.scan(cfg.home, cfg).groups
+    counts = Counter(group.status for group in groups)
+    print(f"{counts['differ']} differ, {counts['missing']} only in one tool, "
+          f"{counts['same'] + counts['tailored']} the same ({counts['tailored']} made for each tool)\n")
+    for group in groups:
         winner, reasons = review.recommend(group, cfg.source)
         print(f"{group.name} ({group.kind}, {group.status})")
+        if group.note:
+            print(f"  {group.note}")
+        if len({version.digest for version in group.versions}) > 1:
+            print(f"  {review.difference(group, winner)}")
         for version in group.versions:
             names = ", ".join(review.TOOL_LABELS[tool] for tool in version.tools)
             date = datetime.fromtimestamp(version.modified).strftime("%Y-%m-%d %H:%M:%S")
