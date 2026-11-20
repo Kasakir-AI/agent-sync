@@ -70,3 +70,9 @@ def test_agent_notes_are_added_to_every_tools_copy(tmp_path):
     assert "Local note." in (home / ".cursor/plugins/local/pack-agents/agents/helper.md").read_text()
     assert "Local note." in tomllib.loads((home / ".codex/agents/helper.toml").read_text())["developer_instructions"]
     assert "Local note." not in (home / ".claude/agents/reviewer.md").read_text()
+
+
+def test_emoji_in_an_agent_makes_valid_codex_toml():
+    agent = agents.Agent.parse("---\nname: shipper\ndescription: Ships it 🚀\n---\nSay 😀 when done.\n")
+    data = tomllib.loads(agent.codex_toml("gpt-x", "high"))
+    assert data["description"] == "Ships it 🚀" and data["developer_instructions"] == "Say 😀 when done."

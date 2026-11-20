@@ -13,6 +13,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from .tomledit import basic_string
+
 
 def read(home: Path, tool: str) -> dict[str, dict]:
     if tool == "claude":
@@ -42,7 +44,7 @@ def portable(server: dict) -> dict | None:
 
 def toml_value(v) -> str:
     if isinstance(v, str):
-        return json.dumps(v)
+        return basic_string(v)
     if isinstance(v, list):
         return "[" + ", ".join(toml_value(x) for x in v) + "]"
     raise TypeError(type(v))
@@ -57,7 +59,7 @@ def codex_block(name: str, s: dict) -> str:
             lines.append(f"{key} = {toml_value(s[key])}")
     if s.get("env"):
         lines.append(f"\n[mcp_servers.{name}.env]")
-        lines += [f"{json.dumps(k)} = {toml_value(str(v))}" for k, v in s["env"].items()]
+        lines += [f"{basic_string(k)} = {toml_value(str(v))}" for k, v in s["env"].items()]
     return "\n".join(lines) + "\n"
 
 

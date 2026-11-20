@@ -20,3 +20,9 @@ def test_missing_servers_are_added_and_existing_ones_left_alone(tmp_path):
     codex = tomllib.loads((tmp_path / ".codex/config.toml").read_text())
     assert codex["model"] == "x" and codex["mcp_servers"]["files"]["args"] == ["-y", "files-mcp@1.0.0"]
     assert mcp.mirror(tmp_path, "claude") == []
+
+
+def test_emoji_in_a_server_makes_valid_codex_toml():
+    block = mcp.codex_block("party", {"command": "run", "args": ["🚀"], "env": {"MOOD 😀": "😀\x7f"}})
+    server = tomllib.loads(block)["mcp_servers"]["party"]
+    assert server["args"] == ["🚀"] and server["env"] == {"MOOD 😀": "😀\x7f"}

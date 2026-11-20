@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import AgentModels
+from .tomledit import basic_string
 
 
 @dataclass
@@ -42,9 +43,9 @@ class Agent:
         return "---\n" + "\n".join(front) + "\n---\n" + self.body
 
     def codex_toml(self, model: str, effort: str) -> str:
-        return (f"name = {json.dumps(self.name)}\ndescription = {json.dumps(self.description)}\n"
-                f"model = {json.dumps(model)}\nmodel_reasoning_effort = {json.dumps(effort)}\n"
-                f"developer_instructions = {json.dumps(self.body.strip())}\n")
+        return (f"name = {basic_string(self.name)}\ndescription = {basic_string(self.description)}\n"
+                f"model = {basic_string(model)}\nmodel_reasoning_effort = {basic_string(effort)}\n"
+                f"developer_instructions = {basic_string(self.body.strip())}\n")
 
 
 def write_if_changed(path: Path, text: str, dry: bool = False) -> bool:
