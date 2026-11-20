@@ -89,8 +89,14 @@ Each card says in one sentence what differs, for example "Codex has 85 lines Cla
 1 line Codex doesn't." Choose a version to keep across the tools, or leave the setting as it is.
 
 Keeping a version writes only the differences. A line you edited takes the chosen text, and lines the chosen
-version adds are added. Lines, notes and files that only one tool has stay. If a version only adds lines to
-another, the setting counts as the same, with a note such as "Codex keeps 12 lines of its own".
+version adds are added. Lines, notes and files that only one tool has stay.
+
+Lines only one tool has may be that tool's own notes, or old rules you removed elsewhere before agent-sync could
+see it happen. So the first time a version only adds lines to another, the card is listed under **Check once**
+("Codex has 12 lines Claude Code doesn't that you haven't checked yet") with those lines open. Switch any outdated
+line to **Remove** and apply; applying with every line kept writes nothing and only records that you checked them.
+From then on the setting counts as the same ("Codex keeps 12 lines of its own") until a line nobody checked shows
+up in a tool.
 
 A line you delete from the version you keep can go from the other tools too. Each time you apply a choice, the
 review remembers the kept version in `~/.local/state/agent-sync/review/baselines.json`. Until it has one, it uses

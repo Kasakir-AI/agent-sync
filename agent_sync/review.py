@@ -68,6 +68,7 @@ class Group:
     status: str = ""
     note: str = ""
     synced: dict[str, dict[str, frozenset[str]]] = field(default_factory=dict)  # see `baselines`
+    confirmed: dict[str, frozenset[str]] = field(default_factory=dict)  # file -> own lines the user chose to keep
 
     @property
     def key(self) -> str:
@@ -621,13 +622,20 @@ def baseline(kind: str, version: Version) -> dict:
     return {"digest": version.digest, **({"files": files} if kind == "skill" else {"lines": files[""]})}
 
 
-def remember(path: Path, steps: list[Step]) -> None:
-    """Store the version each applied setting now keeps everywhere, so a line later deleted from it can go too."""
-    stored = load_baselines(path)
-    for step in steps:
-        kind = step.key.split(":", 1)[0]
-        if kind != "mcp":
-            stored[step.key] = baseline(kind, step.winner)
+def remember(path: Path, scan: Scan, choices: dict[str, str | dict]) -> None:
+    """After an apply, store for each chosen setting the version now kept everywhere and the lines each tool kept of
+    its own (the user saw and kept them), so the next review can tell a deleted line, a checked note and a new one
+    apart. `scan` is taken after the apply. Recorded even when nothing had to be written."""
+    stored, groups = load_baselines(path), {group.key: group for group in scan.groups}
+    for key, choice in choices.items():
+        group = groups.get(key)
+        chosen = choice if isinstance(choice, str) else choice.get("version")
+        winner = next((version for version in group.versions if version.id == chosen), None) if group else None
+        if winner is None or group.kind == "mcp":
+            continue
+        kept = {str(file): sorted({line for line, _ in lines}) for version in group.versions
+                if version.id != winner.id for file, lines in leftovers(group, version, winner).items()}
+        stored[key] = {**baseline(group.kind, winner), "kept": kept}
     text = json.dumps(stored, indent=2, sort_keys=True) + "\n"
     if path.is_file() and read_text(path) == text:
         return
@@ -635,6 +643,19 @@ def remember(path: Path, steps: list[Step]) -> None:
     temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}")
     temp.write_text(text)
     temp.replace(path)
+
+
+def unchecked(group: Group, base: Version) -> dict[str, int]:
+    """By version id, how many lines of its own (not deleted from `base`) the user has never seen and kept."""
+    out = {}
+    for version in group.versions:
+        if version.id == base.id:
+            continue
+        count = sum(not gone and line not in group.confirmed.get(str(file), ())
+                    for file, lines in leftovers(group, version, base).items() for line, gone in lines)
+        if count:
+            out[version.id] = count
+    return out
 
 
 def judge(group: Group, installers: Iterable[str] = ()) -> tuple[str, str]:
@@ -661,9 +682,15 @@ def judge(group: Group, installers: Iterable[str] = ()) -> tuple[str, str]:
         lost = [f"{tool_names(base.tools)} no longer {has} {counted(count, 'line')} that "
                 f"{tool_names(sorted(tools, key=TOOLS.index))} still {'has' if len(tools) == 1 else 'have'}"
                 for count, tools in behind.items()]
-        note = "; ".join(lost + parts)
+        new = unchecked(group, base)
+        check = [f"{tool_names(version.tools)} {'has' if len(version.tools) == 1 else 'have'} "
+                 f"{counted(new[version.id], 'line')} {tool_names(base.tools)} doesn't that you haven't checked yet"
+                 for version in group.versions if version.id in new]
+        note = "; ".join(lost + check + ([] if check else parts))
         if lost:
             return "differ", note
+        if check:
+            return "check", note   # without a record of the last sync, an old rule and a tool's own note look alike
     return ("missing" if group.missing else "same"), note
 
 
@@ -705,6 +732,9 @@ def scan(home: Path, cfg: Config) -> Scan:
     stored = load_baselines(baseline_file(cfg))
     for group in groups:
         group.synced = synced(group, stored, cfg.source)
+        kept = (stored.get(group.key) or {}).get("kept") if isinstance(stored.get(group.key), dict) else None
+        group.confirmed = {name: frozenset(lines) for name, lines in (kept or {}).items()
+                           if isinstance(lines, list) and all(isinstance(line, str) for line in lines)}
     managed = Counter(meta.get("source") or "Unknown package" for meta in locked.values())
     for group in [group for group in groups if all(fixed(version) for version in group.versions)]:
         groups.remove(group)
@@ -1005,9 +1035,9 @@ def edits(steps: list[Step]) -> list[Edit]:
     return changes
 
 
-def apply(home: Path, steps: list[Step], backup_dir: Path, baselines: Path | None = None) -> list[str]:
+def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
     """Write only what changes: stage each file beside its target, back up the originals, then rename into place.
-    Then store each setting's kept version in `baselines`, the next review's record of the last sync."""
+    (`remember` then records the result for the next review.)"""
     changes = edits(steps)
     staged: list[tuple[Edit, Path]] = []
     try:
@@ -1034,8 +1064,6 @@ def apply(home: Path, steps: list[Step], backup_dir: Path, baselines: Path | Non
         for _, temp in staged:
             if temp.is_symlink() or temp.exists():
                 temp.unlink()
-    if baselines is not None:
-        remember(baselines, steps)
     targets = {edit.target: edit.action for edit in changes}
     return [f"{'created' if action == 'create' else 'updated'} {shown(home, target)}"
             for target, action in targets.items()]

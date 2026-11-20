@@ -286,11 +286,13 @@ class _Handler(BaseHTTPRequestHandler):
             if not locked:
                 raise _RequestError(HTTPStatus.CONFLICT, BUSY)
             scan = review.scan(home, cfg)
-            steps = review.plan(home, scan, _choices(data, scan, applying=True), cfg.source)
+            choices = _choices(data, scan, applying=True)
+            steps = review.plan(home, scan, choices, cfg.source)
             backup = _backup_folder(cfg.state_dir / "backups") if steps else None
             result = {"backup": review.shown(home, backup) if backup else None}
             try:
-                result["changes"] = review.apply(home, steps, backup, review.baseline_file(cfg)) if backup else []
+                result["changes"] = review.apply(home, steps, backup) if backup else []
+                review.remember(review.baseline_file(cfg), review.scan(home, cfg), choices)
                 if backup and not result["changes"]:
                     backup.rmdir()                     # nothing changed, so nothing was backed up
                     result["backup"] = None

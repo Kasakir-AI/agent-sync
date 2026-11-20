@@ -152,11 +152,13 @@ def log_review(cfg: Config, log: Log) -> None:
     except Exception as e:
         log("WARN", f"could not compare settings for review: {e}")
         return
-    differ, missing = counts["differ"], counts["missing"]
-    if differ or missing:
+    differ, check, missing = counts["differ"], counts["check"], counts["missing"]
+    if differ or check or missing:
         different = "1 setting differs" if differ == 1 else f"{differ} settings differ"
+        unseen = f", {check} to check once" if check else ""
         absent = "1 is" if missing == 1 else f"{missing} are"
-        log("info", f'{different} between the tools and {absent} only in one; run "agent-sync review" to choose')
+        log("info", f'{different} between the tools{unseen} and {absent} only in one; '
+            'run "agent-sync review" to choose')
 
 
 def review_settings(list_only: bool, no_open: bool) -> int:
@@ -166,7 +168,7 @@ def review_settings(list_only: bool, no_open: bool) -> int:
         return reviewpage.serve(cfg.home, cfg, open_browser=not no_open)
     groups = review.scan(cfg.home, cfg).groups
     counts = Counter(group.status for group in groups)
-    print(f"{counts['differ']} differ, {counts['missing']} only in one tool, "
+    print(f"{counts['differ']} differ, {counts['check']} to check once, {counts['missing']} only in one tool, "
           f"{counts['same'] + counts['tailored']} the same ({counts['tailored']} made for each tool)\n")
     for group in groups:
         winner, reasons = review.recommend(group, cfg.source)

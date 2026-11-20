@@ -105,7 +105,7 @@ main { padding-top: clamp(1rem, 3vw, 2rem); }
 .kind { font-weight: 650; }
 .kind span { display: inline-block; margin-right: .35rem; color: var(--accent); width: .9rem; text-align: center; }
 .chip { font-size: .78rem; font-weight: 650; padding: .12rem .5rem; border-radius: .25rem; background: var(--panel); }
-.differ, .settings { background: var(--amber-back); color: var(--amber); }
+.differ, .check, .settings { background: var(--amber-back); color: var(--amber); }
 .same, .yours { background: var(--green-back); color: var(--green); }
 .tailored { background: var(--purple-back); color: var(--purple); }
 .missing, .package { background: var(--accent-back); color: var(--accent); }
@@ -281,7 +281,8 @@ const kindLabels = {
   skill: ["✦", "Skill"],
   mcp: ["⌘", "MCP server"],
 };
-const statusLabels = {differ: "Differ", missing: "Only in one tool", same: "The same", tailored: "Made for each tool"};
+const statusLabels = {differ: "Differ", check: "Check once", missing: "Only in one tool", same: "The same",
+  tailored: "Made for each tool"};
 const dateLabels = {
   yours: "Edited", "edited-copy": "Edited", copy: "Copied", package: "Updated",
   plugin: "Plugin updated", settings: "Settings file changed",
@@ -327,7 +328,7 @@ function defaultRemovals(group, id) {
 }
 
 function resetChoices() {
-  choices = new Map(scan.groups.map(group => [group.key, group.status === "differ" ? group.winner : "leave"]));
+  choices = new Map(scan.groups.map(group => [group.key, ["differ", "check"].includes(group.status) ? group.winner : "leave"]));
   removals = new Map(scan.groups.map(group => [group.key, defaultRemovals(group, choices.get(group.key))]));
 }
 
@@ -345,11 +346,12 @@ function updateFooter() {
 }
 
 function showCounts() {
-  const counts = {differ: 0, missing: 0, same: 0, tailored: 0};
+  const counts = {differ: 0, check: 0, missing: 0, same: 0, tailored: 0};
   for (const group of scan.groups) counts[group.status]++;
   counts.same += counts.tailored;
   document.querySelector("#counts").textContent =
-    `${counts.differ} differ · ${counts.missing} only in one tool · ${counts.same} the same`;
+    `${counts.differ} differ · ${counts.check ? `${counts.check} to check once · ` : ""}` +
+    `${counts.missing} only in one tool · ${counts.same} the same`;
 }
 
 function versionColumn(group, version, longest, choiceButton) {
@@ -402,7 +404,7 @@ function leftoverLists(group, version, holder) {
   for (const file of (kept && version.only[chosen]) || []) {
     const marked = marks.get(file.path);
     const box = el("details", undefined, "leftovers");
-    box.open = file.lines.some(([, gone]) => gone);
+    box.open = group.status === "check" || file.lines.some(([, gone]) => gone);
     const where = group.kind === "skill" ? ` in ${file.path.split("/").pop()}` : "";
     const summary = el("summary");
     const count = () => {
@@ -672,13 +674,21 @@ function render() {
   else if (filter === "managed") showManaged();
   else {
     const groups = scan.groups.filter(group => group.status === filter);
+    const unchecked = filter === "differ" ? scan.groups.filter(group => group.status === "check") : [];
     const tailored = filter === "same" ? scan.groups.filter(group => group.status === "tailored") : [];
-    if (!groups.length && !tailored.length) {
+    if (!groups.length && !tailored.length && !unchecked.length) {
       const empty = {differ: "No settings differ between tools.", missing: "No settings are missing from a tool.",
         same: "No settings match across tools."};
       content.append(el("p", empty[filter], "empty panel"));
     }
     groups.forEach((group, index) => content.append(settingCard(group, index)));
+    if (unchecked.length) {
+      content.append(el("h2", "Check once", "section"),
+        el("p", "These tools have lines the others don't, and you haven't looked at them yet. They may be notes " +
+          "for that tool, or old rules you removed elsewhere. Switch any outdated line to Remove, then apply: " +
+          "agent-sync remembers what you kept and won't ask again until a new line shows up."));
+      unchecked.forEach((group, index) => content.append(settingCard(group, groups.length + index)));
+    }
     if (tailored.length) {
       content.append(el("h2", "Made separately for each tool", "section"),
         el("p", "A plugin or installer wrote a version for each tool on purpose. They are best left as they are."));

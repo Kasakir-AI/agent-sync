@@ -6,8 +6,9 @@
   what to keep, and preview changes before applying them. The review backs up the files it replaces.
 - `agent-sync review --list` prints the comparison in the terminal. `--no-open` prints the page's local URL.
 - The upkeep log reports settings that differ or are missing. Press `r` in the Desktop launcher to review them.
-- Keeping a version writes only the differences. Notes, lines and files that only one tool has are kept, and a
-  setting whose versions only add lines to another counts as the same.
+- Keeping a version writes only the differences. Notes, lines and files that only one tool has are kept.
+- Lines only one tool has are shown once under **Check once**, so old rules can't hide among a tool's own notes.
+  After you check them, the setting counts as the same until a new line shows up.
 - Skills a plugin or installer writes separately for each tool are shown as made for each tool and left alone.
   Plugin skill copies and MCP servers from Claude Code plugins are no longer shown as missing.
 - Each card says in one sentence what differs. Review changes shows the exact lines each file gains or loses.

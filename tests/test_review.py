@@ -316,7 +316,9 @@ def apply_choice(home, key_part, pick, remove=None):
     winner = next(version for version in group.versions if pick(version))
     choice = winner.id if remove is None else {"version": winner.id, "remove": remove}
     steps = review.plan(home, scan, {group.key: choice}, "claude")
-    return review.apply(home, steps, home / "backup", review.baseline_file(Config(home=home)))
+    changes = review.apply(home, steps, home / "backup")
+    review.remember(review.baseline_file(Config(home=home)), review_home(home), {group.key: choice})
+    return changes
 
 
 def test_merge_keeps_target_lines_and_is_idempotent():
@@ -339,11 +341,14 @@ def test_picking_the_shorter_instructions_leaves_a_longer_copy_alone(tmp_path):
     before = codex.read_bytes()
     group, = review_home(tmp_path).groups
 
-    assert group.status == "missing" and group.note == "Codex keeps 67 lines of its own"
+    assert group.status == "check"          # nobody has seen Codex's extra lines yet: old rules may hide there
+    assert group.note == "Codex has 67 lines Claude Code doesn't that you haven't checked yet"
     assert review.recommend(group, "codex")[0].tools == ("claude",)     # the shared version, not the longer one
     assert apply_choice(tmp_path, "instructions", lambda version: version.tools == ("claude",)) == [
         "created ~/.cursor/rules/agent-sync-instructions.mdc"]
     assert codex.read_bytes() == before
+    group, = review_home(tmp_path).groups
+    assert group.status == "same" and group.note == "Codex keeps 67 lines of its own"      # checked once, then quiet
 
 
 def test_one_edited_line_changes_only_that_line_in_the_other_tool(tmp_path):
@@ -473,7 +478,8 @@ def test_hand_copy_with_extras_and_comment_lines_joins_global_instructions(tmp_p
 
     assert group.kind == "instructions" and group.matched_by == "content 100% alike"
     assert rule in [version.path for version in group.versions]
-    assert group.status == "missing" and group.note == "Cursor keeps 9 lines of its own"
+    assert group.status == "check"
+    assert group.note == "Cursor has 9 lines Claude Code doesn't that you haven't checked yet"
 
 
 def test_difference_names_what_each_side_has():
@@ -504,7 +510,7 @@ def test_a_short_rule_quoted_inside_the_instructions_stays_its_own_rule(tmp_path
     groups = {group.key: group for group in review_home(tmp_path).groups}
 
     assert set(groups) == {"instructions:Global instructions", "rule:inbox"}
-    assert groups["instructions:Global instructions"].status == "missing"      # Codex only adds the section
+    assert groups["instructions:Global instructions"].status == "check"        # Codex only adds the section
     assert groups["rule:inbox"].matched_by == ""
 
 
@@ -549,7 +555,7 @@ def test_a_line_deleted_from_the_kept_version_goes_from_the_others(tmp_path):
     group, = review_home(tmp_path).groups
     assert group.status == "differ"
     assert group.note == ("Claude Code no longer has 1 line that Codex and Cursor still have; "
-                          "Codex keeps 1 line of its own")
+                          "Codex has 1 line Claude Code doesn't that you haven't checked yet")
     winner, reasons = review.recommend(group, "claude")
     assert winner.tools == ("claude",) and "no longer has 1 line" in reasons[1]
 
@@ -607,9 +613,9 @@ def test_apply_remembers_the_kept_version_for_the_next_review(tmp_path):
     assert apply_choice(tmp_path, "rule", pick) == []
 
     claude.write_text("")
-    store.unlink()                      # without a record of the last sync, a line only Cursor has is its own
+    store.unlink()                      # without a record of the last sync, a line only Cursor has is unchecked
     group, = review_home(tmp_path).groups
-    assert group.status == "same"
+    assert group.status == "check"
 
 
 def test_a_skill_copy_loses_deleted_lines_and_keeps_its_own_files(tmp_path):
@@ -637,3 +643,22 @@ def test_a_line_new_in_the_source_is_not_called_its_own_note_by_a_stale_copy(tmp
     assert apply_choice(tmp_path, "instructions", lambda version: version.tools == ("claude",)) == [
         "updated ~/.codex/AGENTS.md", "updated ~/.cursor/rules/agent-sync-instructions.mdc"]
     assert paths["codex"].read_text() == "Codex-only note.\n# Preferences\n\nBe brief.\nUse tabs.\n"
+
+
+def test_lines_only_one_tool_has_are_checked_once_and_a_new_one_asks_again(tmp_path):
+    paths = instructions.files(tmp_path)
+    write(tmp_path, paths["claude"], "Be brief.\n")
+    codex = write(tmp_path, paths["codex"], "Be brief.\nCodex note.\n")
+    group, = review_home(tmp_path).groups
+    assert group.status == "check"
+
+    keep = lambda version: version.tools == ("claude",)  # noqa: E731
+    assert apply_choice(tmp_path, "instructions", keep) == ["created ~/.cursor/rules/agent-sync-instructions.mdc"]
+    group, = review_home(tmp_path).groups
+    assert group.status == "same" and group.note == "Codex keeps 1 line of its own"
+    assert apply_choice(tmp_path, "instructions", keep) == []       # checking again writes nothing
+
+    codex.write_text("Be brief.\nCodex note.\nAlways ask before force-pushing.\n")
+    group, = review_home(tmp_path).groups
+    assert group.status == "check"
+    assert group.note == "Codex has 1 line Claude Code doesn't that you haven't checked yet"

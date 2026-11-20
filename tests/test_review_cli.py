@@ -120,9 +120,10 @@ def test_tool_made_skills_are_listed_but_not_counted(upkeep_home, capsys):
     put(upkeep_home, ".codex/AGENTS.md", "Use the checklist.\nCodex note.\n")
     assert cli.main(["review", "--list"]) == 0
     output = capsys.readouterr().out
-    assert output.startswith("0 differ, 1 only in one tool, 1 the same (1 made for each tool)\n")
+    assert output.startswith("0 differ, 1 to check once, 0 only in one tool, 1 the same (1 made for each tool)\n")
     tailored = "clipper (skill, tailored)\n  Each tool has a version made for it; Claude Code's uses allowed-tools"
     assert tailored in output
-    assert "Global instructions (instructions, missing)\n  Codex keeps 1 line of its own\n" in output
+    assert ("Global instructions (instructions, check)\n"
+            "  Codex has 1 line Claude Code doesn't that you haven't checked yet\n") in output
     assert cli.main(["run", "--force", "--echo"]) == 0
-    assert '0 settings differ between the tools and 1 is only in one' in capsys.readouterr().out
+    assert '0 settings differ between the tools, 1 to check once and 0 are only in one' in capsys.readouterr().out
