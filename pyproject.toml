@@ -20,6 +20,9 @@ version = { attr = "agent_sync.__version__" }
 [tool.setuptools.packages.find]
 include = ["agent_sync*"]
 
+[tool.setuptools.package-data]
+agent_sync = ["review.html"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py311"

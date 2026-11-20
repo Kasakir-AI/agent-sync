@@ -37,7 +37,7 @@
 
 - [x] Fixes in `agent-sync config` and in the TOML written for Codex, from code review (see the changelog).
 
-Unreleased
+0.5.0 (published 2026-11-20):
 
 - [x] `agent-sync review`: compare settings across the tools, see where each version came from, and apply your
       choices with backups.

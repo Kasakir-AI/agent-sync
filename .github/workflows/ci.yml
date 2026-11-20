@@ -18,3 +18,13 @@ jobs:
       - run: python -m pip install pytest ruff hypothesis
       - run: ruff check agent_sync tests
       - run: python -m pytest -q
+      - name: the installed package serves the review page
+        run: |
+          python -m venv /tmp/installed && /tmp/installed/bin/pip install -q .
+          cd /tmp && HOME=$(mktemp -d) /tmp/installed/bin/python -c "
+          import subprocess, sys, urllib.request
+          p = subprocess.Popen(['/tmp/installed/bin/agent-sync', 'review', '--no-open'], stdout=subprocess.PIPE, text=True)
+          url = p.stdout.readline().strip()
+          page = urllib.request.urlopen(url).read().decode()
+          p.terminate()
+          sys.exit(0 if 'id=\"scan\"' in page else 'the page is missing from the installed package')"

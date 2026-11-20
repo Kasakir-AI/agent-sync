@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-11-20)
+
+New: `agent-sync review`, to see how your settings differ between the tools and choose what to keep.
 
 - `agent-sync review` compares settings across the tools in a local page. See the origin of each version, choose
   what to keep, and preview changes before applying them. The review backs up the files it replaces.
