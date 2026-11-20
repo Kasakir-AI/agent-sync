@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.1 (2026-11-20)
+
+Fixes in `agent-sync config`:
+
+- A command typed with `~` (like the example `git -C ~/dotfiles pull --ff-only`) now runs: `~` becomes your home
+  folder when you type it, and the wizard shows the full path before saving.
+- A table name written in quotes is recognized, so removing an extra step no longer deletes that table.
+- A multi-line note that ends in a quote mark no longer wipes the settings after it when edited.
+- Emoji in notes and commands are saved as valid TOML instead of being refused.
+- Changing the source tool in the settings file (`e`) now also switches the pstack roles file that `r` edits.
+- Switching off the last plugin that is no longer installed is saved instead of being dropped.
+- The extra-step time limit question now says what Enter means: 900 seconds (15 minutes).
+
+And in the upkeep:
+
+- Emoji in a skill package's agents or in an MCP server's settings are now written to Codex as valid TOML, so
+  they can no longer leave a Codex agent file or `~/.codex/config.toml` unreadable.
+
 ## 0.4.0 (2026-11-19)
 
 - agent-sync now updates itself as part of the upkeep, the way you installed it: `brew upgrade` for the Homebrew

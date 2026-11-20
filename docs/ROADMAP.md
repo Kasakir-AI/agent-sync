@@ -33,6 +33,10 @@
 - [x] agent-sync updates itself (Homebrew, pipx, or a pip install from GitHub).
 - [x] The Desktop launcher is put back and rewritten by every run when `launcher = true`.
 
+0.4.1 (published 2026-11-20):
+
+- [x] Fixes in `agent-sync config` and in the TOML written for Codex, from code review (see the changelog).
+
 Later:
 
 - Cursor as the source of global instructions (its User Rules live in the app's own database).
