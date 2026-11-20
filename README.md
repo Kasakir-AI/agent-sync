@@ -92,6 +92,16 @@ Keeping a version writes only the differences. A line you edited takes the chose
 version adds are added. Lines, notes and files that only one tool has stay. If a version only adds lines to
 another, the setting counts as the same, with a note such as "Codex keeps 12 lines of its own".
 
+A line you delete from the version you keep can go from the other tools too. Each time you apply a choice, the
+review remembers the kept version in `~/.local/state/agent-sync/review/baselines.json`. Until it has one, it uses
+agent-sync's own copy of the source tool, such as the Cursor `agent-sync-instructions.mdc`. A line that another
+tool still has, that the last sync had, and that the kept version no longer has was deleted, so the card marks
+the setting as differing, for example "Claude Code no longer has 1 line that Codex still has". Every other line
+only one tool has is that tool's own. Under each version, **Lines only Codex has** lists those lines with a
+**Keep** / **Remove** switch for each. Deleted lines start on **Remove**, and the tool's own lines start on
+**Keep**. Review changes shows the lines that will be removed in red. In a skill, the rule applies to each text
+file, and files only one tool has stay.
+
 Some plugins and installers write a separate version of a skill for each tool on purpose. For example, a Claude Code
 copy uses `allowed-tools` while the Codex copy has `agents/openai.yaml`. The review lists these under **The same**
 as "Made separately for each tool", leaves them alone by default, and does not count them as differences. Skills

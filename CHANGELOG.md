@@ -12,6 +12,9 @@
   Plugin skill copies and MCP servers from Claude Code plugins are no longer shown as missing.
 - Each card says in one sentence what differs. Review changes shows the exact lines each file gains or loses.
 - The page fits a phone screen.
+- A line you delete from the version you keep is removed from the other tools by default. The review remembers
+  the version it last kept everywhere, so it can tell a deleted line from a tool's own note. A Keep / Remove switch
+  on each line that only one tool has lets you decide yourself.
 
 ## 0.4.1 (2026-11-20)
 
