@@ -10,7 +10,7 @@ import shutil
 import tomllib
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
 from enum import StrEnum
@@ -67,6 +67,7 @@ class Group:
     matched_by: str = ""
     status: str = ""
     note: str = ""
+    synced: dict[str, dict[str, frozenset[str]]] = field(default_factory=dict)  # see `baselines`
 
     @property
     def key(self) -> str:
@@ -96,6 +97,7 @@ class Step:
     action: str
     winner: Version
     marker: str = ""
+    drop: dict[Path, frozenset[str]] = field(default_factory=dict)   # file -> its own lines to remove
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,7 @@ class Edit:
     before: Content | None
     after: Content
     winner: str = ""
+    removed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -204,16 +207,25 @@ def rows(target: str, winner: str) -> list[tuple[str, str]]:
     return out
 
 
-def merge(target: str, winner: str) -> str:
-    """Write the winner's lines into `target` and keep the lines only `target` has."""
-    if extends(target, winner):
+def merge(target: str, winner: str, drop: frozenset[str] = frozenset()) -> str:
+    """Write the winner's lines into `target` and keep the lines only `target` has, except those in `drop`."""
+    marked = rows(target, winner)
+    lines = [line for tag, line in marked if tag != "-" and not (tag == "=" and line.rstrip() in drop)]
+    if len(lines) == len(marked) and extends(target, winner):
         return target
-    lines = [line for tag, line in rows(target, winner) if tag != "-"]
     return "\n".join(lines) + "\n" if lines else ""
 
 
 def own_lines(target: str, winner: str) -> int:
     return sum(tag == "=" and meaningful(line) for tag, line in rows(target, winner))
+
+
+def removed_lines(target: str, winner: str, baseline: Iterable[str]) -> set[str]:
+    """The lines only `target` has that the last synced version had and `winner` no longer has:
+    deleted from the winner since then, so they go. Every other line only `target` has is its own and stays."""
+    synced, kept = set(baseline), set(keys(winner))
+    return {line.rstrip() for tag, line in rows(target, winner)
+            if tag == "=" and line.rstrip() in synced and line.rstrip() not in kept}
 
 
 def make_version(kind: str, name: str, tools: tuple[str, ...], path: Path, body: str, origin: Origin,
@@ -534,22 +546,123 @@ def shared_base(group: Group) -> tuple[Version, dict[str, tuple[int, int]]] | No
     return None
 
 
+def texts(kind: str, version: Version) -> dict[str, str]:
+    """The text whose lines are compared, by file: "" for the one file of a setting, else each text file of a skill."""
+    if kind == "mcp":
+        return {}
+    if kind != "skill":
+        return {"": version.body}
+    return {name: text for name, data in skill_files(version.path).items() if (text := as_text(data)) is not None}
+
+
+def leftovers(group: Group, version: Version, winner: Version) -> dict[Path, list[tuple[str, bool]]]:
+    """Per file, the lines only `version` has next to `winner`, each True when it was deleted from `winner` since
+    the last sync (it goes unless the user keeps it) or False when it is that tool's own (it stays)."""
+    baseline = group.synced.get(winner.id, {})
+    mine, theirs = texts(group.kind, version), texts(group.kind, winner)
+    out = {}
+    for name in sorted(mine.keys() & theirs.keys()):
+        only = dict.fromkeys(line.rstrip() for tag, line in rows(mine[name], theirs[name])
+                             if tag == "=" and meaningful(line))
+        if only:
+            gone = removed_lines(mine[name], theirs[name], baseline.get(name, ()))
+            out[version.path.resolve() / name] = [(line, line in gone) for line in only]
+    return out
+
+
+def removals(group: Group, winner: Version) -> dict[str, list[str]]:
+    """By version id, the lines it would lose by default when `winner` is kept everywhere."""
+    out = {}
+    for version in group.versions:
+        lines = [line for found in leftovers(group, version, winner).values() for line, gone in found if gone]
+        if lines and version.id != winner.id:
+            out[version.id] = lines
+    return out
+
+
+def baseline_file(cfg: Config) -> Path:
+    return cfg.state_dir / "review/baselines.json"
+
+
+def load_baselines(path: Path) -> dict:
+    try:
+        data = json.loads(read_text(path))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def synced(group: Group, stored: dict, source: str) -> dict[str, dict[str, frozenset[str]]]:
+    """The lines of the version last kept everywhere, per file, by the id of each version that started from them.
+    A stored baseline (apply writes one) holds for every version. Without one, agent-sync's newest copy is the
+    source tool's text as last mirrored, so it holds only for the source tool's version."""
+    entry = stored.get(group.key)
+    if group.kind == "mcp":
+        return {}
+    if isinstance(entry, dict):
+        files = entry.get("files") if group.kind == "skill" else {"": entry.get("lines")}
+        heirs = group.versions
+    else:
+        copies = [version for version in group.versions if version.origin == Origin.COPY]
+        if not copies:
+            return {}
+        files = {name: keys(text) for name, text in texts(group.kind, max(copies, key=lambda v: v.modified)).items()}
+        heirs = [version for version in group.versions if source in version.tools and version.origin != Origin.COPY]
+    if not isinstance(files, dict):
+        return {}
+    lines = {name: frozenset(value) for name, value in files.items()
+             if isinstance(value, list) and all(isinstance(line, str) for line in value)}
+    return {version.id: lines for version in heirs}
+
+
+def baseline(kind: str, version: Version) -> dict:
+    files = {name: keys(text) for name, text in texts(kind, version).items()}
+    return {"digest": version.digest, **({"files": files} if kind == "skill" else {"lines": files[""]})}
+
+
+def remember(path: Path, steps: list[Step]) -> None:
+    """Store the version each applied setting now keeps everywhere, so a line later deleted from it can go too."""
+    stored = load_baselines(path)
+    for step in steps:
+        kind = step.key.split(":", 1)[0]
+        if kind != "mcp":
+            stored[step.key] = baseline(kind, step.winner)
+    text = json.dumps(stored, indent=2, sort_keys=True) + "\n"
+    if path.is_file() and read_text(path) == text:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}")
+    temp.write_text(text)
+    temp.replace(path)
+
+
 def judge(group: Group, installers: Iterable[str] = ()) -> tuple[str, str]:
-    """The group's status and a one-line note: what each tool keeps of its own, or why it was made per tool."""
+    """The group's status and a one-line note: what each tool keeps of its own, what the shared version no longer
+    has, or why it was made per tool."""
     note = ""
     if len({version.digest for version in group.versions}) > 1:
         if (found := shared_base(group)) is None:
             return ("tailored", reason) if (reason := tailored(group, installers)) else ("differ", "")
-        _, extra = found
-        parts = []
+        base, extra = found
+        gone = removals(group, base)
+        parts, behind = [], {}
         for version in group.versions:
             lines, folders = extra[version.id]
+            lines -= len(gone.get(version.id, []))
+            if version.id in gone:
+                behind.setdefault(len(gone[version.id]), {}).update(dict.fromkeys(version.tools))
             what = [counted(count, noun) for count, noun in ((lines, "line"), (folders, "file")) if count]
             if what:
                 one = len(version.tools) == 1
                 parts.append(f"{tool_names(version.tools)} {'keeps' if one else 'keep'} {joined(what)} "
                              f"of {'its' if one else 'their'} own")
-        note = "; ".join(parts)
+        has = "has" if len(base.tools) == 1 else "have"
+        lost = [f"{tool_names(base.tools)} no longer {has} {counted(count, 'line')} that "
+                f"{tool_names(sorted(tools, key=TOOLS.index))} still {'has' if len(tools) == 1 else 'have'}"
+                for count, tools in behind.items()]
+        note = "; ".join(lost + parts)
+        if lost:
+            return "differ", note
     return ("missing" if group.missing else "same"), note
 
 
@@ -588,6 +701,9 @@ def scan(home: Path, cfg: Config) -> Scan:
             by_name.setdefault(name, []).append(version)
         groups.extend(Group(kind, name, versions, ()) for name, versions in sorted(by_name.items()))
     pair_similar(groups)
+    stored = load_baselines(baseline_file(cfg))
+    for group in groups:
+        group.synced = synced(group, stored, cfg.source)
     managed = Counter(meta.get("source") or "Unknown package" for meta in locked.values())
     for group in [group for group in groups if all(fixed(version) for version in group.versions)]:
         groups.remove(group)
@@ -625,6 +741,10 @@ def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
     """Pick by origin, then meaningful edit date, source and length. When the others only add lines of their own
     to one version, that shared version: keeping it changes nothing and never spreads one tool's notes."""
     if len({version.digest for version in group.versions}) > 1 and (found := shared_base(group)):
+        if gone := {line for lines in removals(group, found[0]).values() for line in lines}:
+            return found[0], ["the shared version: the others only add lines to it",
+                              f"it no longer has {counted(len(gone), 'line')} the last sync had; keeping it "
+                              "removes them from the others, and their own lines stay"]
         return found[0], ["the shared version: the others only add lines of their own, which stay where they are"]
     winner = preferred(group.versions, source)
     others = [version for version in group.versions if version.id != winner.id]
@@ -683,8 +803,14 @@ def checked_path(home: Path, path: Path) -> Path:
     return real
 
 
-def plan(home: Path, scan: Scan, choices: dict[str, str], source: str) -> list[Step]:
-    """List the target paths for the selected versions without writing."""
+class ChoiceError(ValueError):
+    """A choice that does not fit the settings as scanned."""
+
+
+def plan(home: Path, scan: Scan, choices: dict[str, str | dict], source: str) -> list[Step]:
+    """List the target paths for the selected versions without writing. A choice is a version id, or
+    {"version": id, "remove": {file as shown: [lines]}}: the lines only that file has which go. A file not named
+    there loses the lines deleted from the chosen version since the last sync."""
     groups = {group.key: group for group in scan.groups}
     steps = []
     for key, choice in choices.items():
@@ -693,16 +819,30 @@ def plan(home: Path, scan: Scan, choices: dict[str, str], source: str) -> list[S
             raise ValueError(f"unknown setting: {key}")
         if choice == "leave":
             continue
-        winner = next((version for version in group.versions if version.id == choice), None)
+        if isinstance(choice, str):
+            chosen, asked = choice, {}
+        else:
+            chosen, asked = choice.get("version"), dict(choice.get("remove", {}))
+        winner = next((version for version in group.versions if version.id == chosen), None)
         if winner is None:
             raise ValueError(f"unknown version for {key}")
         if fixed(winner):
             raise ValueError(f"{key} comes with a plugin and can't be copied to the other tools")
         targets: dict[Path, set[str]] = {}
+        drop: dict[Path, frozenset[str]] = {}
         same = {version.path.resolve() for version in group.versions if version.digest == winner.digest}
         for version in group.versions:
             if version.digest != winner.digest and version.origin != Origin.PLUGIN:
                 targets.setdefault(checked_path(home, version.path), set()).update(version.tools)
+                for path, lines in leftovers(group, version, winner).items():
+                    wanted = asked.pop(shown(home, path), None)
+                    wanted = {line for line, gone in lines if gone} if wanted is None else set(wanted)
+                    if extra := wanted - {line for line, _ in lines}:
+                        raise ChoiceError(f"{shown(home, path)} has no line of its own reading {min(extra)!r}")
+                    if wanted:
+                        drop[path] = frozenset(wanted)
+        if asked := [path for path, lines in asked.items() if lines]:
+            raise ChoiceError(f"{min(asked)} has no lines of its own to remove for {group.name}")
         location = KINDS[group.kind].location
         for tool in group.missing:
             path = checked_path(home, location(home, group.name, tool))
@@ -715,7 +855,7 @@ def plan(home: Path, scan: Scan, choices: dict[str, str], source: str) -> list[S
             marker = (f"copied by agent-sync from {source_path}\n"
                       if group.kind == "skill" and not exists and source_path and path.parent != source_folder else "")
             steps.append(Step(key, tuple(tool for tool in TOOLS if tool in tools), path,
-                              "replace" if exists else "create", winner, marker))
+                              "replace" if exists else "create", winner, marker, drop))
     return steps
 
 
@@ -730,15 +870,15 @@ def write_text(rewrite: Callable[[Step, str], str], merged: bool = True) -> Call
 
 
 def instruction_text(step: Step, text: str) -> str:
-    body = step.winner.body
+    body, drop = step.winner.body, step.drop.get(step.path, frozenset())
     if "cursor" in step.tools:
         front, rest = instructions.split_front(text)
         if not front:
-            return instructions.rendered("cursor", "", merge(rest, body).rstrip("\n"), step.winner.path)
-        return front + merge(rest, body)
+            return instructions.rendered("cursor", "", merge(rest, body, drop).rstrip("\n"), step.winner.path)
+        return front + merge(rest, body, drop)
     block = instructions.BLOCK.search(text)
     own = instructions.BLOCK.sub("\n", text) if block else text
-    merged = merge(own, body)
+    merged = merge(own, body, drop)
     if merged == own:
         return text
     if block and not set(keys(block[0])) <= set(keys(merged)):
@@ -751,12 +891,12 @@ def rule_text(step: Step, text: str) -> str:
     if not front and "cursor" in step.tools and step.action == "create":
         name = step.key.split(":", 1)[1]
         front = f"---\ndescription: {name}\nalwaysApply: true\n---\n"
-    return front + merge(rest, step.winner.body)
+    return front + merge(rest, step.winner.body, step.drop.get(step.path, frozenset()))
 
 
 def role_text(step: Step, text: str) -> str:
     header, old, rest = roles.split(text)
-    lines = merge("\n".join(old), step.winner.body).splitlines()
+    lines = merge("\n".join(old), step.winner.body, step.drop.get(step.path, frozenset())).splitlines()
     if lines == old:
         return text
     updated = "\n".join(header + lines) + ("\n" + rest if rest else "") + "\n"
@@ -780,7 +920,7 @@ def write_skill(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
         if before is None:
             out[path] = (data, theirs or "")
         elif mine is not None and theirs is not None:
-            out[path] = (merge(mine, theirs).encode(), theirs)
+            out[path] = (merge(mine, theirs, step.drop.get(path, frozenset())).encode(), theirs)
         elif not isinstance(data, Link):
             out[path] = (data, "")
     return out
@@ -857,12 +997,16 @@ def edits(steps: list[Step]) -> list[Edit]:
     for path, (step, after, winner) in pending.items():
         before = current(path)
         if after != before:
-            changes.append(Edit(step.key, step.tools, step.path, step.action, path, before, after, winner))
+            left = set(keys(as_text(after) or ""))
+            removed = tuple(line for line in dict.fromkeys(keys(as_text(before) or ""))
+                            if line in step.drop.get(path, ()) and line not in left)
+            changes.append(Edit(step.key, step.tools, step.path, step.action, path, before, after, winner, removed))
     return changes
 
 
-def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
-    """Write only what changes: stage each file beside its target, back up the originals, then rename into place."""
+def apply(home: Path, steps: list[Step], backup_dir: Path, baselines: Path | None = None) -> list[str]:
+    """Write only what changes: stage each file beside its target, back up the originals, then rename into place.
+    Then store each setting's kept version in `baselines`, the next review's record of the last sync."""
     changes = edits(steps)
     staged: list[tuple[Edit, Path]] = []
     try:
@@ -889,6 +1033,8 @@ def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
         for _, temp in staged:
             if temp.is_symlink() or temp.exists():
                 temp.unlink()
+    if baselines is not None:
+        remember(baselines, steps)
     targets = {edit.target: edit.action for edit in changes}
     return [f"{'created' if action == 'create' else 'updated'} {shown(home, target)}"
             for target, action in targets.items()]

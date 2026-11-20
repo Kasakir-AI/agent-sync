@@ -4,6 +4,8 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from agent_sync import instructions, review, roles, skills
 from agent_sync.config import Config
 
@@ -308,12 +310,13 @@ def test_mcp_removes_empty_env_table_and_keeps_its_comment(tmp_path):
     assert "# Keep this comment" in codex.read_text()
 
 
-def apply_choice(home, key_part, pick):
+def apply_choice(home, key_part, pick, remove=None):
     scan = review_home(home)
     group = next(group for group in scan.groups if key_part in group.key)
     winner = next(version for version in group.versions if pick(version))
-    steps = review.plan(home, scan, {group.key: winner.id}, "claude")
-    return review.apply(home, steps, home / "backup")
+    choice = winner.id if remove is None else {"version": winner.id, "remove": remove}
+    steps = review.plan(home, scan, {group.key: choice}, "claude")
+    return review.apply(home, steps, home / "backup", review.baseline_file(Config(home=home)))
 
 
 def test_merge_keeps_target_lines_and_is_idempotent():
@@ -513,3 +516,111 @@ def test_hand_written_instructions_saved_together_still_differ(tmp_path):
     group, = review_home(tmp_path).groups
 
     assert group.status == "differ" and group.note == ""
+
+
+def test_merge_drops_only_the_named_target_lines():
+    target = "Codex note.\nKeep replies short.\nAsk before pushing.\nRun the tests.\n"
+    winner = "Keep replies short.\nRun the tests.\n"
+    assert review.merge(target, winner, frozenset()) == target
+    merged = review.merge(target, winner, frozenset({"Ask before pushing."}))
+    assert merged == "Codex note.\nKeep replies short.\nRun the tests.\n"
+    assert review.merge(merged, winner, frozenset({"Ask before pushing."})) == merged
+
+
+def test_removed_lines_are_the_synced_lines_the_winner_dropped():
+    target = "Codex note.\nKeep replies short.\nAsk before pushing.\n"
+    assert review.removed_lines(target, "Keep replies short.\n", ["Keep replies short.", "Ask before pushing."]) == {
+        "Ask before pushing."}
+    assert review.removed_lines(target, "Keep replies short.\n", []) == set()
+
+
+def deleted_rule_home(home):
+    """Claude Code's instructions lost a rule that Codex's own text and agent-sync's Cursor copy still have."""
+    paths = instructions.files(home)
+    write(home, paths["claude"], "Keep replies short.\nRun the tests.\n")
+    write(home, paths["codex"], "Codex sandbox notes.\nKeep replies short.\nAsk before pushing.\nRun the tests.\n")
+    write(home, paths["cursor"], "---\nalwaysApply: true\n---\nKeep replies short.\nAsk before pushing.\n"
+          "Run the tests.\n")
+    return paths
+
+
+def test_a_line_deleted_from_the_kept_version_goes_from_the_others(tmp_path):
+    paths = deleted_rule_home(tmp_path)
+    group, = review_home(tmp_path).groups
+    assert group.status == "differ"
+    assert group.note == ("Claude Code no longer has 1 line that Codex and Cursor still have; "
+                          "Codex keeps 1 line of its own")
+    winner, reasons = review.recommend(group, "claude")
+    assert winner.tools == ("claude",) and "no longer has 1 line" in reasons[1]
+
+    pick = lambda version: version.tools == ("claude",)  # noqa: E731
+    assert apply_choice(tmp_path, "instructions", pick) == ["updated ~/.codex/AGENTS.md",
+                                                            "updated ~/.cursor/rules/agent-sync-instructions.mdc"]
+    assert paths["codex"].read_text() == "Codex sandbox notes.\nKeep replies short.\nRun the tests.\n"
+    assert paths["cursor"].read_text() == "---\nalwaysApply: true\n---\nKeep replies short.\nRun the tests.\n"
+    assert apply_choice(tmp_path, "instructions", pick) == []
+    group, = review_home(tmp_path).groups
+    assert group.status == "same" and group.note == "Codex keeps 1 line of its own"
+
+
+def test_the_user_decides_which_lines_only_a_target_has_go(tmp_path):
+    paths = deleted_rule_home(tmp_path)
+    remove = {"~/.codex/AGENTS.md": ["Codex sandbox notes."]}     # keep the deleted rule, drop the note
+    apply_choice(tmp_path, "instructions", lambda version: version.tools == ("claude",), remove)
+    assert paths["codex"].read_text() == "Keep replies short.\nAsk before pushing.\nRun the tests.\n"
+    assert "Ask before pushing." not in paths["cursor"].read_text()     # not named: the default holds
+
+
+def test_only_lines_a_target_has_can_be_removed(tmp_path):
+    deleted_rule_home(tmp_path)
+    scan = review_home(tmp_path)
+    group, = scan.groups
+    winner = next(version for version in group.versions if version.tools == ("claude",))
+    for remove in ({"~/.codex/AGENTS.md": ["Run the tests."]}, {"~/.claude/CLAUDE.md": ["Run the tests."]}):
+        with pytest.raises(review.ChoiceError):
+            review.plan(tmp_path, scan, {group.key: {"version": winner.id, "remove": remove}}, "claude")
+
+
+def test_agent_syncs_copy_only_vouches_for_the_source_tool(tmp_path):
+    paths = instructions.files(tmp_path)
+    claude = write(tmp_path, paths["claude"], "Keep replies short.\nAsk before pushing.\n")
+    write(tmp_path, paths["codex"], "Keep replies short.\n")
+    write(tmp_path, paths["cursor"], "Keep replies short.\nAsk before pushing.\n")
+    apply_choice(tmp_path, "instructions", lambda version: version.tools == ("codex",))
+    assert claude.read_text() == "Keep replies short.\nAsk before pushing.\n"   # Codex never had the line
+
+
+def test_apply_remembers_the_kept_version_for_the_next_review(tmp_path):
+    claude = write(tmp_path, ".claude/rules/style.md", "Use tabs.\nWrap at 100.\n")
+    cursor = write(tmp_path, ".cursor/rules/style.mdc", "---\nalwaysApply: true\n---\nUse tabs.\nFormat on save.\n")
+    pick = lambda version: version.tools == ("claude",)  # noqa: E731
+    apply_choice(tmp_path, "rule", pick)
+    store = review.baseline_file(Config(home=tmp_path))
+    assert json.loads(store.read_text())["rule:style"]["lines"] == ["Use tabs.", "Wrap at 100."]
+
+    claude.write_text("Use tabs.\n")
+    group, = review_home(tmp_path).groups
+    assert group.status == "differ"
+    assert group.note == "Claude Code no longer has 1 line that Cursor still has; Cursor keeps 1 line of its own"
+    assert apply_choice(tmp_path, "rule", pick) == ["updated ~/.cursor/rules/style.mdc"]
+    assert cursor.read_text() == "---\nalwaysApply: true\n---\nUse tabs.\nFormat on save.\n"
+    assert apply_choice(tmp_path, "rule", pick) == []
+
+    claude.write_text("")
+    store.unlink()                      # without a record of the last sync, a line only Cursor has is its own
+    group, = review_home(tmp_path).groups
+    assert group.status == "same"
+
+
+def test_a_skill_copy_loses_deleted_lines_and_keeps_its_own_files(tmp_path):
+    write(tmp_path, ".claude/skills/notes/SKILL.md", "Write notes daily.\n")
+    copy = write(tmp_path, ".agents/skills/notes/SKILL.md", "Write notes daily.\nFile them weekly.\n")
+    extra = write(tmp_path, ".agents/skills/notes/codex-tips.md", "Codex only.\n")
+    marker = write(tmp_path, ".agents/skills/notes/.agent-sync", "copied by agent-sync from ~/.claude/skills/notes\n")
+    for path in (copy, extra):
+        os.utime(path, (100, 100))
+    os.utime(marker, (200, 200))
+    group, = review_home(tmp_path).groups
+    assert group.status == "differ"
+    apply_choice(tmp_path, "skill", lambda version: version.tools == ("claude",))
+    assert copy.read_text() == "Write notes daily.\n" and extra.read_text() == "Codex only.\n"

@@ -51,6 +51,16 @@ def test_review_list_recommends_the_original_and_writes_nothing(home, capsys):
     assert sorted(p for p in home.rglob("*") if p.is_file()) == sorted([original, copy])
 
 
+
+def test_review_list_says_which_lines_the_kept_version_no_longer_has(home, capsys):
+    put(home, ".claude/CLAUDE.md", "Keep replies short.\n")
+    put(home, ".codex/AGENTS.md", "Keep replies short.\nAsk before pushing.\n")
+    put(home, ".cursor/rules/agent-sync-instructions.mdc", "Keep replies short.\nAsk before pushing.\n")
+    assert cli.main(["review", "--list"]) == 0
+    output = capsys.readouterr().out
+    assert "Global instructions (instructions, differ)" in output
+    assert "  Claude Code no longer has 1 line that Codex and Cursor still have\n" in output
+
 def test_run_reports_differences_after_mirroring(upkeep_home, capsys):
     put(upkeep_home, ".claude/CLAUDE.md", "Use the project checklist.\nOnly publish when asked.\n")
     put(upkeep_home, ".cursor/rules/agent-sync-instructions.mdc", "Draft a different workflow.\n")
