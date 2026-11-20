@@ -106,7 +106,7 @@ def test_preview_is_read_only_and_apply_returns_backups_and_the_fresh_scan(reque
 
     status, result = request_page("apply", choice)
     assert status == 200 and "error" not in result
-    assert paths["codex"].read_text() == "Use the existing tests.\n"
+    assert paths["codex"].read_text() == "Write fresh fixtures.\nUse the existing tests.\n"
     assert "Use the existing tests." in paths["cursor"].read_text()
     assert len(result["changes"]) == 2
     backup = tmp_path / result["backup"].removeprefix("~/")

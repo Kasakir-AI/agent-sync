@@ -1,6 +1,8 @@
 import json
 import os
 import tomllib
+from datetime import datetime
+from pathlib import Path
 
 from agent_sync import instructions, review, roles, skills
 from agent_sync.config import Config
@@ -111,12 +113,12 @@ def test_roles_compare_the_choices_without_the_notes(tmp_path):
                                                               review.Origin.COPY]
 
 
-def test_plugin_skill_marker_describes_origin(tmp_path):
+def test_plugin_skill_copies_are_counted_not_compared(tmp_path):
     write(tmp_path, ".agents/skills/clip/SKILL.md", "Clip documents.\n")
-    write(tmp_path, ".agents/skills/clip/.agent-sync", skills.PLUGIN_MARK + "clip@market\n")
-    group, = review_home(tmp_path).groups
-    assert group.versions[0].origin == review.Origin.PLUGIN
-    assert "clip@market" in group.versions[0].note
+    write(tmp_path, ".agents/skills/clip/.agent-sync", skills.PLUGIN_MARK + "clip@market: /plugins/clip\n")
+    scanned = review_home(tmp_path)
+    assert scanned.groups == []
+    assert scanned.managed == {"clip@market plugin skills": 1}
 
 
 def test_recommend_an_edit_over_a_newer_copy(tmp_path):
@@ -304,3 +306,168 @@ def test_mcp_removes_empty_env_table_and_keeps_its_comment(tmp_path):
     review.apply(tmp_path, steps, tmp_path / "backup")
     assert tomllib.loads(codex.read_text())["mcp_servers"]["docs"] == {"url": "https://example.com/docs"}
     assert "# Keep this comment" in codex.read_text()
+
+
+def apply_choice(home, key_part, pick):
+    scan = review_home(home)
+    group = next(group for group in scan.groups if key_part in group.key)
+    winner = next(version for version in group.versions if pick(version))
+    steps = review.plan(home, scan, {group.key: winner.id}, "claude")
+    return review.apply(home, steps, home / "backup")
+
+
+def test_merge_keeps_target_lines_and_is_idempotent():
+    target = "# Notes\nKeep replies short.\nCodex only: run the linter.\nUse tabs.\n"
+    winner = "# Notes\nKeep replies brief.\nUse tabs.\nAsk before pushing.\n"
+    merged = review.merge(target, winner)
+    assert merged == ("# Notes\nKeep replies brief.\nCodex only: run the linter.\nUse tabs.\n"
+                      "Ask before pushing.\n")
+    assert review.merge(merged, winner) == merged
+    assert review.extends(merged, winner) and not review.extends(target, winner)
+    assert review.merge(merged + "More notes.\n", winner) == merged + "More notes.\n"
+
+
+def test_picking_the_shorter_instructions_leaves_a_longer_copy_alone(tmp_path):
+    paths = instructions.files(tmp_path)
+    shared = "".join(f"Rule {n}: keep step {n} small.\n" for n in range(1, 21))
+    write(tmp_path, paths["claude"], shared)
+    notes = "".join(f"Codex note {n}.\n" for n in range(1, 68))
+    codex = write(tmp_path, paths["codex"], shared + notes)
+    before = codex.read_bytes()
+    group, = review_home(tmp_path).groups
+
+    assert group.status == "missing" and group.note == "Codex keeps 67 lines of its own"
+    assert apply_choice(tmp_path, "instructions", lambda version: version.tools == ("claude",)) == [
+        f"created {paths['cursor']}"]
+    assert codex.read_bytes() == before
+
+
+def test_one_edited_line_changes_only_that_line_in_the_other_tool(tmp_path):
+    paths = instructions.files(tmp_path)
+    write(tmp_path, paths["claude"], "Keep replies short.\nAsk before pushing to main.\nRun the tests.\n")
+    codex = write(tmp_path, paths["codex"], "Codex sandbox notes.\nKeep replies short.\n"
+                  "Ask before pushing.\nRun the tests.\nUse the workspace profile.\n")
+    os.utime(codex, (100, 100))
+    pick = lambda version: version.tools == ("claude",)  # noqa: E731
+
+    assert apply_choice(tmp_path, "instructions", pick) == [f"updated {codex}", f"created {paths['cursor']}"]
+    assert codex.read_text() == ("Codex sandbox notes.\nKeep replies short.\nAsk before pushing to main.\n"
+                                 "Run the tests.\nUse the workspace profile.\n")
+    assert (tmp_path / "backup/.codex/AGENTS.md").read_text().count("Ask before pushing.\n") == 1
+    assert apply_choice(tmp_path, "instructions", pick) == []
+    group, = review_home(tmp_path).groups
+    assert group.status == "same" and group.note == "Codex keeps 2 lines of its own"
+
+
+def test_codex_block_is_dropped_once_its_lines_are_in_the_file(tmp_path):
+    paths = instructions.files(tmp_path)
+    write(tmp_path, paths["claude"], "Keep replies short.\nRun the tests.\n")
+    codex = write(tmp_path, paths["codex"], "Codex sandbox notes.\n\n<!-- agent-sync: begin (mirrored) -->\n"
+                  "Keep replies short.\nRun the tests.\n<!-- agent-sync: end -->\n")
+    apply_choice(tmp_path, "instructions", lambda version: version.tools == ("claude",))
+    assert codex.read_text() == "Codex sandbox notes.\nKeep replies short.\nRun the tests.\n"
+
+
+def test_skill_merge_keeps_target_only_files_and_lines(tmp_path):
+    write(tmp_path, ".claude/skills/notes/SKILL.md", "---\nname: notes\n---\nWrite notes daily.\nFile them.\n")
+    (tmp_path / ".claude/skills/notes/logo.bin").write_bytes(b"\0new")
+    write(tmp_path, ".claude/skills/notes/extra.md", "From Claude Code.\n")
+    target = tmp_path / ".agents/skills/notes"
+    write(tmp_path, ".agents/skills/notes/SKILL.md", "---\nname: notes\n---\nWrite notes weekly.\n"
+          "Codex: use the notes folder.\n")
+    (target / "logo.bin").write_bytes(b"\0old")
+    write(tmp_path, ".agents/skills/notes/mine.md", "Only in Codex.\n")
+    pick = lambda version: version.tools == ("claude",)  # noqa: E731
+
+    assert apply_choice(tmp_path, "skill", pick) == [f"updated {target.resolve()}"]
+    assert (target / "SKILL.md").read_text() == ("---\nname: notes\n---\nWrite notes daily.\n"
+                                                 "Codex: use the notes folder.\nFile them.\n")
+    assert (target / "logo.bin").read_bytes() == b"\0new"
+    assert (target / "extra.md").read_text() == "From Claude Code.\n"
+    assert (target / "mine.md").read_text() == "Only in Codex.\n"
+    assert (tmp_path / "backup/.agents/skills/notes/logo.bin").read_bytes() == b"\0old"
+    assert apply_choice(tmp_path, "skill", pick) == []
+    group, = review_home(tmp_path).groups
+    assert group.status == "same" and group.note == "Codex and Cursor keep 1 line and 1 file of their own"
+
+
+def tool_made_skills(home, *, claude_time=200, codex_time=200):
+    claude = write(home, ".claude/skills/clipper-inbox/SKILL.md",
+                   "---\nname: clipper-inbox\nallowed-tools: Bash\n---\nRead the inbox.\n!`clipper list`\n")
+    codex = write(home, ".agents/skills/clipper-inbox/SKILL.md", "---\nname: clipper-inbox\n---\n"
+                  "Read the inbox with `clipper list`.\n")
+    yaml = write(home, ".agents/skills/clipper-inbox/agents/openai.yaml", "interface: {}\n")
+    for path, when in ((claude, claude_time), (codex, codex_time), (yaml, codex_time)):
+        os.utime(path, (when, when))
+    plugin = write(home, "plugins/clipper/.claude-plugin/plugin.json", "{}")
+    write(home, ".claude/plugins/installed_plugins.json", json.dumps({"plugins": {
+        "clipper@market": [{"scope": "user", "installPath": str(plugin.parents[1])}]}}))
+
+
+def test_skills_a_plugin_writes_for_each_tool_are_tailored(tmp_path):
+    tool_made_skills(tmp_path)
+    group, = review_home(tmp_path).groups
+    when = datetime.fromtimestamp(200)
+
+    assert group.status == "tailored"
+    assert group.note == (f"clipper wrote a separate version for each tool at the same moment "
+                          f"({when:%b} {when.day} {when:%H:%M}); Claude Code's uses allowed-tools and "
+                          "!`command` lines only Claude Code understands; Codex and Cursor's uses "
+                          "agents/openai.yaml only Codex understands")
+
+
+def test_tool_markers_alone_mark_a_skill_tailored(tmp_path):
+    tool_made_skills(tmp_path, claude_time=100, codex_time=90_000)
+    write(tmp_path, ".agents/.skill-lock.json", "{}")
+    group, = review_home(tmp_path).groups
+    assert group.status == "tailored" and group.note.startswith("clipper made a separate version for each tool; ")
+
+
+def test_plain_skill_edits_still_differ(tmp_path):
+    write(tmp_path, ".claude/skills/notes/SKILL.md", "Write notes daily.\n")
+    write(tmp_path, ".agents/skills/notes/SKILL.md", "Write notes weekly.\n")
+    os.utime(tmp_path / ".claude/skills/notes/SKILL.md", (100, 100))
+    group, = review_home(tmp_path).groups
+    assert group.status == "differ" and review.tailored(group) == ""
+
+
+def test_mcp_server_from_a_plugin_counts_as_present_and_is_never_written(tmp_path):
+    root = tmp_path / "plugins/clipper"
+    write(root, ".mcp.json", json.dumps({"clipper-inbox": {"command": "${CLAUDE_PLUGIN_ROOT}/bin/inbox"}}))
+    write(root, ".claude-plugin/plugin.json", json.dumps({"mcpServers": "extra.json"}))
+    write(root, "extra.json", json.dumps({"mcpServers": {"clipper-notes": {"url": "https://example.com/n"}}}))
+    write(tmp_path, ".claude/plugins/installed_plugins.json", json.dumps({"plugins": {
+        "clipper@market": [{"scope": "user", "installPath": str(root)}]}}))
+    write(tmp_path, ".codex/config.toml", '[mcp_servers.clipper-inbox]\ncommand = "inbox"\n')
+    scan = review_home(tmp_path)
+    inbox, notes = scan.groups
+
+    assert inbox.missing == ("cursor",) and notes.missing == ("codex", "cursor")
+    plugin = next(version for version in inbox.versions if version.origin == review.Origin.PLUGIN)
+    assert plugin.tools == ("claude",) and plugin.note == "from plugin clipper@market"
+    assert json.loads(plugin.body)["command"] == f"{root}/bin/inbox"
+    codex = next(version for version in inbox.versions if version.tools == ("codex",))
+    steps = review.plan(tmp_path, scan, {inbox.key: codex.id}, "claude")
+    assert {step.path for step in steps} == {tmp_path / ".cursor/mcp.json"}
+
+
+def test_hand_copy_with_extras_and_comment_lines_joins_global_instructions(tmp_path):
+    preferences = "".join(f"- Preference {n}: keep it simple.\n" for n in range(1, 9))
+    write(tmp_path, ".claude/CLAUDE.md", "<!-- imported-from: notes -->\n# Preferences\n" + preferences)
+    rule = write(tmp_path, ".cursor/rules/personal-preferences.mdc", "---\nalwaysApply: true\n---\n# Preferences\n"
+                 + preferences + "".join(f"- Cursor extra {n}: prefer tabs and short reviews.\n" for n in range(9)))
+    group, = review_home(tmp_path).groups
+
+    assert group.kind == "instructions" and group.matched_by == "content 100% alike"
+    assert rule in [version.path for version in group.versions]
+    assert group.status == "missing" and group.note == "Cursor keeps 9 lines of its own"
+
+
+def test_difference_names_what_each_side_has():
+    def version(tool, body):
+        return review.make_version("rule", "x", (tool,), Path("x"), body, review.Origin.YOURS, modified=0)
+    claude = version("claude", "Keep replies short.\nRun the tests.\n")
+    codex = version("codex", "Codex note.\nKeep replies short.\nCodex other note.\n")
+    group = review.Group("rule", "x", [claude, codex], ())
+    assert review.difference(group, claude) == ("Codex has 2 lines Claude Code doesn't; "
+                                                "Claude Code has 1 line Codex doesn't.")

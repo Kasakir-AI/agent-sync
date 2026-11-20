@@ -5,12 +5,11 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
-import tempfile
 import tomllib
 from collections import Counter
-from collections.abc import Callable, Iterator
-from contextlib import ExitStack
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -66,16 +65,12 @@ class Group:
     versions: list[Version]
     missing: tuple[str, ...]
     matched_by: str = ""
+    status: str = ""
+    note: str = ""
 
     @property
     def key(self) -> str:
         return f"{self.kind}:{self.name}"
-
-    @property
-    def status(self) -> str:
-        if len({version.digest for version in self.versions}) > 1:
-            return "differ"
-        return "missing" if self.missing else "same"
 
 
 @dataclass(frozen=True)
@@ -104,24 +99,120 @@ class Step:
 
 
 @dataclass(frozen=True)
+class Link:
+    target: str
+
+
+Content = bytes | Link
+Reader = Callable[[Path], Content | None]
+
+
+@dataclass(frozen=True)
+class Edit:
+    key: str
+    tools: tuple[str, ...]
+    target: Path
+    action: str
+    path: Path
+    before: Content | None
+    after: Content
+    winner: str = ""
+
+
+@dataclass(frozen=True)
 class Kind:
     scan: Callable[[Path, Config, dict], Iterator[tuple[str, Version]]]
     location: Callable[[Path, str, str], Path | None]
-    write: Callable[[Step, Path, Path], None]
+    write: Callable[[Step, Reader], dict[Path, tuple[Content, str]]]
 
 
 RULES = {"claude": (".claude/rules", ".md"), "cursor": (".cursor/rules", ".mdc")}
 MCP_FILES = {"claude": ".claude.json", "codex": ".codex/config.toml", "cursor": ".cursor/mcp.json"}
+SKILL_ROOTS = {".claude/skills": ("claude",), ".agents/skills": ("codex", "cursor"),
+               ".codex/skills": ("codex",), ".cursor/skills": ("cursor",)}
 SKILL_IGNORES = {skills.MARKER, ".DS_Store"}
+COMMENT = re.compile(r"^\s*<!--.*-->\s*$")
 
 
 def read_text(path: Path) -> str:
     return path.read_bytes().decode("utf-8")
 
 
+def as_text(data: Content | None) -> str | None:
+    if isinstance(data, bytes) and b"\0" not in data:
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    return None
+
+
+def meaningful(line: str) -> bool:
+    return bool(line.strip()) and not COMMENT.match(line)
+
+
+def keys(text: str) -> list[str]:
+    """The lines that carry meaning: no blank lines, no lines that are only an HTML comment."""
+    return [line.rstrip() for line in text.splitlines() if meaningful(line)]
+
+
 def normalized(body: str) -> str:
-    text = "\n".join(line.rstrip() for line in body.splitlines())
+    text = "\n".join(line.rstrip() for line in body.splitlines() if not COMMENT.match(line))
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def extends(longer: str, base: str) -> bool:
+    """True when `longer` has every line of `base`, in the same order, plus perhaps lines of its own."""
+    lines = iter(keys(longer))
+    return all(line in lines for line in keys(base))
+
+
+def partner(line: str, candidates: list[str]) -> int | None:
+    """The first candidate that reads like an edit of `line`, or None when `line` is unlike them all."""
+    text = line.strip()
+    return next((index for index, other in enumerate(candidates)
+                 if SequenceMatcher(None, text, other.strip()).ratio() >= 0.6), None)
+
+
+def rows(target: str, winner: str) -> list[tuple[str, str]]:
+    """What keeping `winner` does to `target`, line by line: " " stays, "+" comes from the winner,
+    "-" is an edited line the winner's replaces, "=" is the target's own line and stays."""
+    old, new = target.splitlines(), winner.splitlines()
+    if extends(target, winner):
+        wanted, found, out = keys(winner), 0, []
+        for line in old:
+            matched = meaningful(line) and found < len(wanted) and wanted[found] == line.rstrip()
+            found += matched
+            out.append((" " if matched or not meaningful(line) else "=", line))
+        return out
+    out = []
+    match = SequenceMatcher(None, [line.rstrip() for line in old], [line.rstrip() for line in new], autojunk=False)
+    for tag, i1, i2, j1, j2 in match.get_opcodes():
+        if tag == "equal":
+            out += [(" ", line) for line in old[i1:i2]]
+            continue
+        added, start = new[j1:j2], 0
+        for line in old[i1:i2]:
+            index = partner(line, added[start:])
+            if index is None:
+                out.append(("=", line))
+            else:
+                out += [("-", line)] + [("+", other) for other in added[start:start + index + 1]]
+                start += index + 1
+        out += [("+", line) for line in added[start:]]
+    return out
+
+
+def merge(target: str, winner: str) -> str:
+    """Write the winner's lines into `target` and keep the lines only `target` has."""
+    if extends(target, winner):
+        return target
+    lines = [line for tag, line in rows(target, winner) if tag != "-"]
+    return "\n".join(lines) + "\n" if lines else ""
+
+
+def own_lines(target: str, winner: str) -> int:
+    return sum(tag == "=" and meaningful(line) for tag, line in rows(target, winner))
 
 
 def make_version(kind: str, name: str, tools: tuple[str, ...], path: Path, body: str, origin: Origin,
@@ -173,27 +264,43 @@ def scan_roles(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Ver
             yield name, make_version("roles", name, (tool,), path, "\n".join(lines), origin, note)
 
 
-def skill_tree(path: Path) -> tuple[str, float]:
-    digest = hashlib.sha256()
-    newest = 0.0
-    for root, dirs, files in os.walk(path):
+def current(path: Path) -> Content | None:
+    if path.is_symlink():
+        return Link(os.readlink(path))
+    return path.read_bytes() if path.is_file() else None
+
+
+def skill_files(path: Path) -> dict[str, Content]:
+    """Every file and link in a skill folder by relative path, without the marker and .DS_Store."""
+    files = {}
+    for root, dirs, names in os.walk(path):
         dirs[:] = sorted(set(dirs) - SKILL_IGNORES)
-        for name in sorted((set(files) - SKILL_IGNORES) | set(dirs)):
+        for name in sorted((set(names) - SKILL_IGNORES) | set(dirs)):
             entry = Path(root) / name
-            if entry.is_symlink():
-                data = b"link\0" + os.fsencode(os.readlink(entry))
-            elif entry.is_file():
-                data = b"file\0" + entry.read_bytes()
-            else:
-                continue
-            digest.update(os.fsencode(entry.relative_to(path)) + b"\0")
-            digest.update(hashlib.sha256(data).digest())
-            newest = max(newest, entry.lstat().st_mtime)
-    return digest.hexdigest(), newest
+            if (data := current(entry)) is not None:
+                files[os.fspath(entry.relative_to(path))] = data
+    return files
+
+
+def skill_digest(files: dict[str, Content]) -> str:
+    digest = hashlib.sha256()
+    for name, data in sorted(files.items()):
+        raw = b"link\0" + os.fsencode(data.target) if isinstance(data, Link) else b"file\0" + data
+        digest.update(os.fsencode(name) + b"\0" + hashlib.sha256(raw).digest())
+    return digest.hexdigest()
+
+
+def skill_extends(longer: dict[str, Content], base: dict[str, Content]) -> bool:
+    def covers(name: str, data: Content) -> bool:
+        mine, theirs = as_text(longer.get(name)), as_text(data)
+        return longer.get(name) == data or (mine is not None and theirs is not None and extends(mine, theirs))
+    return all(covers(name, data) for name, data in base.items())
 
 
 def skill_version(home: Path, name: str, tools: tuple[str, ...], path: Path) -> Version:
-    digest, modified = skill_tree(path)
+    files = skill_files(path)
+    digest = skill_digest(files)
+    modified = max((path / name).lstat().st_mtime for name in files) if files else 0.0
     marker = path / skills.MARKER
     note = ""
     origin = Origin.YOURS
@@ -211,16 +318,27 @@ def skill_version(home: Path, name: str, tools: tuple[str, ...], path: Path) -> 
                         digest=digest, modified=modified)
 
 
-def scan_skills(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
-    locations = {home / ".claude/skills": ("claude",), home / ".agents/skills": ("codex", "cursor"),
-                 home / ".codex/skills": ("codex",), home / ".cursor/skills": ("cursor",)}
+def skill_folders(home: Path) -> dict[tuple[str, Path], set[str]]:
+    """(name, real folder) -> the tools that read it, for every skill folder in the tools' skill folders."""
     folders: dict[tuple[str, Path], set[str]] = {}
-    for root, tools in locations.items():
-        for path in sorted(root.iterdir()) if root.is_dir() else ():
-            if not path.name.startswith(".") and path.name not in locked and (path / "SKILL.md").is_file():
+    for root, tools in SKILL_ROOTS.items():
+        for path in sorted((home / root).iterdir()) if (home / root).is_dir() else ():
+            if not path.name.startswith(".") and (path / "SKILL.md").is_file():
                 folders.setdefault((path.name, path.resolve()), set()).update(tools)
-    for (name, path), tools in folders.items():
-        yield name, skill_version(home, name, tuple(tool for tool in TOOLS if tool in tools), path)
+    return folders
+
+
+def plugin_of(path: Path) -> str:
+    """The plugin a skill copy came from, or "" when agent-sync did not copy it from a plugin."""
+    if not skills.is_plugin_copy(path):
+        return ""
+    return read_text(path / skills.MARKER).removeprefix(skills.PLUGIN_MARK).split(":", 1)[0].strip() or "unknown"
+
+
+def scan_skills(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
+    for (name, path), tools in skill_folders(home).items():
+        if name not in locked and not plugin_of(path):
+            yield name, skill_version(home, name, tuple(tool for tool in TOOLS if tool in tools), path)
 
 
 def portable(server: dict) -> dict | None:
@@ -244,17 +362,51 @@ def portable(server: dict) -> dict | None:
     return None
 
 
+def plugin_servers(root: Path) -> Iterator[tuple[Path, str, dict]]:
+    """(file, name, server) for the MCP servers a Claude Code plugin brings: its .mcp.json and plugin.json."""
+    manifest = root / ".claude-plugin/plugin.json"
+    sources = [root / ".mcp.json", manifest]
+    for path in sources:
+        try:
+            data = json.loads(read_text(path))
+        except (OSError, ValueError):
+            continue
+        servers = data.get("mcpServers", data if path != manifest else None) if isinstance(data, dict) else None
+        if isinstance(servers, str) and path == manifest:
+            sources.append(root / servers)
+        elif isinstance(servers, dict):
+            for name, server in sorted(servers.items()):
+                yield path, name, server
+
+
 def scan_mcp(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
     for tool, filename in MCP_FILES.items():
         for name, server in sorted(mcp.read(home, tool).items()):
             if (value := portable(server)) is not None:
                 body = json.dumps(value, indent=2, sort_keys=True)
                 yield name, make_version("mcp", name, (tool,), home / filename, body, Origin.SETTINGS, key=name)
-
+    for pid, root in skills.plugins(home).items():
+        for path, name, server in plugin_servers(root):
+            if (value := portable(server)) is not None:
+                body = json.dumps(value, indent=2, sort_keys=True)
+                body = body.replace("${CLAUDE_PLUGIN_ROOT}", json.dumps(str(root))[1:-1])
+                yield name, make_version("mcp", name, ("claude",), path, body, Origin.PLUGIN,
+                                         f"from plugin {pid}", key=name)
 
 
 def group_tools(group: Group) -> set[str]:
     return {tool for version in group.versions for tool in version.tools}
+
+
+def likeness(left: str, right: str) -> float:
+    """The larger of the texts' match ratio and the share of the shorter one's lines found in the longer."""
+    if left == right:
+        return 1.0
+    short, long = sorted((keys(left), keys(right)), key=len)
+    found = set(long)
+    contained = sum(line in found for line in short) / len(short) if len(short) >= 3 else 0.0
+    match = SequenceMatcher(None, left, right, autojunk=len(left) * len(right) > 16_000_000)
+    return max(contained, match.ratio() if match.quick_ratio() > max(contained, 0.6) else 0.0)
 
 
 def pair_similar(groups: list[Group]) -> None:
@@ -262,18 +414,8 @@ def pair_similar(groups: list[Group]) -> None:
     bodies = {version.id: normalized(version.body) for group in candidates for version in group.versions}
 
     def similarity(left: Group, right: Group) -> float:
-        best = 0.0
-        for a in left.versions:
-            for b in right.versions:
-                if not bodies[a.id] or not bodies[b.id]:
-                    continue
-                left, right = bodies[a.id], bodies[b.id]
-                if left == right:
-                    return 1.0
-                match = SequenceMatcher(None, left, right, autojunk=len(left) * len(right) > 16_000_000)
-                if match.quick_ratio() >= max(0.6, best):
-                    best = max(best, match.ratio())
-        return best
+        return max((likeness(bodies[a.id], bodies[b.id]) for a in left.versions for b in right.versions
+                    if bodies[a.id] and bodies[b.id]), default=0.0)
 
     for group in candidates[:]:
         if group.kind != "rule" or group not in candidates:
@@ -287,6 +429,103 @@ def pair_similar(groups: list[Group]) -> None:
             target.matched_by = f"content {ratio:.0%} alike"
             candidates.remove(group)
             groups.remove(group)
+
+
+SKILL_MARKS = (  # (tool, label, test on SKILL.md front matter, its body and the folder): what only that tool reads
+    ("claude", "allowed-tools", lambda front, body, path: re.search(r"^allowed-tools:", front, re.M)),
+    ("claude", "argument-hint", lambda front, body, path: re.search(r"^argument-hint:", front, re.M)),
+    ("claude", "disable-model-invocation",
+     lambda front, body, path: re.search(r"^disable-model-invocation:", front, re.M)),
+    ("claude", "!`command` lines", lambda front, body, path: re.search(r"^!`", body, re.M)),
+    ("claude", "$ARGUMENTS", lambda front, body, path: "$ARGUMENTS" in body),
+    ("codex", "agents/openai.yaml", lambda front, body, path: (path / "agents/openai.yaml").is_file()),
+)
+
+
+def joined(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def tool_names(tools: Iterable[str]) -> str:
+    return joined([TOOL_LABELS[tool] for tool in tools])
+
+
+def counted(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
+def skill_marks(version: Version) -> list[tuple[str, str]]:
+    front, body = instructions.split_front(version.body)
+    return [(tool, label) for tool, label, test in SKILL_MARKS if test(front, body, version.path)]
+
+
+def tailored(group: Group, installers: Iterable[str] = ()) -> str:
+    """Why the versions look made on purpose for each tool (by a plugin or an installer), or "" when they don't."""
+    versions = group.versions
+    if group.kind not in {"skill", "rule", "instructions"} or len({version.digest for version in versions}) < 2:
+        return ""
+    times = [version.modified for version in versions]
+    together = (max(times) - min(times) <= 5
+                and all(version.origin not in {Origin.COPY, Origin.EDITED_COPY} for version in versions))
+    uses = []
+    if group.kind == "skill":
+        marks = {version.id: skill_marks(version) for version in versions}
+        for version in versions:
+            for tool in version.tools:
+                labels = [label for mark, label in marks[version.id] if mark == tool and any(
+                    tool not in other.tools and (mark, label) not in marks[other.id] for other in versions)]
+                if labels:
+                    uses.append(f"{tool_names(version.tools)}'s uses {joined(labels)} "
+                                f"only {TOOL_LABELS[tool]} understands")
+    if not together and not uses:
+        return ""
+    who = max((name for name in installers if group.name == name or group.name.startswith(name + "-")),
+              key=len, default="")
+    if together:
+        when = datetime.fromtimestamp(max(times))
+        lead = (f"{who} wrote a separate version" if who else "A separate version was written") + (
+            f" for each tool at the same moment ({when:%b} {when.day} {when:%H:%M})")
+    else:
+        lead = f"{who} made a separate version for each tool" if who else "Each tool has a version made for it"
+    return "; ".join([lead, *uses])
+
+
+Files = dict[str, dict[str, Content]]
+
+
+def additions(kind: str, longer: Version, base: Version, files: Files) -> tuple[int, int] | None:
+    """(lines, files) `longer` has on top of `base`, or None when it changes or lacks something of `base`'s."""
+    if kind != "skill":
+        return (own_lines(longer.body, base.body), 0) if extends(longer.body, base.body) else None
+    mine, theirs = files[longer.id], files[base.id]
+    if not skill_extends(mine, theirs):
+        return None
+    lines = sum(own_lines(as_text(mine[name]), as_text(data)) for name, data in theirs.items()
+                if mine[name] != data)
+    return lines, len(set(mine) - set(theirs))
+
+
+def judge(group: Group, installers: Iterable[str] = ()) -> tuple[str, str]:
+    """The group's status and a one-line note: what each tool keeps of its own, or why it was made per tool."""
+    note = ""
+    if len({version.digest for version in group.versions}) > 1:
+        files = {version.id: skill_files(version.path) for version in group.versions} if group.kind == "skill" else {}
+        for base in group.versions if group.kind != "mcp" else ():
+            extra = {version.id: additions(group.kind, version, base, files) for version in group.versions}
+            if None not in extra.values():
+                break
+        else:
+            return ("tailored", reason) if (reason := tailored(group, installers)) else ("differ", "")
+        parts = []
+        for version in group.versions:
+            lines, folders = extra[version.id]
+            what = [counted(count, noun) for count, noun in ((lines, "line"), (folders, "file")) if count]
+            if what:
+                one = len(version.tools) == 1
+                parts.append(f"{tool_names(version.tools)} {'keeps' if one else 'keep'} {joined(what)} "
+                             f"of {'its' if one else 'their'} own")
+        note = "; ".join(parts)
+    return ("missing" if group.missing else "same"), note
 
 
 def scan_plugins(home: Path, cfg: Config) -> dict[str, dict[str, list[Plugin]]]:
@@ -324,11 +563,17 @@ def scan(home: Path, cfg: Config) -> Scan:
             by_name.setdefault(name, []).append(version)
         groups.extend(Group(kind, name, versions, ()) for name, versions in sorted(by_name.items()))
     pair_similar(groups)
+    installers = {pid.split("@", 1)[0] for pid in skills.plugins(home)}
+    installers |= {str(meta.get("source") or "").rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
+                   for meta in locked.values()}
+    installers.discard("")
     for group in groups:
         have = group_tools(group)
         location = KINDS[group.kind].location
         group.missing = tuple(tool for tool in TOOLS if tool not in have and location(home, group.name, tool))
+        group.status, group.note = judge(group, installers)
     managed = Counter(meta.get("source") or "Unknown package" for meta in locked.values())
+    managed.update(f"{pid} plugin skills" for _, path in skill_folders(home) if (pid := plugin_of(path)))
     patterns = {"claude": ".claude/agents/*.md", "codex": ".codex/agents/*.toml",
                  "cursor": ".cursor/plugins/local/*-agents/agents/*.md"}
     for tool, pattern in patterns.items():
@@ -420,7 +665,7 @@ def plan(home: Path, scan: Scan, choices: dict[str, str], source: str) -> list[S
         targets: dict[Path, set[str]] = {}
         same = {version.path.resolve() for version in group.versions if version.digest == winner.digest}
         for version in group.versions:
-            if version.digest != winner.digest:
+            if version.digest != winner.digest and version.origin != Origin.PLUGIN:
                 targets.setdefault(checked_path(home, version.path), set()).update(version.tools)
         location = KINDS[group.kind].location
         for tool in group.missing:
@@ -438,51 +683,71 @@ def plan(home: Path, scan: Scan, choices: dict[str, str], source: str) -> list[S
     return steps
 
 
-def write_text(rewrite: Callable[[Step, str], str]) -> Callable[[Step, Path, Path], None]:
-    def write(step: Step, current: Path, staged: Path) -> None:
-        text = read_text(current) if current.is_file() else ""
-        updated = rewrite(step, text)
-        if text != updated or not current.exists():
-            staged.write_bytes(updated.encode())
+def write_text(rewrite: Callable[[Step, str], str], merged: bool = True) -> Callable[[Step, Reader], dict]:
+    def write(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
+        before = read(step.path)
+        text = as_text(before) if before is not None else ""
+        if text is None:
+            raise ValueError(f"not a text file: {step.path}")
+        return {step.path: (rewrite(step, text).encode(), step.winner.body if merged else "")}
     return write
 
 
 def instruction_text(step: Step, text: str) -> str:
-    body = step.winner.body.rstrip("\r\n")
+    body = step.winner.body
     if "cursor" in step.tools:
-        front, _ = instructions.split_front(text)
-        if front:
-            return front + body + "\n"
-        if step.path.suffix == ".mdc" or not text:
-            return instructions.rendered("cursor", "", body, step.winner.path)
-    return body + "\n"
+        front, rest = instructions.split_front(text)
+        if not front:
+            return instructions.rendered("cursor", "", merge(rest, body).rstrip("\n"), step.winner.path)
+        return front + merge(rest, body)
+    block = instructions.BLOCK.search(text)
+    own = instructions.BLOCK.sub("\n", text) if block else text
+    merged = merge(own, body)
+    if merged == own:
+        return text
+    if block and not set(keys(block[0])) <= set(keys(merged)):
+        return merged.rstrip("\n") + "\n\n" + block[0].strip("\n") + "\n"
+    return merged
 
 
 def rule_text(step: Step, text: str) -> str:
-    front, _ = instructions.split_front(text)
+    front, rest = instructions.split_front(text)
     if not front and "cursor" in step.tools and step.action == "create":
         name = step.key.split(":", 1)[1]
         front = f"---\ndescription: {name}\nalwaysApply: true\n---\n"
-    return front + step.winner.body.rstrip("\r\n") + "\n"
+    return front + merge(rest, step.winner.body)
 
 
 def role_text(step: Step, text: str) -> str:
-    header, _, rest = roles.split(text)
-    updated = "\n".join(header + step.winner.body.splitlines()) + ("\n" + rest if rest else "") + "\n"
+    header, old, rest = roles.split(text)
+    lines = merge("\n".join(old), step.winner.body).splitlines()
+    if lines == old:
+        return text
+    updated = "\n".join(header + lines) + ("\n" + rest if rest else "") + "\n"
     return updated.replace("\n\n\n", "\n\n")
 
 
-def write_skill(step: Step, current: Path, staged: Path) -> None:
-    if current.is_dir() and skill_tree(current)[0] == step.winner.digest:
-        return
-    if skill_tree(step.winner.path)[0] != step.winner.digest:
+def write_skill(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
+    """Merge the winner's text files, add its other files and keep everything only the target has."""
+    winner = skill_files(step.winner.path)
+    if skill_digest(winner) != step.winner.digest:
         raise ValueError(f"selected skill changed: {step.winner.path}")
-    shutil.copytree(step.winner.path, staged, symlinks=True, ignore=shutil.ignore_patterns(*SKILL_IGNORES))
-    marker = current / skills.MARKER
-    if marker.is_file() or marker.is_symlink():
-        shutil.copy2(marker, staged / skills.MARKER, follow_symlinks=False)
-    elif step.marker:
-        (staged / skills.MARKER).write_text(step.marker)
+    out: dict[Path, tuple[Content, str]] = {}
+    if step.marker and not step.path.exists():
+        out[step.path / skills.MARKER] = (step.marker.encode(), "")
+    for name, data in winner.items():
+        path = step.path / name
+        if Path(os.path.realpath(path)) != path or (path.exists() and not path.is_file()):
+            continue
+        before, theirs = read(path), as_text(data)
+        mine = as_text(before)
+        if before is None:
+            out[path] = (data, theirs or "")
+        elif mine is not None and theirs is not None:
+            out[path] = (merge(mine, theirs).encode(), theirs)
+        elif not isinstance(data, Link):
+            out[path] = (data, "")
+    return out
 
 
 MCP_KEYS = ("command", "args", "env", "url")
@@ -535,59 +800,101 @@ KINDS = {
     "rule": Kind(scan_rules, rule_location, write_text(rule_text)),
     "roles": Kind(scan_roles, lambda home, name, tool: None, write_text(role_text)),
     "skill": Kind(scan_skills, lambda home, name, tool: skills.folders(home)[tool] / name, write_skill),
-    "mcp": Kind(scan_mcp, lambda home, name, tool: home / MCP_FILES[tool], write_text(mcp_text)),
+    "mcp": Kind(scan_mcp, lambda home, name, tool: home / MCP_FILES[tool], write_text(mcp_text, merged=False)),
 }
 
 
-def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
-    """Prepare all changes, back up existing targets and rename each replacement into place."""
-    by_path: dict[Path, list[Step]] = {}
+def edits(steps: list[Step]) -> list[Edit]:
+    """Every file the steps change, with its content before and after; steps on one settings file chain."""
+    pending: dict[Path, tuple[Step, Content, str]] = {}
+
+    def read(path: Path) -> Content | None:
+        return pending[path][1] if path in pending else current(path)
+
     for step in steps:
-        if checked_path(home, step.path) != step.path:
-            raise ValueError(f"target moved: {step.path}")
-        by_path.setdefault(step.path, []).append(step)
-
-    with ExitStack() as stack:
-        prepared = {}
-        for path, changes in by_path.items():
-            if len(changes) > 1 and any(not change.key.startswith("mcp:") for change in changes):
+        kind = step.key.split(":", 1)[0]
+        for path, (after, winner) in KINDS[kind].write(step, read).items():
+            if path in pending and pending[path][0].key != step.key and kind != "mcp":
                 raise ValueError(f"more than one selection would write {path}")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix=".agent-sync-", dir=path.parent)))
-            staged = temporary / "new"
-            for step in changes:
-                kind = step.key.split(":", 1)[0]
-                KINDS[kind].write(step, staged if staged.exists() else path, staged)
-            if staged.exists():
-                prepared[path] = staged
-
-        for path, staged in prepared.items():
-            if path.exists():
-                dest = backup_dir / path.relative_to(home.resolve())
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if not dest.exists():
-                    if path.is_dir():
-                        shutil.copytree(path, dest, symlinks=True)
-                    else:
-                        shutil.copy2(path, dest, follow_symlinks=False)
-                shutil.copymode(path, staged)
-
-        changes = []
-        for path, staged in prepared.items():
-            if checked_path(home, path) != path:
-                raise ValueError(f"target moved: {path}")
-            exists = path.exists()
-            previous = staged.with_name("old")
-            if exists and path.is_dir():
-                path.rename(previous)
-            try:
-                staged.replace(path)
-            except OSError:
-                if previous.exists():
-                    previous.rename(path)
-                raise
-            changes.append(f"{'replaced' if exists else 'created'} {path}")
+            pending[path] = (step, after, winner)
+    changes = []
+    for path, (step, after, winner) in pending.items():
+        before = current(path)
+        if after != before:
+            changes.append(Edit(step.key, step.tools, step.path, step.action, path, before, after, winner))
     return changes
+
+
+def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
+    """Write only what changes: stage each file beside its target, back up the originals, then rename into place."""
+    changes = edits(steps)
+    staged: list[tuple[Edit, Path]] = []
+    try:
+        for edit in changes:
+            if checked_path(home, edit.path) != edit.path:
+                raise ValueError(f"target moved: {edit.path}")
+            edit.path.parent.mkdir(parents=True, exist_ok=True)
+            temp = edit.path.with_name(f".{edit.path.name}.agent-sync-{secrets.token_hex(4)}")
+            staged.append((edit, temp))
+            if isinstance(edit.after, Link):
+                temp.symlink_to(edit.after.target)
+            else:
+                temp.write_bytes(edit.after)
+                if edit.before is not None:
+                    shutil.copymode(edit.path, temp)
+        for edit, _ in staged:
+            dest = backup_dir / edit.path.relative_to(home.resolve())
+            if edit.before is not None and not dest.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(edit.path, dest, follow_symlinks=False)
+        for edit, temp in staged:
+            temp.replace(edit.path)
+    finally:
+        for _, temp in staged:
+            if temp.is_symlink() or temp.exists():
+                temp.unlink()
+    targets = {edit.target: edit.action for edit in changes}
+    return [f"{'created' if action == 'create' else 'updated'} {target}" for target, action in targets.items()]
+
+
+def label(version: Version, group: Group) -> str:
+    names = tool_names(version.tools)
+    clash = any(other.id != version.id and other.tools == version.tools for other in group.versions)
+    return f"{names} ({version.path.name})" if clash else names
+
+
+def difference(group: Group, winner: Version) -> str:
+    """In plain words, what each version has that `winner` lacks and the other way round, counted in lines."""
+    them, many = label(winner, group), len(winner.tools) > 1
+    theirs = skill_files(winner.path) if group.kind == "skill" else {}
+    sentences = []
+    for version in group.versions:
+        if version.digest == winner.digest:
+            continue
+        mine, plural = label(version, group), len(version.tools) > 1
+        has, lacks = ("have", "don't") if plural else ("has", "doesn't")
+        their_has, their_lacks = ("have", "don't") if many else ("has", "doesn't")
+        tags = Counter(tag for tag, line in rows(version.body, winner.body) if meaningful(line))
+        clauses = []
+        if tags["-"] + tags["="]:
+            clauses.append(f"{mine} {has} {counted(tags['-'] + tags['='], 'line')} {them} {their_lacks}")
+        if tags["+"]:
+            clauses.append(f"{them} {their_has} {counted(tags['+'], 'line')} {mine} {lacks}")
+        if group.kind == "skill":
+            files = skill_files(version.path)
+            for owner, verb, absent, names in ((mine, has, their_lacks, sorted(set(files) - set(theirs))),
+                                               (them, their_has, lacks, sorted(set(theirs) - set(files)))):
+                if names:
+                    shown = joined(names[:3]) + (" and more" if len(names) > 3 else "")
+                    other = them if owner == mine else mine
+                    clauses.append(f"{owner} {verb} {counted(len(names), 'file')} {other} {absent} ({shown})")
+            changed = [name for name in set(files) & set(theirs) if name != "SKILL.md" and files[name] != theirs[name]]
+            if changed:
+                clauses.append(f"{counted(len(changed), 'other file')} {'differs' if len(changed) == 1 else 'differ'}")
+        if not clauses:
+            clauses.append(f"{mine} and {them} differ only in spacing or comments")
+        sentences.append("; ".join(clauses) + ".")
+    return " ".join(sentences)
 
 
 def set_plugin_skills(home: Path, ids: list[str]) -> None:
