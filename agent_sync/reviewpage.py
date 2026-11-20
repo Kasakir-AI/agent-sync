@@ -59,12 +59,27 @@ def _snapshot(group: review.Group) -> dict:
     }}
 
 
+def _leftovers(home: Path, group: review.Group, version: review.Version) -> dict[str, list[dict]]:
+    """For each version the user may keep, the lines only `version` has, per file, and which go by default."""
+    if version.origin == review.Origin.PLUGIN:
+        return {}
+    out = {}
+    for winner in group.versions:
+        if winner.digest != version.digest and not review.fixed(winner):
+            files = review.leftovers(group, version, winner)
+            out[winner.id] = [{"path": review.shown(home, path), "lines": lines} for path, lines in files.items()]
+    return out
+
+
 def _group_data(home: Path, group: review.Group, source: str) -> dict:
     winner, reasons = review.recommend(group, source)
+    gone = review.removals(group, winner)
     versions = []
     for version in group.versions:
         path = review.shown(home, version.path)
         rows = review.rows(version.body, winner.body) if version.id != winner.id else []
+        dropped = set(gone.get(version.id, ()))
+        rows = [("x" if tag == "=" and line.rstrip() in dropped else tag, line) for tag, line in rows]
         versions.append({
             "id": version.id, "tools": version.tools, "path": path, "lines": version.lines,
             "modified": version.modified, "origin": version.origin, "label": review.ORIGIN_LABELS[version.origin],
@@ -72,6 +87,7 @@ def _group_data(home: Path, group: review.Group, source: str) -> dict:
             "cautions": review.cautions(version, winner) if version.id != winner.id else [],
             "fixed": review.fixed(version),
             "diff": _rows(rows), "own": sum(tag == "=" and review.meaningful(line) for tag, line in rows),
+            "only": _leftovers(home, group, version),
         })
     differs = len({version.digest for version in group.versions}) > 1
     return {"key": group.key, "kind": group.kind, "name": group.name, "status": group.status, "note": group.note,
@@ -85,14 +101,14 @@ def _edit_data(home: Path, edit: review.Edit) -> dict:
     after = review.as_text(edit.after)
     data = {"key": edit.key, "tools": edit.tools, "path": review.shown(home, edit.path),
             "action": "update" if edit.before is not None else "create", "diff": [], "own": 0, "lines": 0,
-            "binary": before is None or after is None}
+            "binary": before is None or after is None, "removed": list(edit.removed)}
     if not data["binary"]:
         data["lines"] = len(after.splitlines())
         if edit.before is not None:
             data["diff"] = _rows(_changes(before, after))
             if edit.winner:
                 bodies = (instructions.split_front(text)[1] for text in (before, edit.winner))
-                data["own"] = review.own_lines(*bodies)
+                data["own"] = review.own_lines(*bodies) - len(edit.removed)
     return data
 
 
@@ -124,9 +140,20 @@ class _RequestError(ValueError):
         self.status = status
 
 
-def _choices(data: dict, scan: review.Scan, *, applying: bool) -> dict[str, str]:
+def _valid(choice) -> bool:
+    """A version id, or {"version": id, "remove": {file: [lines]}}."""
+    if isinstance(choice, str):
+        return True
+    if not isinstance(choice, dict) or not isinstance(choice.get("version"), str):
+        return False
+    remove = choice.get("remove", {})
+    return isinstance(remove, dict) and all(
+        isinstance(lines, list) and all(isinstance(line, str) for line in lines) for lines in remove.values())
+
+
+def _choices(data: dict, scan: review.Scan, *, applying: bool) -> dict[str, str | dict]:
     raw, digests = data.get("choices"), data.get("digests")
-    if not isinstance(raw, dict) or any(not isinstance(value, str) for value in raw.values()):
+    if not isinstance(raw, dict) or not all(_valid(value) for value in raw.values()):
         raise _RequestError(HTTPStatus.BAD_REQUEST, "Choose a version for each setting you want to change.")
     if (applying or digests is not None) and not isinstance(digests, dict):
         raise _RequestError(HTTPStatus.BAD_REQUEST, "Reload the page to get the latest settings.")
@@ -136,7 +163,8 @@ def _choices(data: dict, scan: review.Scan, *, applying: bool) -> dict[str, str]
         group = groups.get(key)
         if digests is not None and (group is None or digests.get(key) != _snapshot(group)):
             raise _RequestError(HTTPStatus.CONFLICT, STALE)
-        if group is None or all(version.id != choice for version in group.versions):
+        chosen = choice if isinstance(choice, str) else choice["version"]
+        if group is None or all(version.id != chosen for version in group.versions):
             raise _RequestError(HTTPStatus.BAD_REQUEST, "A selected version is unavailable. Reload the page.")
     return choices
 
@@ -240,6 +268,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(handler(self._body()))
         except _RequestError as exc:
             self._json({"error": str(exc)}, exc.status)
+        except review.ChoiceError as exc:
+            self._json({"error": f"{exc}. Reload the page."}, HTTPStatus.BAD_REQUEST)
         except (OSError, TypeError, ValueError) as exc:
             self._json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
@@ -260,7 +290,7 @@ class _Handler(BaseHTTPRequestHandler):
             backup = _backup_folder(cfg.state_dir / "backups") if steps else None
             result = {"backup": review.shown(home, backup) if backup else None}
             try:
-                result["changes"] = review.apply(home, steps, backup) if backup else []
+                result["changes"] = review.apply(home, steps, backup, review.baseline_file(cfg)) if backup else []
                 if backup and not result["changes"]:
                     backup.rmdir()                     # nothing changed, so nothing was backed up
                     result["backup"] = None

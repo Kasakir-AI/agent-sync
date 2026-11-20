@@ -97,10 +97,10 @@ def test_preview_is_read_only_and_apply_returns_backups_and_the_fresh_scan(reque
         "files": [
             {"key": "instructions:Global instructions", "tools": ["codex"], "path": "~/.codex/AGENTS.md",
              "action": "update", "diff": [" Write fresh fixtures.", "+Use the existing tests."], "own": 1,
-             "lines": 2, "binary": False},
+             "lines": 2, "binary": False, "removed": []},
             {"key": "instructions:Global instructions", "tools": ["cursor"],
              "path": "~/.cursor/rules/agent-sync-instructions.mdc", "action": "create", "diff": [], "own": 0,
-             "lines": 5, "binary": False},
+             "lines": 5, "binary": False, "removed": []},
         ], "backup": "~/.local/state/agent-sync/backups",
     })
     assert paths["codex"].read_text() == "Write fresh fixtures.\n"
@@ -162,3 +162,30 @@ def test_plugin_switch_saves_sharing_settings(request_page, tmp_path):
     assert status == 200
     assert result["scan"]["plugins"]["example"]["claude"][0]["shared"] is True
     assert load(home=tmp_path).plugin_skills == ["example@market"]
+
+
+def test_page_offers_each_target_only_line_and_refuses_other_removals(request_page, tmp_path):
+    paths = instructions.files(tmp_path)
+    write(paths["claude"], "Keep replies short.\nRun the tests.\n")
+    write(paths["codex"], "Codex sandbox notes.\nKeep replies short.\nAsk before pushing.\nRun the tests.\n")
+    write(paths["cursor"], "Keep replies short.\nAsk before pushing.\nRun the tests.\n")
+    scan, _ = scan_on_page(request_page)
+    group = scan["groups"][0]
+    codex = next(version for version in group["versions"] if version["tools"] == ["codex"])
+    assert group["status"] == "differ"
+    assert codex["only"][group["winner"]] == [{"path": "~/.codex/AGENTS.md", "lines": [
+        ["Codex sandbox notes.", False], ["Ask before pushing.", True]]}]
+
+    def choose(remove):
+        return {"choices": {group["key"]: {"version": group["winner"], "remove": remove}},
+                "digests": {group["key"]: group["snapshot"]}}
+
+    status, plan = request_page("plan", choose({"~/.codex/AGENTS.md": ["Ask before pushing."]}))
+    assert status == 200
+    edit = next(file for file in plan["files"] if file["path"] == "~/.codex/AGENTS.md")
+    assert edit["removed"] == ["Ask before pushing."] and "-Ask before pushing." in edit["diff"]
+    assert edit["own"] == 1
+    status, result = request_page("apply", choose({"~/.codex/AGENTS.md": ["Run the tests."]}))
+    assert status == 400 and "Run the tests." in result["error"]
+    assert "Ask before pushing." in paths["codex"].read_text()
+    assert request_page("plan", choose({"~/.codex/AGENTS.md": "Ask before pushing."}))[0] == 400
