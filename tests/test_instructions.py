@@ -25,3 +25,21 @@ def test_instructions_block_keeps_the_targets_own_text(tmp_path):
 
 def test_cursor_cannot_be_the_instructions_source(tmp_path):
     assert instructions.mirror(tmp_path, "cursor")[0].startswith("skip")
+
+
+def test_a_target_that_already_has_every_source_line_gets_no_block(tmp_path):
+    files = instructions.files(tmp_path)
+    files["claude"].parent.mkdir(parents=True)
+    files["claude"].write_text("# Mine\n\nBe brief.\n")
+    files["codex"].parent.mkdir(parents=True)
+    files["codex"].write_text("Codex-only note.\n# Mine\n\nBe brief.\n")
+    files["cursor"].parent.mkdir(parents=True)
+
+    assert instructions.mirror(tmp_path, "claude") == [f"updated {files['cursor']}"]
+    assert files["codex"].read_text() == "Codex-only note.\n# Mine\n\nBe brief.\n"
+
+    stale = "Codex-only note.\n# Mine\n\nBe brief.\n\n" + instructions.BEGIN.format(src="CLAUDE.md") + "\nOld.\n" \
+        + instructions.END + "\n"
+    files["codex"].write_text(stale)
+    instructions.mirror(tmp_path, "claude")
+    assert files["codex"].read_text() == "Codex-only note.\n# Mine\n\nBe brief.\n"

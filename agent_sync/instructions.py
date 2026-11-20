@@ -35,9 +35,13 @@ def own_text(text: str) -> str:
 
 
 def rendered(tool: str, current: str, body: str, src: Path) -> str:
+    from .review import extends  # review builds on this module, so it is imported here, not at the top
     _, existing = split_front(current) if tool == "cursor" else ("", current)
     if own_text(existing) == body.strip():
         return current
+    if tool != "cursor" and extends(own_text(current), body):
+        # the file already has every line of the source plus its own: a block would only repeat them
+        return current if not BLOCK.search(current) else own_text(current) + "\n"
     if tool == "cursor":
         return ("---\ndescription: Global instructions, mirrored by agent-sync from " + src.name +
                 "\nalwaysApply: true\n---\n" + body + "\n")

@@ -395,6 +395,19 @@ def scan_mcp(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Versi
                                          f"from plugin {pid}", key=name)
 
 
+def shown(home: Path, path: Path) -> str:
+    """`path` with the home folder written as ~ (also when one of them goes through a link, as /var does on macOS)."""
+    for base in (home, home.resolve()):
+        if path.is_relative_to(base):
+            return str(Path("~") / path.relative_to(base))
+    return str(path)
+
+
+def fixed(version: Version) -> bool:
+    """An MCP server a Claude Code plugin provides: it counts as present, but is never copied or changed."""
+    return version.origin == Origin.PLUGIN and bool(version.key)
+
+
 def group_tools(group: Group) -> set[str]:
     return {tool for version in group.versions for tool in version.tools}
 
@@ -405,7 +418,9 @@ def likeness(left: str, right: str) -> float:
         return 1.0
     short, long = sorted((keys(left), keys(right)), key=len)
     found = set(long)
-    contained = sum(line in found for line in short) / len(short) if len(short) >= 3 else 0.0
+    # Containment counts only between documents of a like size: a short rule quoted inside a long file is a section.
+    whole = len(short) >= 3 and 2 * len(short) >= len(long)
+    contained = sum(line in found for line in short) / len(short) if whole else 0.0
     match = SequenceMatcher(None, left, right, autojunk=len(left) * len(right) > 16_000_000)
     return max(contained, match.ratio() if match.quick_ratio() > max(contained, 0.6) else 0.0)
 
@@ -461,9 +476,10 @@ def skill_marks(version: Version) -> list[tuple[str, str]]:
 
 
 def tailored(group: Group, installers: Iterable[str] = ()) -> str:
-    """Why the versions look made on purpose for each tool (by a plugin or an installer), or "" when they don't."""
+    """Why a skill's versions look made on purpose for each tool (by a plugin or an installer), or "" when they don't.
+    Only skills: hand-written files saved together (a dotfiles checkout, a restore) are not an installer's work."""
     versions = group.versions
-    if group.kind not in {"skill", "rule", "instructions"} or len({version.digest for version in versions}) < 2:
+    if group.kind != "skill" or len({version.digest for version in versions}) < 2:
         return ""
     times = [version.modified for version in versions]
     together = (max(times) - min(times) <= 5
@@ -506,17 +522,25 @@ def additions(kind: str, longer: Version, base: Version, files: Files) -> tuple[
     return lines, len(set(mine) - set(theirs))
 
 
+def shared_base(group: Group) -> tuple[Version, dict[str, tuple[int, int]]] | None:
+    """The version every other one only adds to, with what each adds (lines, files); None when there is none."""
+    if group.kind == "mcp":
+        return None
+    files = {version.id: skill_files(version.path) for version in group.versions} if group.kind == "skill" else {}
+    for base in group.versions:
+        extra = {version.id: additions(group.kind, version, base, files) for version in group.versions}
+        if None not in extra.values():
+            return base, extra
+    return None
+
+
 def judge(group: Group, installers: Iterable[str] = ()) -> tuple[str, str]:
     """The group's status and a one-line note: what each tool keeps of its own, or why it was made per tool."""
     note = ""
     if len({version.digest for version in group.versions}) > 1:
-        files = {version.id: skill_files(version.path) for version in group.versions} if group.kind == "skill" else {}
-        for base in group.versions if group.kind != "mcp" else ():
-            extra = {version.id: additions(group.kind, version, base, files) for version in group.versions}
-            if None not in extra.values():
-                break
-        else:
+        if (found := shared_base(group)) is None:
             return ("tailored", reason) if (reason := tailored(group, installers)) else ("differ", "")
+        _, extra = found
         parts = []
         for version in group.versions:
             lines, folders = extra[version.id]
@@ -564,6 +588,10 @@ def scan(home: Path, cfg: Config) -> Scan:
             by_name.setdefault(name, []).append(version)
         groups.extend(Group(kind, name, versions, ()) for name, versions in sorted(by_name.items()))
     pair_similar(groups)
+    managed = Counter(meta.get("source") or "Unknown package" for meta in locked.values())
+    for group in [group for group in groups if all(fixed(version) for version in group.versions)]:
+        groups.remove(group)
+        managed.update(version.note.removeprefix("from plugin ") + " plugin MCP servers" for version in group.versions)
     installers = {pid.split("@", 1)[0] for pid in skills.plugins(home)}
     installers |= {str(meta.get("source") or "").rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
                    for meta in locked.values()}
@@ -573,7 +601,6 @@ def scan(home: Path, cfg: Config) -> Scan:
         location = KINDS[group.kind].location
         group.missing = tuple(tool for tool in TOOLS if tool not in have and location(home, group.name, tool))
         group.status, group.note = judge(group, installers)
-    managed = Counter(meta.get("source") or "Unknown package" for meta in locked.values())
     managed.update(f"{pid} plugin skills" for _, path in skill_folders(home) if (pid := plugin_of(path)))
     patterns = {"claude": ".claude/agents/*.md", "codex": ".codex/agents/*.toml",
                  "cursor": ".cursor/plugins/local/*-agents/agents/*.md"}
@@ -585,6 +612,7 @@ def scan(home: Path, cfg: Config) -> Scan:
 
 
 def preferred(versions: list[Version], source: str) -> Version:
+    versions = [version for version in versions if not fixed(version)] or versions
     rank = max(RANK[version.origin] for version in versions)
     candidates = [version for version in versions if RANK[version.origin] == rank]
     if candidates[0].origin in DATED:
@@ -594,7 +622,10 @@ def preferred(versions: list[Version], source: str) -> Version:
 
 
 def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
-    """Pick by origin, then meaningful edit date, source and length."""
+    """Pick by origin, then meaningful edit date, source and length. When the others only add lines of their own
+    to one version, that shared version: keeping it changes nothing and never spreads one tool's notes."""
+    if len({version.digest for version in group.versions}) > 1 and (found := shared_base(group)):
+        return found[0], ["the shared version: the others only add lines of their own, which stay where they are"]
     winner = preferred(group.versions, source)
     others = [version for version in group.versions if version.id != winner.id]
     if not others:
@@ -633,6 +664,8 @@ def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
 def cautions(version: Version, winner: Version) -> list[str]:
     if version.origin == Origin.COPY and version.modified > winner.modified:
         return ["newer only because agent-sync rewrote it"]
+    if fixed(version):
+        return ["comes with the plugin; agent-sync never copies it, as its path changes with every plugin update"]
     if version.origin == Origin.PACKAGE:
         return ["date is the last package update, not an edit"]
     if version.origin == Origin.SETTINGS:
@@ -663,6 +696,8 @@ def plan(home: Path, scan: Scan, choices: dict[str, str], source: str) -> list[S
         winner = next((version for version in group.versions if version.id == choice), None)
         if winner is None:
             raise ValueError(f"unknown version for {key}")
+        if fixed(winner):
+            raise ValueError(f"{key} comes with a plugin and can't be copied to the other tools")
         targets: dict[Path, set[str]] = {}
         same = {version.path.resolve() for version in group.versions if version.digest == winner.digest}
         for version in group.versions:
@@ -855,7 +890,8 @@ def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
             if temp.is_symlink() or temp.exists():
                 temp.unlink()
     targets = {edit.target: edit.action for edit in changes}
-    return [f"{'created' if action == 'create' else 'updated'} {target}" for target, action in targets.items()]
+    return [f"{'created' if action == 'create' else 'updated'} {shown(home, target)}"
+            for target, action in targets.items()]
 
 
 def label(version: Version, group: Group) -> str:

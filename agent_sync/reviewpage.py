@@ -24,13 +24,6 @@ STALE = "Something changed since this page opened. Reload and review your choice
 BUSY = "An upkeep run is in progress. Try again in a minute."
 
 
-def _short_path(home: Path, path: Path) -> str:
-    for root in (home, home.resolve()):
-        if path.is_relative_to(root):
-            return str(Path("~") / path.relative_to(root))
-    return str(path)
-
-
 def _rows(rows: list[tuple[str, str]], context: int = 2) -> list[str]:
     """The changed rows with a little context, each prefixed by its tag; "@" rows count the lines left out."""
     changed = [index for index, (tag, _) in enumerate(rows) if tag != " "]
@@ -70,13 +63,14 @@ def _group_data(home: Path, group: review.Group, source: str) -> dict:
     winner, reasons = review.recommend(group, source)
     versions = []
     for version in group.versions:
-        path = _short_path(home, version.path)
+        path = review.shown(home, version.path)
         rows = review.rows(version.body, winner.body) if version.id != winner.id else []
         versions.append({
             "id": version.id, "tools": version.tools, "path": path, "lines": version.lines,
             "modified": version.modified, "origin": version.origin, "label": review.ORIGIN_LABELS[version.origin],
             "note": version.note.replace(str(home) + "/", "~/"),
             "cautions": review.cautions(version, winner) if version.id != winner.id else [],
+            "fixed": review.fixed(version),
             "diff": _rows(rows), "own": sum(tag == "=" and review.meaningful(line) for tag, line in rows),
         })
     differs = len({version.digest for version in group.versions}) > 1
@@ -89,7 +83,7 @@ def _group_data(home: Path, group: review.Group, source: str) -> dict:
 def _edit_data(home: Path, edit: review.Edit) -> dict:
     before = review.as_text(edit.before) if edit.before is not None else ""
     after = review.as_text(edit.after)
-    data = {"key": edit.key, "tools": edit.tools, "path": _short_path(home, edit.path),
+    data = {"key": edit.key, "tools": edit.tools, "path": review.shown(home, edit.path),
             "action": "update" if edit.before is not None else "create", "diff": [], "own": 0, "lines": 0,
             "binary": before is None or after is None}
     if not data["binary"]:
@@ -254,7 +248,7 @@ class _Handler(BaseHTTPRequestHandler):
         scan = review.scan(home, cfg)
         steps = review.plan(home, scan, _choices(data, scan, applying=False), cfg.source)
         return {"files": [_edit_data(home, edit) for edit in review.edits(steps)],
-                "backup": _short_path(home, cfg.state_dir / "backups")}
+                "backup": review.shown(home, cfg.state_dir / "backups")}
 
     def _apply(self, data: dict) -> dict:
         home, cfg = self.server.home, self.server.cfg
@@ -264,9 +258,12 @@ class _Handler(BaseHTTPRequestHandler):
             scan = review.scan(home, cfg)
             steps = review.plan(home, scan, _choices(data, scan, applying=True), cfg.source)
             backup = _backup_folder(cfg.state_dir / "backups") if steps else None
-            result = {"backup": _short_path(home, backup) if backup else None}
+            result = {"backup": review.shown(home, backup) if backup else None}
             try:
                 result["changes"] = review.apply(home, steps, backup) if backup else []
+                if backup and not result["changes"]:
+                    backup.rmdir()                     # nothing changed, so nothing was backed up
+                    result["backup"] = None
             except (OSError, TypeError, ValueError) as exc:
                 result["error"] = str(exc)
             try:

@@ -178,8 +178,7 @@ def review_settings(list_only: bool, no_open: bool) -> int:
         for version in group.versions:
             names = ", ".join(review.TOOL_LABELS[tool] for tool in version.tools)
             date = datetime.fromtimestamp(version.modified).strftime("%Y-%m-%d %H:%M:%S")
-            path = version.path
-            location = f"~/{path.relative_to(cfg.home)}" if path.is_relative_to(cfg.home) else str(path)
+            location = review.shown(cfg.home, version.path)
             recommended = " [Recommended]" if version == winner else ""
             length = "1 line" if version.lines == 1 else f"{version.lines} lines"
             print(f"  {names} | {review.ORIGIN_LABELS[version.origin]} | {date} | {length} | {location}{recommended}")

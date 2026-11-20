@@ -352,6 +352,7 @@ function versionColumn(group, version, longest, choiceButton) {
     why.append(...group.reasons.map(reason => el("li", reason)));
     node.append(why);
   }
+  if (version.fixed) return node;   // a plugin's server: its caution says why there is nothing to pick
   const label = group.status === "missing" ? `Copy to ${toolNames(group.missing)}` : "Keep this one";
   const choose = choiceButton(label, version.id);
   choose.setAttribute("aria-label", `${label} · ${toolNames(version.tools)} · ${version.path}`);

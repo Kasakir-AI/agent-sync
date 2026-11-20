@@ -337,8 +337,9 @@ def test_picking_the_shorter_instructions_leaves_a_longer_copy_alone(tmp_path):
     group, = review_home(tmp_path).groups
 
     assert group.status == "missing" and group.note == "Codex keeps 67 lines of its own"
+    assert review.recommend(group, "codex")[0].tools == ("claude",)     # the shared version, not the longer one
     assert apply_choice(tmp_path, "instructions", lambda version: version.tools == ("claude",)) == [
-        f"created {paths['cursor']}"]
+        "created ~/.cursor/rules/agent-sync-instructions.mdc"]
     assert codex.read_bytes() == before
 
 
@@ -350,7 +351,8 @@ def test_one_edited_line_changes_only_that_line_in_the_other_tool(tmp_path):
     os.utime(codex, (100, 100))
     pick = lambda version: version.tools == ("claude",)  # noqa: E731
 
-    assert apply_choice(tmp_path, "instructions", pick) == [f"updated {codex}", f"created {paths['cursor']}"]
+    assert apply_choice(tmp_path, "instructions", pick) == ["updated ~/.codex/AGENTS.md",
+                                                            "created ~/.cursor/rules/agent-sync-instructions.mdc"]
     assert codex.read_text() == ("Codex sandbox notes.\nKeep replies short.\nAsk before pushing to main.\n"
                                  "Run the tests.\nUse the workspace profile.\n")
     assert (tmp_path / "backup/.codex/AGENTS.md").read_text().count("Ask before pushing.\n") == 1
@@ -379,7 +381,7 @@ def test_skill_merge_keeps_target_only_files_and_lines(tmp_path):
     write(tmp_path, ".agents/skills/notes/mine.md", "Only in Codex.\n")
     pick = lambda version: version.tools == ("claude",)  # noqa: E731
 
-    assert apply_choice(tmp_path, "skill", pick) == [f"updated {target.resolve()}"]
+    assert apply_choice(tmp_path, "skill", pick) == ["updated ~/.agents/skills/notes"]
     assert (target / "SKILL.md").read_text() == ("---\nname: notes\n---\nWrite notes daily.\n"
                                                  "Codex: use the notes folder.\nFile them.\n")
     assert (target / "logo.bin").read_bytes() == b"\0new"
@@ -440,15 +442,23 @@ def test_mcp_server_from_a_plugin_counts_as_present_and_is_never_written(tmp_pat
         "clipper@market": [{"scope": "user", "installPath": str(root)}]}}))
     write(tmp_path, ".codex/config.toml", '[mcp_servers.clipper-inbox]\ncommand = "inbox"\n')
     scan = review_home(tmp_path)
-    inbox, notes = scan.groups
+    inbox, = scan.groups                  # clipper-notes is only the plugin's: counted, never offered
 
-    assert inbox.missing == ("cursor",) and notes.missing == ("codex", "cursor")
+    assert inbox.missing == ("cursor",) and scan.managed["clipper@market plugin MCP servers"] == 1
     plugin = next(version for version in inbox.versions if version.origin == review.Origin.PLUGIN)
     assert plugin.tools == ("claude",) and plugin.note == "from plugin clipper@market"
     assert json.loads(plugin.body)["command"] == f"{root}/bin/inbox"
     codex = next(version for version in inbox.versions if version.tools == ("codex",))
     steps = review.plan(tmp_path, scan, {inbox.key: codex.id}, "claude")
     assert {step.path for step in steps} == {tmp_path / ".cursor/mcp.json"}
+    assert review.recommend(inbox, "claude")[0] == codex     # the plugin's cache path never wins
+    assert review.cautions(plugin, codex)[0].startswith("comes with the plugin")
+    try:
+        review.plan(tmp_path, scan, {inbox.key: plugin.id}, "claude")
+    except ValueError as e:
+        assert "comes with a plugin" in str(e)
+    else:
+        raise AssertionError("a plugin's server was planned as the version to copy")
 
 
 def test_hand_copy_with_extras_and_comment_lines_joins_global_instructions(tmp_path):
@@ -481,3 +491,25 @@ def test_comment_only_lines_are_not_copied_or_compared(tmp_path):
     apply_choice(tmp_path, "instructions", lambda version: version.tools == ("claude",))
     assert codex.read_text() == "Keep replies short.\nRun the tests.\n"
     assert review_home(tmp_path).groups[0].status == "same"
+
+
+def test_a_short_rule_quoted_inside_the_instructions_stays_its_own_rule(tmp_path):
+    inbox = "# Inbox\n\n- Send long work to the Inbox.\n- Ask questions there.\n- One thread per stream.\n"
+    write(tmp_path, ".claude/CLAUDE.md", "# Preferences\n" + "".join(f"- Rule {n}.\n" for n in range(12)))
+    write(tmp_path, ".codex/AGENTS.md", "# Preferences\n" + "".join(f"- Rule {n}.\n" for n in range(12)) + inbox)
+    write(tmp_path, ".claude/rules/inbox.md", inbox)
+    groups = {group.key: group for group in review_home(tmp_path).groups}
+
+    assert set(groups) == {"instructions:Global instructions", "rule:inbox"}
+    assert groups["instructions:Global instructions"].status == "missing"      # Codex only adds the section
+    assert groups["rule:inbox"].matched_by == ""
+
+
+def test_hand_written_instructions_saved_together_still_differ(tmp_path):
+    claude = write(tmp_path, ".claude/CLAUDE.md", "# Preferences\n\nBe brief.\n")
+    codex = write(tmp_path, ".codex/AGENTS.md", "Codex-only note.\n")
+    for path in (claude, codex):
+        os.utime(path, (1_000, 1_000))          # a dotfiles checkout writes both in the same second
+    group, = review_home(tmp_path).groups
+
+    assert group.status == "differ" and group.note == ""
