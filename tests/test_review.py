@@ -624,3 +624,16 @@ def test_a_skill_copy_loses_deleted_lines_and_keeps_its_own_files(tmp_path):
     assert group.status == "differ"
     apply_choice(tmp_path, "skill", lambda version: version.tools == ("claude",))
     assert copy.read_text() == "Write notes daily.\n" and extra.read_text() == "Codex only.\n"
+
+
+def test_a_line_new_in_the_source_is_not_called_its_own_note_by_a_stale_copy(tmp_path):
+    paths = instructions.files(tmp_path)
+    write(tmp_path, paths["cursor"], "---\nalwaysApply: true\n---\n# Preferences\n\nBe brief.\n")   # last mirrored
+    write(tmp_path, paths["codex"], "Codex-only note.\n# Preferences\n\nBe brief.\n")
+    write(tmp_path, paths["claude"], "# Preferences\n\nBe brief.\nUse tabs.\n")                       # a new line
+    group, = review_home(tmp_path).groups
+
+    assert group.status == "differ"
+    assert apply_choice(tmp_path, "instructions", lambda version: version.tools == ("claude",)) == [
+        "updated ~/.codex/AGENTS.md", "updated ~/.cursor/rules/agent-sync-instructions.mdc"]
+    assert paths["codex"].read_text() == "Codex-only note.\n# Preferences\n\nBe brief.\nUse tabs.\n"

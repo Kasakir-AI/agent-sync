@@ -535,11 +535,12 @@ def additions(kind: str, longer: Version, base: Version, files: Files) -> tuple[
 
 
 def shared_base(group: Group) -> tuple[Version, dict[str, tuple[int, int]]] | None:
-    """The version every other one only adds to, with what each adds (lines, files); None when there is none."""
+    """The version every other one only adds to, with what each adds (lines, files); None when there is none.
+    A copy agent-sync made is never the base: it may be stale, and a line new in the source is not a note of its own."""
     if group.kind == "mcp":
         return None
     files = {version.id: skill_files(version.path) for version in group.versions} if group.kind == "skill" else {}
-    for base in group.versions:
+    for base in (version for version in group.versions if version.origin != Origin.COPY):
         extra = {version.id: additions(group.kind, version, base, files) for version in group.versions}
         if None not in extra.values():
             return base, extra
