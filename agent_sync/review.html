@@ -170,6 +170,22 @@ pre .removed { background: var(--red-back); color: var(--red); }
 pre .range { color: var(--accent); }
 pre .own { background: var(--accent-back); color: var(--accent); }
 .legend { font-size: .875rem; color: var(--subtle); margin: .5rem 0 0; }
+.leftovers { border-top: 1px solid var(--line); padding-top: .55rem; font-size: .875rem; }
+.leftovers summary { cursor: pointer; font-weight: 600; color: var(--subtle); }
+.leftovers ul { list-style: none; padding: 0; margin: .5rem 0 0; display: grid; gap: .5rem; }
+.leftovers li { display: flex; flex-wrap: wrap; gap: .3rem .6rem; align-items: center; justify-content: space-between; }
+.leftovers li > div:first-child { flex: 1 1 10rem; min-width: 0; }
+.leftovers code { display: block; font-size: .8rem; overflow-wrap: anywhere; }
+.leftovers li.going code { color: var(--red); text-decoration: line-through; }
+.leftovers small { display: block; color: var(--amber); }
+.switch { display: inline-flex; flex: none; }
+.switch button { padding: .2rem .6rem; font-size: .8rem; }
+.switch button:first-child { border-radius: 6px 0 0 6px; }
+.switch button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.switch .keep[aria-pressed="true"] { background: var(--green-back); color: var(--green); border-color: var(--green); }
+.switch .remove[aria-pressed="true"] { background: var(--red-back); color: var(--red); border-color: var(--red); }
+ul.gone { color: var(--red); font-size: .875rem; }
+ul.gone code { background: var(--red-back); overflow-wrap: anywhere; }
 .empty { margin: 0; color: var(--subtle); }
 footer { position: fixed; bottom: 0; width: 100%; background: var(--surface); border-top: 1px solid var(--line); }
 footer .wrap { padding: .6rem 0 calc(.6rem + env(safe-area-inset-bottom)); justify-content: space-between; }
@@ -248,6 +264,7 @@ table .note { display: block; }
 let scan = JSON.parse(document.querySelector("#scan").textContent);
 let filter = "differ";
 let choices;
+let removals = new Map();
 let pluginDraft = new Map();
 let pluginFeedback = "";
 let busy = false;
@@ -299,8 +316,25 @@ function relativeTime(timestamp) {
   return "just now";
 }
 
+function defaultRemovals(group, id) {
+  const files = new Map();
+  for (const version of group.versions) {
+    for (const file of version.only[id] || []) {
+      files.set(file.path, new Set(file.lines.filter(([, gone]) => gone).map(([line]) => line)));
+    }
+  }
+  return files;
+}
+
 function resetChoices() {
   choices = new Map(scan.groups.map(group => [group.key, group.status === "differ" ? group.winner : "leave"]));
+  removals = new Map(scan.groups.map(group => [group.key, defaultRemovals(group, choices.get(group.key))]));
+}
+
+function sentChoice(key, choice) {
+  const files = removals.get(key);
+  if (choice === "leave" || !files?.size) return choice;
+  return {version: choice, remove: Object.fromEntries(Array.from(files, ([path, lines]) => [path, [...lines]]))};
 }
 
 function updateFooter() {
@@ -360,6 +394,55 @@ function versionColumn(group, version, longest, choiceButton) {
   return node;
 }
 
+function leftoverLists(group, version, holder) {
+  const chosen = choices.get(group.key);
+  const kept = group.versions.find(other => other.id === chosen);
+  const marks = removals.get(group.key);
+  holder.replaceChildren();
+  for (const file of (kept && version.only[chosen]) || []) {
+    const marked = marks.get(file.path);
+    const box = el("details", undefined, "leftovers");
+    box.open = file.lines.some(([, gone]) => gone);
+    const where = group.kind === "skill" ? ` in ${file.path.split("/").pop()}` : "";
+    const summary = el("summary");
+    const count = () => {
+      const going = file.lines.filter(([line]) => marked.has(line)).length;
+      summary.textContent = `Lines only ${toolNames(version.tools)} has${where} (${file.lines.length})` +
+        (going ? ` · ${going} to remove` : "");
+    };
+    const list = el("ul");
+    for (const [line, gone] of file.lines) {
+      const item = el("li");
+      const text = el("div");
+      text.append(el("code", line));
+      if (gone) text.append(el("small", `removed from ${toolNames(kept.tools)} since the last sync`));
+      const toggle = el("div", undefined, "switch");
+      toggle.setAttribute("role", "group");
+      toggle.setAttribute("aria-label", `Keep or remove: ${line}`);
+      const options = [["Keep", false], ["Remove", true]].map(([label, remove]) => {
+        const option = button(label, () => {
+          if (busy) return;
+          if (remove) marked.add(line);
+          else marked.delete(line);
+          show();
+        }, remove ? "remove" : "keep");
+        toggle.append(option);
+        return [option, remove];
+      });
+      const show = () => {
+        for (const [option, remove] of options) option.setAttribute("aria-pressed", marked.has(line) === remove);
+        item.classList.toggle("going", marked.has(line));
+        count();
+      };
+      show();
+      item.append(text, toggle);
+      list.append(item);
+    }
+    box.append(summary, list);
+    holder.append(box);
+  }
+}
+
 function lineCount(count) {
   return `${count} ${count === 1 ? "line" : "lines"}`;
 }
@@ -367,8 +450,9 @@ function lineCount(count) {
 function diffLines(code, lines) {
   const rows = document.createDocumentFragment();
   for (const line of lines) {
-    const kind = {"@": "range", "+": "added", "-": "removed", "=": "own"}[line[0]] || "";
-    const text = line[0] === "@" ? `… ${line.slice(1)}` : `${line[0] === "=" ? "·" : line[0]} ${line.slice(1)}`;
+    const kind = {"@": "range", "+": "added", "-": "removed", "x": "removed", "=": "own"}[line[0]] || "";
+    const mark = {"=": "·", "x": "✕"}[line[0]] || line[0];
+    const text = line[0] === "@" ? `… ${line.slice(1)}` : `${mark} ${line.slice(1)}`;
     rows.append(el("span", text, kind));
   }
   code.append(rows);
@@ -393,7 +477,8 @@ function longDiff(panel, lines, label) {
 function diffView(group, panel) {
   const recommended = group.versions.find(version => version.id === group.winner);
   panel.append(el("p", `What keeping the recommended version (${toolNames(recommended.tools)}) does to each other ` +
-    "version: + lines are added, - lines are replaced, and · lines are that tool's own and stay.", "legend"));
+    "version: + lines are added, - lines are replaced, ✕ lines were deleted from it since the last sync and go, " +
+    "and · lines are that tool's own and stay.", "legend"));
   for (const version of group.versions) {
     if (version.id === group.winner) continue;
     const heading = `${toolNames(version.tools)} · ${version.path}`;
@@ -438,11 +523,14 @@ function settingCard(group, index) {
       ? `This puts ${toolNames(chosen.tools)}'s version in place of the one made for ${toolNames(others)}.` : "";
     warning.hidden = !warning.textContent;
   };
+  const lists = new Map();
   const choiceButton = (label, id) => {
     const choice = button(label, () => {
       if (busy) return;
+      if (choices.get(group.key) !== id) removals.set(group.key, defaultRemovals(group, id));
       choices.set(group.key, id);
       for (const [value, option] of buttons) option.setAttribute("aria-pressed", value === id);
+      for (const [version, holder] of lists) leftoverLists(group, version, holder);
       warn(id);
       updateFooter();
     }, "choice");
@@ -452,7 +540,15 @@ function settingCard(group, index) {
   };
   const versions = el("div", undefined, "versions");
   const longest = Math.max(...group.versions.map(version => version.lines));
-  for (const version of group.versions) versions.append(versionColumn(group, version, longest, choiceButton));
+  for (const version of group.versions) {
+    const column = versionColumn(group, version, longest, choiceButton);
+    const holder = el("div");
+    holder.hidden = !Object.keys(version.only).length;
+    lists.set(version, holder);
+    leftoverLists(group, version, holder);
+    column.append(holder);
+    versions.append(column);
+  }
   card.append(versions);
 
   const actions = el("div", undefined, "card-actions");
@@ -652,7 +748,7 @@ async function confirmChanges() {
   const selected = Array.from(choices).filter(([, choice]) => choice !== "leave");
   const keys = new Set(selected.map(([key]) => key));
   const data = {
-    choices: Object.fromEntries(selected),
+    choices: Object.fromEntries(selected.map(([key, choice]) => [key, sentChoice(key, choice)])),
     digests: Object.fromEntries(scan.groups.filter(group => keys.has(group.key))
       .map(group => [group.key, group.snapshot])),
   };
@@ -674,6 +770,12 @@ async function confirmChanges() {
         if (file.binary) dialog.append(el("p", "Replaced with the chosen version's copy of this file.", "note"));
         else if (file.action === "create") dialog.append(el("p", `New file, ${lineCount(file.lines)}.`, "note"));
         else longDiff(dialog, file.diff, `Changes to ${file.path}`);
+        if (file.removed.length) {
+          dialog.append(el("p", `${lineCount(file.removed.length)} removed:`, "note"));
+          const gone = el("ul", undefined, "gone");
+          gone.append(...file.removed.map(line => { const item = el("li"); item.append(el("code", line)); return item; }));
+          dialog.append(gone);
+        }
         if (file.own) dialog.append(el("p", `${lineCount(file.own)} of its own stay.`, "note"));
       }
     }
