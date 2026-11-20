@@ -103,11 +103,15 @@ class Editor:
             self.say(f"  That didn't work, nothing changed: {e}")
             return False
         self.text = new_text
-        if self.roles_text == self.roles_saved:          # the source tool may have changed
-            self.roles_path = roles.files(self.home)[self.cfg.source]
-            self.roles_text = self.roles_saved = self.roles_path.read_text() if self.roles_path.exists() else None
+        self.refresh_roles()
         self.say("  " + self.dim("Changed. (Not saved yet: choose s to save.)"))
         return True
+
+    def refresh_roles(self) -> None:
+        """Point the roles file at the current source tool, unless there are role edits not saved yet."""
+        if self.roles_text == self.roles_saved:
+            self.roles_path = roles.files(self.home)[self.cfg.source]
+            self.roles_text = self.roles_saved = self.roles_path.read_text() if self.roles_path.exists() else None
 
     def set(self, key: str, value, table: str | None = None) -> bool:
         return self.change(tomledit.set_value(self.text, table, key, value))
@@ -154,6 +158,9 @@ class Editor:
         except ValueError as e:
             self.say(f"  Couldn't read that command ({e}); nothing changed.")
             return None
+        # The command runs without a shell, so nothing would turn ~ into your home folder. Do it here, once,
+        # and show the real path below, so what is saved is what will run.
+        command = [str(self.home) + c[1:] if c == "~" or c.startswith("~/") else c for c in command]
         self.say(f"  It will run: {' '.join(shlex.quote(c) for c in command)}")
         return command
 
@@ -219,7 +226,7 @@ class Editor:
                         if not any(c in (p, p.split("@")[0]) for p in found)]
             if not options:
                 self.say("  No Claude Code plugin with skills is installed for your user.")
-                return
+                break                                   # still save any plugins switched off on this visit
             self.say("")
             pick = self.choose(options, "Switch which on/off")
             if pick is None:
@@ -354,7 +361,7 @@ class Editor:
                 if not command:
                     continue
                 step = {"name": name, "command": command}
-                timeout = self.ask("Stop it after how many seconds? (Enter for no limit): ")
+                timeout = self.ask("Stop it after how many seconds? (Enter for 900, which is 15 minutes): ")
                 if timeout.isdigit():
                     step["timeout"] = int(timeout)
                 current.append(step)
@@ -418,6 +425,7 @@ class Editor:
         self.text = self.saved = self.path.read_text() if self.path.exists() else ""
         try:
             self.cfg = parse(self.text, self.path, self.home)
+            self.refresh_roles()                        # the source tool may have been changed in the editor
         except ValueError as e:
             self.say(f"  The file has a problem now: {e}")
             self.say("  Fix it in the editor (choose e again) before agent-sync runs.")

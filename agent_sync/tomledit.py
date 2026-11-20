@@ -10,13 +10,38 @@ import json
 import re
 from dataclasses import dataclass
 
-HEADER = re.compile(r"^[ \t]*\[(\[?)[ \t]*([A-Za-z0-9_.\"-]+)[ \t]*\]\]?[ \t]*(#.*)?$")
-KEY = re.compile(r"[ \t]*([A-Za-z0-9_-]+|\"(?:[^\"\\]|\\.)*\")[ \t]*=[ \t]*")
+# One part of a key: bare (codex), "basic" (may have \ escapes) or 'literal' (no escapes). TOML allows all three
+# in table headers and keys, so all three must be recognized, or a table would be missed and deleted with its neighbor.
+PART = r"""(?:[A-Za-z0-9_-]+|"(?:[^"\\\n]|\\.)*"|'[^'\n]*')"""
+DOTTED = rf"{PART}(?:[ \t]*\.[ \t]*{PART})*"
+HEADER = re.compile(rf"^[ \t]*\[(\[?)[ \t]*({DOTTED})[ \t]*\]\]?[ \t]*(#.*)?$")
+KEY = re.compile(rf"[ \t]*({PART})[ \t]*=[ \t]*")
+PARTS = re.compile(PART)
 BARE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def basic_string(value: str) -> str:
+    """A TOML basic string. Characters beyond the BMP (emoji) are written as they are: json's default
+    \\ud83d\\ude00 surrogate pairs are not valid in TOML. DEL is the one control character json leaves alone."""
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 def key_text(key: str) -> str:
-    return key if BARE.match(key) else json.dumps(key)
+    return key if BARE.match(key) else basic_string(key)
+
+
+def key_name(part: str) -> str:
+    """The plain name of one key part: quotes taken off, escapes in a "basic" one read."""
+    if part.startswith('"'):
+        return json.loads(part)
+    if part.startswith("'"):
+        return part[1:-1]
+    return part
+
+
+def header_name(text: str) -> str:
+    """The plain name of a table header such as 'cli_commands' or "agent_models" (dotted parts joined by '.')."""
+    return ".".join(key_name(p) for p in PARTS.findall(text))
 
 
 def value_text(value) -> str:
@@ -25,7 +50,7 @@ def value_text(value) -> str:
     if isinstance(value, int | float):
         return str(value)
     if isinstance(value, str):
-        return json.dumps(value)        # a JSON string is a valid TOML basic string
+        return basic_string(value)
     if isinstance(value, list):
         return "[" + ", ".join(value_text(v) for v in value) + "]"
     raise TypeError(f"can't write {type(value).__name__} to TOML")
@@ -41,6 +66,10 @@ def value_end(text: str, i: int) -> int:
             while i < len(text) and not text.startswith(quote, i):
                 i += 2 if quote[0] == '"' and text[i] == "\\" else 1
             i += len(quote)
+            if len(quote) == 3:                 # """Say "hello"""": up to two quotes may sit before the closing three
+                for _ in range(2):
+                    if text.startswith(quote[0], i):
+                        i += 1
             last = i
             continue
         c = text[i]
@@ -79,10 +108,10 @@ def sections(text: str) -> list[Section]:
         k = KEY.match(text, i)
         if m:
             out[-1].end = i
-            out.append(Section(m.group(2).strip('"'), bool(m.group(1)), i, min(eol + 1, len(text)), len(text), []))
+            out.append(Section(header_name(m.group(2)), bool(m.group(1)), i, min(eol + 1, len(text)), len(text), []))
         elif k and k.start() == i:
             ve = value_end(text, k.end())
-            out[-1].keys.append((json.loads(k.group(1)) if k.group(1).startswith('"') else k.group(1),
+            out[-1].keys.append((key_name(k.group(1)),
                                  i, k.end(), ve))
             eol = text.find("\n", ve)
             eol = len(text) if eol < 0 else eol

@@ -123,3 +123,36 @@ def test_any_edits_give_exactly_the_expected_settings(start, edits):
     for line in start.splitlines():
         if line.startswith("#"):
             assert line in text
+
+
+def test_quoted_table_headers_are_tables_too():
+    text = """[[extra_steps]]
+name = "one"
+command = ["true"]
+
+['cli_commands']
+codex = ["my-codex-update"]
+
+["agent_models"]
+'claude' = "opus"
+"""
+    names = [s.name for s in tomledit.sections(text)]
+    assert names == [None, "extra_steps", "cli_commands", "agent_models"]
+    new = tomledit.set_array_tables(text, "extra_steps", [])
+    data = tomllib.loads(new)
+    assert data == {"cli_commands": {"codex": ["my-codex-update"]}, "agent_models": {"claude": "opus"}}
+    new = tomledit.set_value(new, "agent_models", "claude", "sonnet")
+    assert tomllib.loads(new)["agent_models"] == {"claude": "sonnet"}
+
+
+def test_emoji_and_other_characters_beyond_the_bmp_are_valid_toml():
+    text = tomledit.set_value("", "agent_notes", "smile 😀", "hi 😀\x7f")
+    assert tomllib.loads(text)["agent_notes"] == {"smile 😀": "hi 😀\x7f"}
+
+
+def test_a_multiline_string_may_end_with_quotes():
+    for note in ('"""Say "hello""""', '"""Say "hello"""""', "'''it's 'x'''''"):
+        text = f'note = {note}\n\n[cli_commands]\ncodex = ["mine"]\n'
+        tomllib.loads(text)
+        new = tomledit.set_value(text, None, "note", "bye")
+        assert tomllib.loads(new) == {"note": "bye", "cli_commands": {"codex": ["mine"]}}

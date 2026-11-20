@@ -67,7 +67,7 @@ def test_commands_notes_and_steps(tmp_path):
     data = tomllib.loads(path.read_text())
     assert data["cli_commands"] == {"codex": ["npm", "install", "-g", "@openai/codex@latest"]}
     assert data["agent_notes"] == {"poteto-agent": "Be brief."}
-    assert data["extra_steps"] == [{"name": "dotfiles", "command": ["git", "-C", "~/dotfiles", "pull"],
+    assert data["extra_steps"] == [{"name": "dotfiles", "command": ["git", "-C", f"{tmp_path}/dotfiles", "pull"],
                                     "timeout": 60}]
 
 
@@ -80,3 +80,36 @@ def test_pstack_roles_are_edited_in_their_own_file(tmp_path):
     ed.menu()
     assert roles.read_text() == text.replace("bug-fix: gpt-x", "bug-fix: opus")
     assert path.read_text() == SETTINGS
+
+
+def test_a_command_with_tilde_gets_the_real_home_folder(tmp_path):
+    ed, path, said = editor(tmp_path, ["git -C ~/dotfiles pull --ff-only"])
+    command = ed.ask_command("Command", "git -C ~/dotfiles pull --ff-only")
+    assert command == ["git", "-C", f"{tmp_path}/dotfiles", "pull", "--ff-only"]
+
+
+def test_changing_the_source_in_the_editor_moves_the_roles_file(tmp_path, monkeypatch):
+    (tmp_path / ".agents").mkdir()
+    (tmp_path / ".agents/pstack-models.md").write_text("bug-fix: gpt-x\n")
+    def edit(path, say=print):
+        path.write_text(path.read_text().replace('source = "claude"', 'source = "codex"'))
+    monkeypatch.setattr(configure, "open_in_editor", edit)
+    ed, path, said = editor(tmp_path, [])
+    ed.settings_file()
+    assert ed.roles_path == tmp_path / ".agents/pstack-models.md"
+    assert ed.roles_text == "bug-fix: gpt-x\n"
+
+
+def test_switching_off_the_last_missing_plugin_is_saved(tmp_path):
+    ed, path, said = editor(tmp_path, ["1"], text='plugin_skills = ["gone@market"]\n' + SETTINGS)
+    ed.plugin_skills()
+    assert ed.cfg.plugin_skills == []
+
+
+def test_extra_step_prompt_tells_the_real_time_limit(tmp_path):
+    ed, path, said = editor(tmp_path, [], text=None)
+    asked = []
+    answers = iter(["1", "slow", "sleep 1", "", ""])
+    ed.ask_line = lambda prompt: asked.append(prompt) or next(answers)
+    ed.steps()
+    assert any("900" in p for p in asked) and not any("no limit" in p for p in asked)
