@@ -7,14 +7,14 @@ import time
 import webbrowser
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
-from difflib import unified_diff
+from difflib import SequenceMatcher
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
 from threading import Event, Thread
 
-from . import review
+from . import instructions, review
 from .config import Config
 from .locking import run_lock
 
@@ -25,7 +25,39 @@ BUSY = "An upkeep run is in progress. Try again in a minute."
 
 
 def _short_path(home: Path, path: Path) -> str:
-    return str(Path("~") / path.relative_to(home)) if path.is_relative_to(home) else str(path)
+    for root in (home, home.resolve()):
+        if path.is_relative_to(root):
+            return str(Path("~") / path.relative_to(root))
+    return str(path)
+
+
+def _rows(rows: list[tuple[str, str]], context: int = 2) -> list[str]:
+    """The changed rows with a little context, each prefixed by its tag; "@" rows count the lines left out."""
+    changed = [index for index, (tag, _) in enumerate(rows) if tag != " "]
+    shown = {near for index in changed for near in range(index - context, index + context + 1)}
+    out, skipped = [], 0
+    for index, (tag, line) in enumerate(rows):
+        if index not in shown:
+            skipped += 1
+            continue
+        if skipped:
+            out.append(f"@{skipped} unchanged lines")
+            skipped = 0
+        out.append(tag + line)
+    if skipped and out:
+        out.append(f"@{skipped} unchanged lines")
+    return out
+
+
+def _changes(before: str, after: str) -> list[tuple[str, str]]:
+    old, new = before.splitlines(), after.splitlines()
+    rows = []
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag == "equal":
+            rows += [(" ", line) for line in old[i1:i2]]
+        else:
+            rows += [("-", line) for line in old[i1:i2]] + [("+", line) for line in new[j1:j2]]
+    return rows
 
 
 def _snapshot(group: review.Group) -> dict:
@@ -39,18 +71,35 @@ def _group_data(home: Path, group: review.Group, source: str) -> dict:
     versions = []
     for version in group.versions:
         path = _short_path(home, version.path)
-        lines = list(unified_diff(winner.body.splitlines(), version.body.splitlines(),
-                                  fromfile=_short_path(home, winner.path), tofile=path, lineterm=""))
+        rows = review.rows(version.body, winner.body) if version.id != winner.id else []
         versions.append({
             "id": version.id, "tools": version.tools, "path": path, "lines": version.lines,
             "modified": version.modified, "origin": version.origin, "label": review.ORIGIN_LABELS[version.origin],
             "note": version.note.replace(str(home) + "/", "~/"),
             "cautions": review.cautions(version, winner) if version.id != winner.id else [],
-            "diff": lines,
+            "diff": _rows(rows), "own": sum(tag == "=" and review.meaningful(line) for tag, line in rows),
         })
-    return {"key": group.key, "kind": group.kind, "name": group.name, "status": group.status,
+    differs = len({version.digest for version in group.versions}) > 1
+    return {"key": group.key, "kind": group.kind, "name": group.name, "status": group.status, "note": group.note,
+            "summary": review.difference(group, winner) if differs else "",
             "missing": group.missing, "matched_by": group.matched_by, "winner": winner.id, "reasons": reasons,
             "snapshot": _snapshot(group), "versions": versions}
+
+
+def _edit_data(home: Path, edit: review.Edit) -> dict:
+    before = review.as_text(edit.before) if edit.before is not None else ""
+    after = review.as_text(edit.after)
+    data = {"key": edit.key, "tools": edit.tools, "path": _short_path(home, edit.path),
+            "action": "update" if edit.before is not None else "create", "diff": [], "own": 0, "lines": 0,
+            "binary": before is None or after is None}
+    if not data["binary"]:
+        data["lines"] = len(after.splitlines())
+        if edit.before is not None:
+            data["diff"] = _rows(_changes(before, after))
+            if edit.winner:
+                bodies = (instructions.split_front(text)[1] for text in (before, edit.winner))
+                data["own"] = review.own_lines(*bodies)
+    return data
 
 
 def _scan_data(home: Path, cfg: Config, scan: review.Scan) -> dict:
@@ -204,8 +253,7 @@ class _Handler(BaseHTTPRequestHandler):
         home, cfg = self.server.home, self.server.cfg
         scan = review.scan(home, cfg)
         steps = review.plan(home, scan, _choices(data, scan, applying=False), cfg.source)
-        return {"steps": [{"key": step.key, "tools": step.tools, "path": _short_path(home, step.path),
-                           "action": step.action} for step in steps],
+        return {"files": [_edit_data(home, edit) for edit in review.edits(steps)],
                 "backup": _short_path(home, cfg.state_dir / "backups")}
 
     def _apply(self, data: dict) -> dict:

@@ -94,11 +94,13 @@ def test_preview_is_read_only_and_apply_returns_backups_and_the_fresh_scan(reque
     paths = instructions.files(tmp_path)
     choice = make_choice(request_page, paths)
     assert request_page("plan", choice) == (200, {
-        "steps": [
+        "files": [
             {"key": "instructions:Global instructions", "tools": ["codex"], "path": "~/.codex/AGENTS.md",
-             "action": "replace"},
+             "action": "update", "diff": [" Write fresh fixtures.", "+Use the existing tests."], "own": 1,
+             "lines": 2, "binary": False},
             {"key": "instructions:Global instructions", "tools": ["cursor"],
-             "path": "~/.cursor/rules/agent-sync-instructions.mdc", "action": "create"},
+             "path": "~/.cursor/rules/agent-sync-instructions.mdc", "action": "create", "diff": [], "own": 0,
+             "lines": 5, "binary": False},
         ], "backup": "~/.local/state/agent-sync/backups",
     })
     assert paths["codex"].read_text() == "Write fresh fixtures.\n"

@@ -87,14 +87,18 @@ button.quiet { background: transparent; border-color: transparent; }
 [hidden] { display: none !important; }
 .wrap { width: min(74rem, 100% - clamp(1.5rem, 5vw, 4rem)); margin-inline: auto; }
 header { background: var(--surface); border-top: 5px solid var(--accent); border-bottom: 1px solid var(--line); }
-header h1 { margin: 0; padding-top: clamp(1.4rem, 4vw, 2.8rem); font-size: clamp(1.9rem, 4vw, 3rem); line-height: 1.15; }
+header h1 { margin: 0; padding-top: clamp(1.4rem, 4vw, 2.8rem); font-size: clamp(1.7rem, 4vw, 3rem); line-height: 1.15; overflow-wrap: anywhere; }
 header p { color: var(--subtle); margin: .55rem 0 1.35rem; }
-nav { display: flex; flex-wrap: wrap; gap: .3rem .65rem; padding-bottom: .5rem; }
-nav button { border-color: transparent; padding: .4rem .6rem; color: var(--subtle); }
+nav { display: flex; gap: .3rem .65rem; padding-bottom: .5rem; overflow-x: auto; scrollbar-width: thin; }
+nav button { flex: none; white-space: nowrap; border-color: transparent; padding: .4rem .6rem; color: var(--subtle); }
 nav button[aria-pressed="true"] { background: var(--accent-back); color: var(--accent); }
 main { padding-top: clamp(1rem, 3vw, 2rem); }
 .card, .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: clamp(.9rem, 2vw, 1.45rem); }
-.card + .card { margin-top: 1rem; }
+.card + .card, .section + .card { margin-top: 1rem; }
+.section { margin: 2rem 0 0; font-size: 1.2rem; }
+.section + p { margin: .3rem 0 0; color: var(--subtle); }
+.summary { margin: -.4rem 0 .9rem; font-weight: 550; }
+.card > .note { margin: -.4rem 0 .9rem; }
 .card h2, .panel h2 { margin: .3rem 0 1rem; font-size: 1.45rem; line-height: 1.25; overflow-wrap: anywhere; }
 .card-meta, .badges, .row { display: flex; flex-wrap: wrap; gap: .4rem .65rem; align-items: center; }
 .card-meta, .note { color: var(--subtle); font-size: .875rem; }
@@ -103,6 +107,7 @@ main { padding-top: clamp(1rem, 3vw, 2rem); }
 .chip { font-size: .78rem; font-weight: 650; padding: .12rem .5rem; border-radius: .25rem; background: var(--panel); }
 .differ, .settings { background: var(--amber-back); color: var(--amber); }
 .same, .yours { background: var(--green-back); color: var(--green); }
+.tailored { background: var(--purple-back); color: var(--purple); }
 .missing, .package { background: var(--accent-back); color: var(--accent); }
 .edited-copy { background: none; color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
 .copy { color: var(--subtle); border: 1px solid var(--line); }
@@ -145,6 +150,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .choice[aria-pressed="true"] { background: var(--accent-back); color: var(--accent); border-color: var(--accent); }
 .choice[aria-pressed="true"]::before { background: var(--accent); box-shadow: inset 0 0 0 2px var(--accent-back); }
 .card-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-top: .8rem; }
+.card-actions .caution { flex-basis: 100%; margin: 0; }
 .diff { margin-top: .9rem; border-top: 1px solid var(--line); }
 .diff h3 { margin: .75rem 0 .25rem; font-size: 1rem; overflow-wrap: anywhere; }
 pre {
@@ -162,9 +168,12 @@ pre span { display: block; width: max-content; min-width: 100%; padding: 0 .65re
 pre .added { background: var(--green-back); color: var(--green); }
 pre .removed { background: var(--red-back); color: var(--red); }
 pre .range { color: var(--accent); }
+pre .own { background: var(--accent-back); color: var(--accent); }
+.legend { font-size: .875rem; color: var(--subtle); margin: .5rem 0 0; }
 .empty { margin: 0; color: var(--subtle); }
 footer { position: fixed; bottom: 0; width: 100%; background: var(--surface); border-top: 1px solid var(--line); }
 footer .wrap { padding: .6rem 0 calc(.6rem + env(safe-area-inset-bottom)); justify-content: space-between; }
+footer .wrap > * { min-width: 0; }
 footer p { margin: 0; font-weight: 650; }
 dialog { width: min(43rem, 100% - 1.5rem); max-height: 85vh; overflow: auto; padding: clamp(1rem, 3vw, 1.6rem); background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; }
 dialog::backdrop { background: rgb(9 17 35 / 65%); }
@@ -255,7 +264,7 @@ const kindLabels = {
   skill: ["✦", "Skill"],
   mcp: ["⌘", "MCP server"],
 };
-const statusLabels = {differ: "Differ", missing: "Only in one tool", same: "The same"};
+const statusLabels = {differ: "Differ", missing: "Only in one tool", same: "The same", tailored: "Made for each tool"};
 const dateLabels = {
   yours: "Edited", "edited-copy": "Edited", copy: "Copied", package: "Updated",
   plugin: "Plugin updated", settings: "Settings file changed",
@@ -302,8 +311,9 @@ function updateFooter() {
 }
 
 function showCounts() {
-  const counts = {differ: 0, missing: 0, same: 0};
+  const counts = {differ: 0, missing: 0, same: 0, tailored: 0};
   for (const group of scan.groups) counts[group.status]++;
+  counts.same += counts.tailored;
   document.querySelector("#counts").textContent =
     `${counts.differ} differ · ${counts.missing} only in one tool · ${counts.same} the same`;
 }
@@ -349,12 +359,45 @@ function versionColumn(group, version, longest, choiceButton) {
   return node;
 }
 
+function lineCount(count) {
+  return `${count} ${count === 1 ? "line" : "lines"}`;
+}
+
+function diffLines(code, lines) {
+  const rows = document.createDocumentFragment();
+  for (const line of lines) {
+    const kind = {"@": "range", "+": "added", "-": "removed", "=": "own"}[line[0]] || "";
+    const text = line[0] === "@" ? `… ${line.slice(1)}` : `${line[0] === "=" ? "·" : line[0]} ${line.slice(1)}`;
+    rows.append(el("span", text, kind));
+  }
+  code.append(rows);
+}
+
+function longDiff(panel, lines, label) {
+  const code = el("pre");
+  code.tabIndex = 0;
+  code.setAttribute("aria-label", label);
+  diffLines(code, lines.slice(0, 400));
+  panel.append(code);
+  if (lines.length > 400) {
+    const show = button(`Show all ${lines.length} lines`, () => {
+      diffLines(code, lines.slice(400));
+      code.focus();
+      show.remove();
+    });
+    panel.append(show);
+  }
+}
+
 function diffView(group, panel) {
   const recommended = group.versions.find(version => version.id === group.winner);
+  panel.append(el("p", `What keeping the recommended version (${toolNames(recommended.tools)}) does to each other ` +
+    "version: + lines are added, - lines are replaced, and · lines are that tool's own and stay.", "legend"));
   for (const version of group.versions) {
     if (version.id === group.winner) continue;
     const heading = `${toolNames(version.tools)} · ${version.path}`;
     panel.append(el("h3", heading));
+    if (version.own) panel.append(el("p", `${lineCount(version.own)} of its own stay.`, "note"));
     if (!version.diff.length) {
       const differs = group.snapshot.versions[version.id].digest !== group.snapshot.versions[recommended.id].digest;
       const message = group.kind === "skill" && differs
@@ -363,30 +406,7 @@ function diffView(group, panel) {
       panel.append(el("p", message, "note"));
       continue;
     }
-    const code = el("pre");
-    code.tabIndex = 0;
-    code.setAttribute("aria-label", `Differences for ${heading}`);
-    const appendLines = lines => {
-      const rows = document.createDocumentFragment();
-      for (const line of lines) {
-        let kind = "";
-        if (line.startsWith("@@")) kind = "range";
-        if (line.startsWith("+")) kind = "added";
-        if (line.startsWith("-")) kind = "removed";
-        rows.append(el("span", line || " ", kind));
-      }
-      code.append(rows);
-    };
-    appendLines(version.diff.slice(0, 400));
-    panel.append(code);
-    if (version.diff.length > 400) {
-      const show = button(`Show all ${version.diff.length} lines`, () => {
-        appendLines(version.diff.slice(400));
-        code.focus();
-        show.remove();
-      });
-      panel.append(show);
-    }
+    longDiff(panel, version.diff, `Differences for ${heading}`);
   }
 }
 
@@ -404,13 +424,25 @@ function settingCard(group, index) {
   meta.append(kind, el("span", statusLabels[group.status], `chip ${group.status}`));
   if (group.matched_by) meta.append(el("span", group.matched_by));
   card.append(meta, title);
+  if (group.note) card.append(el("p", group.note, "note"));
+  if (group.summary) card.append(el("p", group.summary, "summary"));
 
   const buttons = new Map();
+  const warning = el("p", undefined, "caution");
+  warning.setAttribute("role", "status");
+  const warn = id => {
+    const chosen = group.versions.find(version => version.id === id);
+    const others = [...new Set(group.versions.filter(version => version.id !== id).flatMap(version => version.tools))];
+    warning.textContent = group.status === "tailored" && chosen
+      ? `This puts ${toolNames(chosen.tools)}'s version in place of the one made for ${toolNames(others)}.` : "";
+    warning.hidden = !warning.textContent;
+  };
   const choiceButton = (label, id) => {
     const choice = button(label, () => {
       if (busy) return;
       choices.set(group.key, id);
       for (const [value, option] of buttons) option.setAttribute("aria-pressed", value === id);
+      warn(id);
       updateFooter();
     }, "choice");
     choice.setAttribute("aria-pressed", choices.get(group.key) === id);
@@ -424,6 +456,7 @@ function settingCard(group, index) {
 
   const actions = el("div", undefined, "card-actions");
   actions.append(choiceButton("Leave as it is", "leave"));
+  warn(choices.get(group.key));
   card.append(actions);
   if (group.versions.length > 1) {
     const diffs = el("div", undefined, "diff");
@@ -440,6 +473,7 @@ function settingCard(group, index) {
     actions.append(toggle);
     card.append(diffs);
   }
+  actions.append(warning);
   return card;
 }
 
@@ -541,12 +575,18 @@ function render() {
   else if (filter === "managed") showManaged();
   else {
     const groups = scan.groups.filter(group => group.status === filter);
-    if (!groups.length) {
+    const tailored = filter === "same" ? scan.groups.filter(group => group.status === "tailored") : [];
+    if (!groups.length && !tailored.length) {
       const empty = {differ: "No settings differ between tools.", missing: "No settings are missing from a tool.",
         same: "No settings match across tools."};
       content.append(el("p", empty[filter], "empty panel"));
     }
     groups.forEach((group, index) => content.append(settingCard(group, index)));
+    if (tailored.length) {
+      content.append(el("h2", "Made separately for each tool", "section"),
+        el("p", "A plugin or installer wrote a version for each tool on purpose. They are best left as they are."));
+      tailored.forEach((group, index) => content.append(settingCard(group, groups.length + index)));
+    }
   }
   showCounts();
   updateFooter();
@@ -622,28 +662,31 @@ async function confirmChanges() {
     const plan = await post("plan", data);
     titleDialog("Review changes");
     for (const group of scan.groups) {
-      const steps = plan.steps.filter(step => step.key === group.key);
-      if (!steps.length) continue;
-      const list = el("ul");
-      for (const step of steps) {
-        const verb = step.action === "create" ? "Create" : "Replace";
-        const item = el("li", `${verb} for ${toolNames(step.tools)} `);
-        item.append(el("code", step.path, "path"));
-        list.append(item);
+      const files = plan.files.filter(file => file.key === group.key);
+      if (!files.length) continue;
+      dialog.append(el("h3", group.name));
+      for (const file of files) {
+        const verb = file.action === "create" ? "Create" : "Update";
+        const item = el("p", `${verb} for ${toolNames(file.tools)} `);
+        item.append(el("code", file.path, "path"));
+        dialog.append(item);
+        if (file.binary) dialog.append(el("p", "Replaced with the chosen version's copy of this file.", "note"));
+        else if (file.action === "create") dialog.append(el("p", `New file, ${lineCount(file.lines)}.`, "note"));
+        else longDiff(dialog, file.diff, `Changes to ${file.path}`);
+        if (file.own) dialog.append(el("p", `${lineCount(file.own)} of its own stay.`, "note"));
       }
-      dialog.append(el("h3", group.name), list);
     }
-    const message = plan.steps.length
+    const message = plan.files.length
       ? "Agent-sync will save existing files in a timestamped folder under "
       : "These choices require no file changes.";
     const backups = el("p", message);
-    if (plan.steps.length) backups.append(el("code", plan.backup, "path"), ".");
+    if (plan.files.length) backups.append(el("code", plan.backup, "path"), ".");
     const error = el("p", undefined, "error");
     error.setAttribute("role", "alert");
     const actions = el("div", undefined, "row");
     const back = button("Back", () => dialog.close());
     const apply = button("Apply", () => applyChanges(data, apply, back, error), "primary");
-    apply.disabled = !plan.steps.length;
+    apply.disabled = !plan.files.length;
     actions.append(back, apply);
     dialog.append(backups, error, actions);
     dialog.showModal();

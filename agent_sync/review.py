@@ -176,7 +176,8 @@ def partner(line: str, candidates: list[str]) -> int | None:
 
 def rows(target: str, winner: str) -> list[tuple[str, str]]:
     """What keeping `winner` does to `target`, line by line: " " stays, "+" comes from the winner,
-    "-" is an edited line the winner's replaces, "=" is the target's own line and stays."""
+    "-" is an edited line the winner's replaces, "=" is the target's own line and stays.
+    The winner's lines that are only an HTML comment are metadata of its own file and are not added."""
     old, new = target.splitlines(), winner.splitlines()
     if extends(target, winner):
         wanted, found, out = keys(winner), 0, []
@@ -191,7 +192,7 @@ def rows(target: str, winner: str) -> list[tuple[str, str]]:
         if tag == "equal":
             out += [(" ", line) for line in old[i1:i2]]
             continue
-        added, start = new[j1:j2], 0
+        added, start = [line for line in new[j1:j2] if not COMMENT.match(line)], 0
         for line in old[i1:i2]:
             index = partner(line, added[start:])
             if index is None:

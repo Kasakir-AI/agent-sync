@@ -471,3 +471,13 @@ def test_difference_names_what_each_side_has():
     group = review.Group("rule", "x", [claude, codex], ())
     assert review.difference(group, claude) == ("Codex has 2 lines Claude Code doesn't; "
                                                 "Claude Code has 1 line Codex doesn't.")
+
+
+def test_comment_only_lines_are_not_copied_or_compared(tmp_path):
+    paths = instructions.files(tmp_path)
+    write(tmp_path, paths["claude"], "<!-- imported-from: notes -->\nKeep replies short.\nRun the tests.\n")
+    codex = write(tmp_path, paths["codex"], "Keep replies short.\n")
+    os.utime(codex, (100, 100))
+    apply_choice(tmp_path, "instructions", lambda version: version.tools == ("claude",))
+    assert codex.read_text() == "Keep replies short.\nRun the tests.\n"
+    assert review_home(tmp_path).groups[0].status == "same"
