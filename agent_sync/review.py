@@ -15,6 +15,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from enum import StrEnum
 from pathlib import Path
+from stat import S_IMODE
 
 from . import instructions, mcp, roles, skills, tomledit
 from .config import TOOLS, Config, save_setting
@@ -56,6 +57,7 @@ class Version:
     lines: int
     origin: Origin
     note: str
+    scoped_rule: bool = False
 
 
 @dataclass
@@ -72,7 +74,13 @@ class Group:
 
     @property
     def key(self) -> str:
+        if self.scoped_rule:
+            return f"{self.kind}:{self.name}/{self.versions[0].id}"
         return f"{self.kind}:{self.name}"
+
+    @property
+    def scoped_rule(self) -> bool:
+        return self.versions[0].scoped_rule
 
 
 @dataclass(frozen=True)
@@ -121,6 +129,7 @@ class Edit:
     after: Content
     winner: str = ""
     removed: tuple[str, ...] = ()
+    create_mode: int | None = None
 
 
 @dataclass(frozen=True)
@@ -230,19 +239,30 @@ def removed_lines(target: str, winner: str, baseline: Iterable[str]) -> set[str]
 
 
 def make_version(kind: str, name: str, tools: tuple[str, ...], path: Path, body: str, origin: Origin,
-                 note: str = "", *, key: str = "", digest: str = "", modified: float | None = None) -> Version:
+                 note: str = "", *, key: str = "", digest: str = "", modified: float | None = None,
+                 scoped_rule: bool = False) -> Version:
     identity = json.dumps((kind, name, os.fspath(path), key)).encode()
     return Version(
         hashlib.sha1(identity).hexdigest()[:10], tools, path, key, body,
         digest or hashlib.sha256(normalized(body).encode()).hexdigest(),
-        path.stat().st_mtime if modified is None else modified, len(body.splitlines()), origin, note,
+        path.stat().st_mtime if modified is None else modified, len(body.splitlines()), origin, note, scoped_rule,
     )
 
 
+def is_scoped_rule(tool: str, front: str) -> bool:
+    if tool == "claude":
+        return bool(re.search(r"""(?m)^[ \t]*["']?paths["']?[ \t]*:""", front))
+    fields = r"""(?m)^[ \t]*["']?(?:globs|alwaysApply)["']?[ \t]*:"""
+    always = r"""(?m)^[ \t]*["']?alwaysApply["']?[ \t]*:[ \t]*(?i:true)[ \t]*(?:#[^\n]*)?\r?$"""
+    return bool(re.search(fields, front) and not re.search(always, front))
+
+
 def text_version(kind: str, name: str, tool: str, path: Path, origin: Origin) -> Version:
-    body = instructions.BLOCK.sub("\n", instructions.split_front(read_text(path))[1])
+    front, body = instructions.split_front(read_text(path))
+    body = instructions.BLOCK.sub("\n", body)
     note = "mirrored global instructions" if origin == Origin.COPY else ""
-    return make_version(kind, name, (tool,), path, body, origin, note)
+    return make_version(kind, name, (tool,), path, body, origin, note,
+                        scoped_rule=kind == "rule" and is_scoped_rule(tool, front))
 
 
 def scan_instructions(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
@@ -256,7 +276,9 @@ def scan_instructions(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[s
 def rule_location(home: Path, name: str, tool: str) -> Path | None:
     if tool in RULES:
         folder, suffix = RULES[tool]
-        return home / folder / (name + suffix)
+        path = home / folder / (name + suffix)
+        if not path.exists() and not path.is_symlink():
+            return path
     return None
 
 
@@ -320,14 +342,16 @@ def skill_version(home: Path, name: str, tools: tuple[str, ...], path: Path) -> 
     origin = Origin.YOURS
     if marker.is_file():
         marker_text = read_text(marker)
-        source = marker_text.split("\n", 1)[0].removeprefix("copied by agent-sync from ")
+        reviewed = marker_text.startswith(skills.REVIEW_MARK)
+        marker_text = marker_text.removeprefix(skills.REVIEW_MARK)
+        source = marker_text.split("\n", 1)[0].removeprefix(skills.COPY_MARK)
         if source.startswith(f"{home}/"):
             source = "~/" + source.removeprefix(f"{home}/")
         note = f"copied from {source}" if source else ""
         if marker_text.startswith(skills.PLUGIN_MARK):
             origin = Origin.PLUGIN
         else:
-            origin = Origin.EDITED_COPY if modified > marker.stat().st_mtime + 2 else Origin.COPY
+            origin = Origin.EDITED_COPY if reviewed or modified > marker.stat().st_mtime + 2 else Origin.COPY
     return make_version("skill", name, tools, path, read_text(path / "SKILL.md"), origin, note,
                         digest=digest, modified=modified)
 
@@ -439,7 +463,7 @@ def likeness(left: str, right: str) -> float:
 
 
 def pair_similar(groups: list[Group]) -> None:
-    candidates = [group for group in groups if group.kind in {"instructions", "rule"}]
+    candidates = [group for group in groups if group.kind in {"instructions", "rule"} and not group.scoped_rule]
     bodies = {version.id: normalized(version.body) for group in candidates for version in group.versions}
 
     def similarity(left: Group, right: Group) -> float:
@@ -449,9 +473,11 @@ def pair_similar(groups: list[Group]) -> None:
     for group in candidates[:]:
         if group.kind != "rule" or group not in candidates:
             continue
+        tools = group_tools(group)
         matches = [(similarity(group, other), other) for other in candidates if other is not group
-                   and (len(group_tools(group)) == 1 or (other.kind == "instructions"
-                        and len(group_tools(other)) == 1))]
+                   and tools.isdisjoint(tool for version in other.versions if version.origin != Origin.COPY
+                                        for tool in version.tools)
+                   and (len(tools) == 1 or (other.kind == "instructions" and len(group_tools(other)) == 1))]
         ratio, target = max(matches, key=lambda pair: pair[0], default=(0.0, group))
         if ratio >= 0.6:
             target.versions.extend(group.versions)
@@ -735,10 +761,10 @@ def scan(home: Path, cfg: Config) -> Scan:
     locked = skills.locked(home)
     groups = []
     for kind, entry in KINDS.items():
-        by_name: dict[str, list[Version]] = {}
+        by_name: dict[tuple[str, str], list[Version]] = {}
         for name, version in entry.scan(home, cfg, locked):
-            by_name.setdefault(name, []).append(version)
-        groups.extend(Group(kind, name, versions, ()) for name, versions in sorted(by_name.items()))
+            by_name.setdefault((name, version.id if version.scoped_rule else ""), []).append(version)
+        groups.extend(Group(kind, name, versions, ()) for (name, _), versions in sorted(by_name.items()))
     pair_similar(groups)
     stored = load_baselines(baseline_file(cfg))
     for group in groups:
@@ -757,8 +783,14 @@ def scan(home: Path, cfg: Config) -> Scan:
     for group in groups:
         have = group_tools(group)
         location = KINDS[group.kind].location
-        group.missing = tuple(tool for tool in TOOLS if tool not in have and location(home, group.name, tool))
-        group.status, group.note = judge(group, installers)
+        if not group.scoped_rule:
+            group.missing = tuple(tool for tool in TOOLS if tool not in have and location(home, group.name, tool))
+        if group.kind == "rule" and len(have) == 1 and not group.missing:
+            group.status = "local"
+            group.note = ("This rule stays in the tool that defines when it applies." if group.scoped_rule
+                          else "A rule with this name already exists in the other tool.")
+        else:
+            group.status, group.note = judge(group, installers)
     managed.update(f"{pid} plugin skills" for _, path in skill_folders(home) if (pid := plugin_of(path)))
     patterns = {"claude": ".claude/agents/*.md", "codex": ".codex/agents/*.toml",
                  "cursor": ".cursor/plugins/local/*-agents/agents/*.md"}
@@ -861,6 +893,8 @@ def plan(home: Path, scan: Scan, choices: dict[str, str | dict], source: str) ->
             raise ValueError(f"unknown setting: {key}")
         if choice == "leave":
             continue
+        if group.status == "local":
+            raise ChoiceError(group.note)
         if isinstance(choice, str):
             chosen, asked = choice, {}
         else:
@@ -874,7 +908,12 @@ def plan(home: Path, scan: Scan, choices: dict[str, str | dict], source: str) ->
         drop: dict[Path, frozenset[str]] = {}
         same = {version.path.resolve() for version in group.versions if version.digest == winner.digest}
         for version in group.versions:
-            if version.digest != winner.digest and version.origin != Origin.PLUGIN:
+            if version.id == winner.id or version.origin == Origin.PLUGIN:
+                continue
+            if (version.digest != winner.digest or
+                    (group.kind == "instructions" and "cursor" not in version.tools
+                     and version.path.resolve() != winner.path.resolve()
+                     and instructions.BLOCK.search(read_text(version.path)))):
                 targets.setdefault(checked_path(home, version.path), set()).update(version.tools)
                 for path, lines in leftovers(group, version, winner).items():
                     wanted = asked.pop(shown(home, path), None)
@@ -887,14 +926,17 @@ def plan(home: Path, scan: Scan, choices: dict[str, str | dict], source: str) ->
             raise ChoiceError(f"{min(asked)} has no lines of its own to remove for {group.name}")
         location = KINDS[group.kind].location
         for tool in group.missing:
-            path = checked_path(home, location(home, group.name, tool))
+            destination = location(home, group.name, tool)
+            if destination is None:
+                continue
+            path = checked_path(home, destination)
             if path not in same:
                 targets.setdefault(path, set()).add(tool)
         source_path = next((version.path for version in group.versions if source in version.tools), None)
         source_folder = skills.folders(home)[source].resolve()
         for path, tools in targets.items():
             exists = path.exists()
-            marker = (f"copied by agent-sync from {source_path}\n"
+            marker = (f"{skills.COPY_MARK}{source_path}\n"
                       if group.kind == "skill" and not exists and source_path and path.parent != source_folder else "")
             steps.append(Step(key, tuple(tool for tool in TOOLS if tool in tools), path,
                               "replace" if exists else "create", winner, marker, drop))
@@ -918,14 +960,7 @@ def instruction_text(step: Step, text: str) -> str:
         if not front:
             return instructions.rendered("cursor", "", merge(rest, body, drop).rstrip("\n"), step.winner.path)
         return front + merge(rest, body, drop)
-    block = instructions.BLOCK.search(text)
-    own = instructions.BLOCK.sub("\n", text) if block else text
-    merged = merge(own, body, drop)
-    if merged == own:
-        return text
-    if block and not set(keys(block[0])) <= set(keys(merged)):
-        return merged.rstrip("\n") + "\n\n" + block[0].strip("\n") + "\n"
-    return merged
+    return merge(instructions.BLOCK.sub("\n", text), body, drop)
 
 
 def rule_text(step: Step, text: str) -> str:
@@ -951,8 +986,9 @@ def write_skill(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
     if skill_digest(winner) != step.winner.digest:
         raise ValueError(f"selected skill changed: {step.winner.path}")
     out: dict[Path, tuple[Content, str]] = {}
+    marker = step.path / skills.MARKER
     if step.marker and not step.path.exists():
-        out[step.path / skills.MARKER] = (step.marker.encode(), "")
+        out[marker] = (step.marker.encode(), "")
     for name, data in winner.items():
         path = step.path / name
         if Path(os.path.realpath(path)) != path or (path.exists() and not path.is_file()):
@@ -965,6 +1001,13 @@ def write_skill(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
             out[path] = (merge(mine, theirs, step.drop.get(path, frozenset())).encode(), theirs)
         elif not isinstance(data, Link):
             out[path] = (data, "")
+    mark = read(marker)
+    if (isinstance(mark, bytes) and mark.startswith(skills.COPY_MARK.encode())
+            and not mark.startswith(skills.PLUGIN_MARK.encode())):
+        merged = skill_files(step.path)
+        merged.update((os.fspath(path.relative_to(step.path)), data) for path, (data, _) in out.items())
+        if merged != winner:
+            return {marker: (skills.REVIEW_MARK.encode() + mark, ""), **out}
     return out
 
 
@@ -1042,7 +1085,13 @@ def edits(steps: list[Step]) -> list[Edit]:
             left = set(keys(as_text(after) or ""))
             removed = tuple(line for line in dict.fromkeys(keys(as_text(before) or ""))
                             if line in step.drop.get(path, ()) and line not in left)
-            changes.append(Edit(step.key, step.tools, step.path, step.action, path, before, after, winner, removed))
+            create_mode = None
+            new_skill_file = before is None and step.key.startswith("skill:") and path.name != skills.MARKER
+            if new_skill_file and isinstance(after, bytes):
+                source = step.winner.path / path.relative_to(step.path)
+                create_mode = S_IMODE(source.lstat().st_mode)
+            changes.append(Edit(step.key, step.tools, step.path, step.action, path, before, after, winner, removed,
+                                create_mode=create_mode))
     return changes
 
 
@@ -1064,6 +1113,8 @@ def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
                 temp.write_bytes(edit.after)
                 if edit.before is not None:
                     shutil.copymode(edit.path, temp)
+                elif edit.create_mode is not None:
+                    temp.chmod(edit.create_mode)
         for edit, _ in staged:
             dest = backup_dir / edit.path.relative_to(home.resolve())
             if edit.before is not None and not dest.exists():

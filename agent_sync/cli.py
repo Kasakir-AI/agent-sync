@@ -168,7 +168,8 @@ def review_settings(list_only: bool, no_open: bool) -> int:
         return reviewpage.serve(cfg.home, cfg, open_browser=not no_open)
     groups = review.scan(cfg.home, cfg).groups
     counts = Counter(group.status for group in groups)
-    print(f"{counts['differ']} differ, {counts['check']} to check once, {counts['missing']} only in one tool, "
+    print(f"{counts['differ']} differ, {counts['check']} to check once, "
+          f"{counts['missing'] + counts['local']} only in one tool, "
           f"{counts['same'] + counts['tailored']} the same ({counts['tailored']} made for each tool)\n")
     for group in groups:
         winner, reasons = review.recommend(group, cfg.source)
@@ -181,11 +182,12 @@ def review_settings(list_only: bool, no_open: bool) -> int:
             names = ", ".join(review.TOOL_LABELS[tool] for tool in version.tools)
             date = datetime.fromtimestamp(version.modified).strftime("%Y-%m-%d %H:%M:%S")
             location = review.shown(cfg.home, version.path)
-            recommended = " [Recommended]" if version == winner else ""
+            recommended = " [Recommended]" if version == winner and group.status != "local" else ""
             length = "1 line" if version.lines == 1 else f"{version.lines} lines"
             print(f"  {names} | {review.ORIGIN_LABELS[version.origin]} | {date} | {length} | {location}{recommended}")
-        for reason in reasons:
-            print(f"  - {reason}")
+        if group.status != "local":
+            for reason in reasons:
+                print(f"  - {reason}")
         print()
     return 0
 

@@ -91,6 +91,9 @@ Each card says in one sentence what differs, for example "Codex has 85 lines Cla
 Keeping a version writes only the differences. A line you edited takes the chosen text, and lines the chosen
 version adds are added. Lines, notes and files that only one tool has stay.
 
+Rules that apply only in certain files or contexts stay in the tool that defines them. Review lists each
+scoped rule separately under **Only in one tool**.
+
 Lines only one tool has may be that tool's own notes, or old rules you removed elsewhere before agent-sync could
 see it happen. So the first time a version only adds lines to another, the card is listed under **Check once**
 ("Codex has 12 lines Claude Code doesn't that you haven't checked yet") with those lines open. Switch any outdated
@@ -107,6 +110,7 @@ only one tool has is that tool's own. Under each version, **Lines only Codex has
 **Keep** / **Remove** switch for each. Deleted lines start on **Remove**, and the tool's own lines start on
 **Keep**. Review changes shows the lines that will be removed in red. In a skill, the rule applies to each text
 file, and files only one tool has stay.
+If a reviewed skill keeps local notes or files, upkeep leaves that copy in place.
 
 Some plugins and installers write a separate version of a skill for each tool on purpose. For example, a Claude Code
 copy uses `allowed-tools` while the Codex copy has `agents/openai.yaml`. The review lists these under **The same**

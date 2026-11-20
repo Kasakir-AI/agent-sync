@@ -108,7 +108,7 @@ main { padding-top: clamp(1rem, 3vw, 2rem); }
 .differ, .check, .settings { background: var(--amber-back); color: var(--amber); }
 .same, .yours { background: var(--green-back); color: var(--green); }
 .tailored { background: var(--purple-back); color: var(--purple); }
-.missing, .package { background: var(--accent-back); color: var(--accent); }
+.missing, .local, .package { background: var(--accent-back); color: var(--accent); }
 .edited-copy { background: none; color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
 .copy { color: var(--subtle); border: 1px solid var(--line); }
 .plugin { background: var(--purple-back); color: var(--purple); }
@@ -282,7 +282,7 @@ const kindLabels = {
   mcp: ["⌘", "MCP server"],
 };
 const statusLabels = {differ: "Differ", check: "Check once", missing: "Only in one tool", same: "The same",
-  tailored: "Made for each tool"};
+  tailored: "Made for each tool", local: "Only in one tool"};
 const dateLabels = {
   yours: "Edited", "edited-copy": "Edited", copy: "Copied", package: "Updated",
   plugin: "Plugin updated", settings: "Settings file changed",
@@ -346,18 +346,18 @@ function updateFooter() {
 }
 
 function showCounts() {
-  const counts = {differ: 0, check: 0, missing: 0, same: 0, tailored: 0};
+  const counts = {differ: 0, check: 0, missing: 0, same: 0, tailored: 0, local: 0};
   for (const group of scan.groups) counts[group.status]++;
   counts.same += counts.tailored;
   document.querySelector("#counts").textContent =
     `${counts.differ} differ · ${counts.check ? `${counts.check} to check once · ` : ""}` +
-    `${counts.missing} only in one tool · ${counts.same} the same`;
+    `${counts.missing + counts.local} only in one tool · ${counts.same} the same`;
 }
 
 function versionColumn(group, version, longest, choiceButton) {
   const node = el("div", undefined, "version");
   const ribbon = el("div", undefined, "recommendation");
-  const isWinner = version.id === group.winner;
+  const isWinner = group.status !== "local" && version.id === group.winner;
   if (isWinner) ribbon.append(el("span", "Recommended", "ribbon"));
   node.append(ribbon);
   const tools = el("div", undefined, "badges");
@@ -389,6 +389,7 @@ function versionColumn(group, version, longest, choiceButton) {
     node.append(why);
   }
   if (version.fixed) return node;   // a plugin's server: its caution says why there is nothing to pick
+  if (group.status === "local") return node;
   const label = group.status === "missing" ? `Copy to ${toolNames(group.missing)}` : "Keep this one";
   const choose = choiceButton(label, version.id);
   choose.setAttribute("aria-label", `${label} · ${toolNames(version.tools)} · ${version.path}`);
@@ -553,10 +554,12 @@ function settingCard(group, index) {
   }
   card.append(versions);
 
-  const actions = el("div", undefined, "card-actions");
-  actions.append(choiceButton("Leave as it is", "leave"));
-  warn(choices.get(group.key));
-  card.append(actions);
+  if (group.status !== "local") {
+    const actions = el("div", undefined, "card-actions");
+    actions.append(choiceButton("Leave as it is", "leave"));
+    warn(choices.get(group.key));
+    card.append(actions);
+  }
   if (group.versions.length > 1) {
     const diffs = el("div", undefined, "diff");
     diffs.hidden = true;
@@ -673,7 +676,8 @@ function render() {
   if (filter === "plugins") showPlugins();
   else if (filter === "managed") showManaged();
   else {
-    const groups = scan.groups.filter(group => group.status === filter);
+    const groups = scan.groups.filter(group => group.status === filter ||
+      (filter === "missing" && group.status === "local"));
     const unchecked = filter === "differ" ? scan.groups.filter(group => group.status === "check") : [];
     const tailored = filter === "same" ? scan.groups.filter(group => group.status === "tailored") : [];
     if (!groups.length && !tailored.length && !unchecked.length) {

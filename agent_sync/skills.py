@@ -3,8 +3,8 @@
 - Claude Code reads ~/.claude/skills; Codex and Cursor both read ~/.agents/skills.
 - Package skills are installed for every tool by the `skills` CLI already (recorded in ~/.agents/.skill-lock.json),
   so only the rest is copied here.
-A copy carries a `.agent-sync` marker. A copy with the marker is updated when the source changes and removed when the
-source skill is gone; a folder without it is yours and is never touched.
+A copy carries a `.agent-sync` marker. Upkeep replaces or removes exact copies as their source changes. It keeps
+copies where review preserved local content and leaves folders without a marker alone.
 
 Skills inside Claude Code plugins are copied to ~/.agents/skills (Codex and Cursor) only for the plugins you name in
 `plugin_skills`: most plugins only make sense in Claude Code. Their markers name the plugin.
@@ -18,7 +18,9 @@ import shutil
 from pathlib import Path
 
 MARKER = ".agent-sync"
-PLUGIN_MARK = "copied by agent-sync from Claude Code plugin "
+COPY_MARK = "copied by agent-sync from "
+PLUGIN_MARK = COPY_MARK + "Claude Code plugin "
+REVIEW_MARK = "kept by agent-sync review\n"
 
 
 def folders(home: Path) -> dict[str, Path]:
@@ -106,11 +108,15 @@ def from_plugins(home: Path, chosen: list[str], skip: list[str]) -> tuple[dict[s
     return out, warnings
 
 
-def is_plugin_copy(d: Path) -> bool:
+def marker_text(d: Path) -> str:
     try:
-        return (d / MARKER).read_text().startswith(PLUGIN_MARK)
+        return (d / MARKER).read_text()
     except OSError:
-        return False
+        return ""
+
+
+def is_plugin_copy(d: Path) -> bool:
+    return marker_text(d).startswith(PLUGIN_MARK)
 
 
 def same_tree(a: Path, b: Path) -> bool:
@@ -132,7 +138,7 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
     plan: dict[Path, dict[str, tuple[Path, str, str]]] = {}
     mine = own(home, source, skip)
     for target in set(folders(home).values()) - {folders(home)[source]}:
-        plan[target] = {n: (d, f"copied by agent-sync from {d}\n", "") for n, d in mine.items()}
+        plan[target] = {n: (d, f"{COPY_MARK}{d}\n", "") for n, d in mine.items()}
     shared = folders(home)["codex"]
     offered, changes = from_plugins(home, plugin_skills or [], skip)
     plan.setdefault(shared, {})
@@ -151,6 +157,8 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                 if os.path.realpath(dest) != os.path.realpath(src):   # realpath, unlike resolve(), allows loops
                     changes.append(f"WARN  {dest} is a link agent-sync did not make; left alone")
                 continue                                   # a link to the source is already the same folder
+            if marker_text(dest).startswith(REVIEW_MARK):
+                continue
             if dest.exists() and not (dest / MARKER).exists():
                 from .review import made_for_each_tool  # review builds on this module, so it is imported here
                 if not made_for_each_tool(home, name, [(("claude",), src), (("codex", "cursor"), dest)]):
@@ -173,7 +181,10 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
         for d in sorted(target.iterdir()) if target.is_dir() else []:
             if not (d / MARKER).is_file() or d.is_symlink() or d.name in wanted:
                 continue
-            plugin = is_plugin_copy(d)
+            marker = marker_text(d)
+            if marker.startswith(REVIEW_MARK):
+                continue
+            plugin = marker.startswith(PLUGIN_MARK)
             if in_source and not plugin:
                 continue                                   # a copy from an earlier source tool; not ours to judge
             if not dry:

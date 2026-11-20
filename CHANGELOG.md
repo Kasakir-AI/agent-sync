@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2 (2026-11-20)
+
+- Applying global instructions clears the old mirrored block and keeps each tool's own notes.
+- Skill helpers keep their executable permissions when review copies them.
+- The next upkeep preserves skill notes and files kept during review.
+- Rules scoped to particular files stay separate in review.
+
 ## 0.5.1 (2026-11-20)
 
 - The upkeep no longer warns on every run about skills a plugin or installer made separately for each tool (for
