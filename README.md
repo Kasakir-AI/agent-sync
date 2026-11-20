@@ -85,10 +85,22 @@ agent-sync made, copies you edited, package updates, plugin skills, and entries 
 A copy can look newer because agent-sync rewrote it. Recommendations consider origin first and use the date to
 compare edits.
 
-Choose a version to keep across the tools, or leave the setting as it is. Select **Review changes** to see which
-files your choices would change before you apply them. The review saves copies of existing files and folders it
-replaces under `~/.local/state/agent-sync/backups/review-YYYYmmdd-HHMMSS/`. On Linux, the backups follow
-`XDG_STATE_HOME` when it is set.
+Each card says in one sentence what differs, for example "Codex has 85 lines Claude Code doesn't; Claude Code has
+1 line Codex doesn't." Choose a version to keep across the tools, or leave the setting as it is.
+
+Keeping a version writes only the differences. A line you edited takes the chosen text, and lines the chosen
+version adds are added. Lines, notes and files that only one tool has stay. If a version only adds lines to
+another, the setting counts as the same, with a note such as "Codex keeps 12 lines of its own".
+
+Some plugins and installers write a separate version of a skill for each tool on purpose. For example, a Claude Code
+copy uses `allowed-tools` while the Codex copy has `agents/openai.yaml`. The review lists these under **The same**
+as "Made separately for each tool", leaves them alone by default, and does not count them as differences. Skills
+that agent-sync copied from a plugin and MCP servers a Claude Code plugin brings count as kept in step, not as
+choices.
+
+Select **Review changes** to see the exact lines each file gains or loses before you apply them. The review saves
+a copy of each file it changes under `~/.local/state/agent-sync/backups/review-YYYYmmdd-HHMMSS/`. On Linux, the
+backups follow `XDG_STATE_HOME` when it is set.
 
 - `agent-sync review --list` prints the comparison and recommendations in your terminal.
 - `agent-sync review --no-open` prints a local URL you can open yourself.
@@ -158,7 +170,7 @@ go in `[[extra_steps]]`, models you never want in `warn_models`. Then:
 
 ## What it changes
 
-The review writes only the settings you pick and apply.
+The review writes only the settings you pick and apply, and in those files only the lines that differ.
 
 | tool | files |
 | --- | --- |
