@@ -553,13 +553,12 @@ function settingCard(group, index) {
     versions.append(column);
   }
   card.append(versions);
+  if (group.status === "local") return card;
 
-  if (group.status !== "local") {
-    const actions = el("div", undefined, "card-actions");
-    actions.append(choiceButton("Leave as it is", "leave"));
-    warn(choices.get(group.key));
-    card.append(actions);
-  }
+  const actions = el("div", undefined, "card-actions");
+  actions.append(choiceButton("Leave as it is", "leave"));
+  warn(choices.get(group.key));
+  card.append(actions);
   if (group.versions.length > 1) {
     const diffs = el("div", undefined, "diff");
     diffs.hidden = true;
