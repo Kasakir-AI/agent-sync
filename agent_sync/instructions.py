@@ -16,6 +16,13 @@ BEGIN = "<!-- agent-sync: begin (mirrored from {src}; edit the source, not this 
 END = "<!-- agent-sync: end -->"
 BLOCK = re.compile(r"\n*<!-- agent-sync: begin.*?<!-- agent-sync: end -->\n?", re.S)
 
+FRONT = re.compile(r"\A---[ \t]*\r?\n.*?^---[ \t]*(?:\r?\n|\Z)", re.M | re.S)
+
+
+def split_front(text: str) -> tuple[str, str]:
+    match = FRONT.match(text)
+    return (match[0], text[match.end():]) if match else ("", text)
+
 
 def files(home: Path) -> dict[str, Path]:
     return {"claude": home / ".claude/CLAUDE.md", "codex": home / ".codex/AGENTS.md",
@@ -28,6 +35,9 @@ def own_text(text: str) -> str:
 
 
 def rendered(tool: str, current: str, body: str, src: Path) -> str:
+    _, existing = split_front(current) if tool == "cursor" else ("", current)
+    if own_text(existing) == body.strip():
+        return current
     if tool == "cursor":
         return ("---\ndescription: Global instructions, mirrored by agent-sync from " + src.name +
                 "\nalwaysApply: true\n---\n" + body + "\n")

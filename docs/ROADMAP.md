@@ -37,6 +37,11 @@
 
 - [x] Fixes in `agent-sync config` and in the TOML written for Codex, from code review (see the changelog).
 
+Unreleased
+
+- [x] `agent-sync review`: compare settings across the tools, see where each version came from, and apply your
+      choices with backups.
+
 Later:
 
 - Cursor as the source of global instructions (its User Rules live in the app's own database).

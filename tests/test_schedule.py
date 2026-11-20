@@ -1,4 +1,5 @@
 import plistlib
+import subprocess
 
 from agent_sync import checks, schedule
 from agent_sync.config import load
@@ -13,10 +14,19 @@ def test_plist_and_systemd_units_are_valid(tmp_path):
     assert "OnUnitActiveSec=1h" in units["agent-sync.timer"] and "Persistent=true" in units["agent-sync.timer"]
 
 
-def test_launcher_runs_with_echo_and_force():
-    text = schedule.launcher()
-    assert text.startswith("#!/bin/bash\n" + schedule.LAUNCHER_MARK) and "run --force --echo" in text
-    assert f"agent-sync {schedule.__version__}" in text and " config\n" in text   # s opens the settings
+def test_launcher_runs_upkeep_and_dispatches_keys(tmp_path):
+    exe = tmp_path / "agent-sync"
+    exe.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n')
+    exe.chmod(0o755)
+    text = schedule.launcher(str(tmp_path))
+    assert text.startswith("#!/bin/bash\n" + schedule.LAUNCHER_MARK)
+    assert f"agent-sync {schedule.__version__}" in text
+    assert "Press r to review differences between the tools, s to change the settings" in text
+    for key, later in (("r", ["review"]), ("s", ["config"]), ("x", [])):
+        calls = tmp_path / key
+        subprocess.run(["/bin/bash", "-c", text], input=key, text=True, capture_output=True,
+                       env={"CALLS": str(calls)}, check=True)
+        assert calls.read_text().splitlines() == ["run --force --echo", *later]
 
 
 def test_launcher_is_added_kept_current_and_never_replaces_a_stranger(tmp_path, monkeypatch):

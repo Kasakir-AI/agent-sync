@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `agent-sync review` compares settings across the tools in a local page. See the origin of each version, choose
+  what to keep, and preview changes before applying them. The review backs up the files it replaces.
+- `agent-sync review --list` prints the comparison in the terminal. `--no-open` prints the page's local URL.
+- The upkeep log reports settings that differ or are missing. Press `r` in the Desktop launcher to review them.
+
 ## 0.4.1 (2026-11-20)
 
 Fixes in `agent-sync config`:

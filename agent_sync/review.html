@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Review your agent settings</title>
+<style nonce="__NONCE__">
+:root {
+  color-scheme: light dark;
+  --back: #f3f5fa;
+  --surface: #ffffff;
+  --panel: #f7f9fd;
+  --ink: #18253d;
+  --subtle: #4f5e75;
+  --line: #cbd4e2;
+  --accent: #1948b2;
+  --accent-text: #ffffff;
+  --accent-back: #e8efff;
+  --green: #12613d;
+  --green-back: #e2f4e9;
+  --amber: #815107;
+  --amber-back: #fff0d3;
+  --purple: #6738a1;
+  --purple-back: #f0e8fa;
+  --red: #9b273b;
+  --red-back: #fdeaf0;
+  --claude: #943a20;
+  --claude-back: #faebe4;
+  --codex: #264697;
+  --codex-back: #e8eeff;
+  --cursor: #4b3b76;
+  --cursor-back: #eee9f8;
+  font: 1rem/1.5 "Avenir Next", system-ui, sans-serif;
+  background: var(--back);
+  color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --back: #111827;
+    --surface: #1b2537;
+    --panel: #202d42;
+    --ink: #edf2fc;
+    --subtle: #b9c6dc;
+    --line: #465672;
+    --accent: #a8c0ff;
+    --accent-text: #10244d;
+    --accent-back: #2d4067;
+    --green: #a2e8bf;
+    --green-back: #253f38;
+    --amber: #ffd691;
+    --amber-back: #463626;
+    --purple: #dec4ff;
+    --purple-back: #3a3058;
+    --red: #ffb5c4;
+    --red-back: #492937;
+    --claude: #ffd0bc;
+    --claude-back: #4f322d;
+    --codex: #bbcbff;
+    --codex-back: #2c3d69;
+    --cursor: #ded1ff;
+    --cursor-back: #3b3359;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding-bottom: calc(7rem + env(safe-area-inset-bottom)); }
+button, input { font: inherit; }
+button {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .5rem .85rem;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: .55; cursor: default; }
+button:focus-visible, input:focus-visible, [tabindex="0"]:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button.primary:hover:not(:disabled) { filter: brightness(.9); color: var(--accent-text); }
+button.quiet { background: transparent; border-color: transparent; }
+[hidden] { display: none !important; }
+.wrap { width: min(74rem, 100% - clamp(1.5rem, 5vw, 4rem)); margin-inline: auto; }
+header { background: var(--surface); border-top: 5px solid var(--accent); border-bottom: 1px solid var(--line); }
+header h1 { margin: 0; padding-top: clamp(1.4rem, 4vw, 2.8rem); font-size: clamp(1.9rem, 4vw, 3rem); line-height: 1.15; }
+header p { color: var(--subtle); margin: .55rem 0 1.35rem; }
+nav { display: flex; flex-wrap: wrap; gap: .3rem .65rem; padding-bottom: .5rem; }
+nav button { border-color: transparent; padding: .4rem .6rem; color: var(--subtle); }
+nav button[aria-pressed="true"] { background: var(--accent-back); color: var(--accent); }
+main { padding-top: clamp(1rem, 3vw, 2rem); }
+.card, .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: clamp(.9rem, 2vw, 1.45rem); }
+.card + .card { margin-top: 1rem; }
+.card h2, .panel h2 { margin: .3rem 0 1rem; font-size: 1.45rem; line-height: 1.25; overflow-wrap: anywhere; }
+.card-meta, .badges, .row { display: flex; flex-wrap: wrap; gap: .4rem .65rem; align-items: center; }
+.card-meta, .note { color: var(--subtle); font-size: .875rem; }
+.kind { font-weight: 650; }
+.kind span { display: inline-block; margin-right: .35rem; color: var(--accent); width: .9rem; text-align: center; }
+.chip { font-size: .78rem; font-weight: 650; padding: .12rem .5rem; border-radius: .25rem; background: var(--panel); }
+.differ, .settings { background: var(--amber-back); color: var(--amber); }
+.same, .yours { background: var(--green-back); color: var(--green); }
+.missing, .package { background: var(--accent-back); color: var(--accent); }
+.edited-copy { background: none; color: var(--green); box-shadow: inset 0 0 0 1px var(--green); }
+.copy { color: var(--subtle); border: 1px solid var(--line); }
+.plugin { background: var(--purple-back); color: var(--purple); }
+.claude { color: var(--claude); background: var(--claude-back); }
+.codex { color: var(--codex); background: var(--codex-back); }
+.cursor { color: var(--cursor); background: var(--cursor-back); }
+.versions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .75rem; }
+.version {
+  display: flex;
+  flex-direction: column;
+  gap: .65rem;
+  min-width: 0;
+  background: var(--panel);
+  padding: .9rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.version:has(.choice[aria-pressed="true"]) { border-color: var(--accent); }
+.recommendation {
+  display: flex;
+  justify-content: flex-start;
+  min-height: 1.5rem;
+  margin: -.9rem -.9rem 0;
+}
+.ribbon { padding: .18rem .6rem; border-radius: 5px 0 6px 0; background: var(--accent-back); color: var(--accent); font-size: .8rem; font-weight: 700; }
+.version p, .version ul { margin: 0; }
+.version ul { padding-left: 1.2rem; }
+.date, .length, .reason { font-size: .875rem; }
+.date { color: var(--subtle); }
+.length { display: flex; align-items: center; gap: .55rem; color: var(--subtle); }
+progress { flex: 1; min-width: 0; height: .65rem; accent-color: var(--accent); }
+code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.path { font-size: .82rem; color: var(--subtle); overflow-wrap: anywhere; }
+.caution { color: var(--amber); font-size: .875rem; }
+.version .choice { margin-top: auto; width: 100%; }
+.choice { display: inline-flex; align-items: center; gap: .55rem; text-align: left; min-height: 2.65rem; }
+.choice::before { content: ""; flex: 0 0 .9rem; height: .9rem; border: 1.5px solid currentColor; border-radius: 50%; }
+.choice[aria-pressed="true"] { background: var(--accent-back); color: var(--accent); border-color: var(--accent); }
+.choice[aria-pressed="true"]::before { background: var(--accent); box-shadow: inset 0 0 0 2px var(--accent-back); }
+.card-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-top: .8rem; }
+.diff { margin-top: .9rem; border-top: 1px solid var(--line); }
+.diff h3 { margin: .75rem 0 .25rem; font-size: 1rem; overflow-wrap: anywhere; }
+pre {
+  overflow: auto;
+  max-height: 24rem;
+  padding: .6rem 0;
+  margin: .6rem 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: .8rem;
+  line-height: 1.45;
+}
+pre span { display: block; width: max-content; min-width: 100%; padding: 0 .65rem; }
+pre .added { background: var(--green-back); color: var(--green); }
+pre .removed { background: var(--red-back); color: var(--red); }
+pre .range { color: var(--accent); }
+.empty { margin: 0; color: var(--subtle); }
+footer { position: fixed; bottom: 0; width: 100%; background: var(--surface); border-top: 1px solid var(--line); }
+footer .wrap { padding: .6rem 0 calc(.6rem + env(safe-area-inset-bottom)); justify-content: space-between; }
+footer p { margin: 0; font-weight: 650; }
+dialog { width: min(43rem, 100% - 1.5rem); max-height: 85vh; overflow: auto; padding: clamp(1rem, 3vw, 1.6rem); background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; }
+dialog::backdrop { background: rgb(9 17 35 / 65%); }
+dialog h2 { line-height: 1.2; margin-top: 0; }
+dialog h3 { margin-top: 1rem; margin-bottom: .25rem; overflow-wrap: anywhere; }
+dialog ul { padding-left: 1.3rem; margin-top: .25rem; margin-bottom: .8rem; }
+dialog p, dialog li { overflow-wrap: anywhere; }
+dialog .row { justify-content: flex-end; margin-top: 1rem; }
+.error { color: var(--red); }
+#notice { color: var(--red); margin: .5rem 0 0; }
+#notice:empty, .error:empty { display: none; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .9rem; }
+th, td { text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); padding: .65rem .4rem; overflow-wrap: anywhere; }
+thead th { color: var(--subtle); }
+td p { margin: 0; }
+td > .plugin-detail + .plugin-detail { margin-top: .6rem; }
+table .note { display: block; }
+.share { display: flex; gap: .35rem; align-items: flex-start; margin-top: .4rem; }
+.share input { margin: .2rem 0 0; flex: 0 0 1rem; width: 1rem; height: 1rem; accent-color: var(--accent); }
+.panel > .row { margin-top: .85rem; }
+.managed { margin: 0; }
+.managed div { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.managed dd { margin: 0; white-space: nowrap; color: var(--subtle); }
+@media (max-width: 40rem) {
+  body { padding-bottom: calc(8rem + env(safe-area-inset-bottom)); }
+  .versions { grid-template-columns: 1fr; }
+  .recommendation:empty { display: none; }
+  thead { position: absolute; overflow: hidden; clip-path: inset(50%); width: 1px; height: 1px; }
+  table, tbody, tbody th { display: block; }
+  tbody tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  tbody th { grid-column: 1 / -1; padding-top: 1rem; border: 0; }
+  table td { display: block; }
+  td::before { content: attr(data-label); display: block; color: var(--subtle); font-size: .78rem; margin-bottom: .25rem; }
+}
+@media (max-width: 27rem) {
+  footer .wrap { gap: .25rem; }
+  footer .row { gap: .25rem; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>Review your agent settings</h1>
+    <p id="counts"></p>
+    <nav aria-label="Settings filters">
+      <button type="button" data-filter="differ" aria-pressed="true">Differ</button>
+      <button type="button" data-filter="missing" aria-pressed="false">Only in one tool</button>
+      <button type="button" data-filter="same" aria-pressed="false">The same</button>
+      <button type="button" data-filter="plugins" aria-pressed="false">Plugins</button>
+      <button type="button" data-filter="managed" aria-pressed="false">Kept in step automatically</button>
+    </nav>
+  </div>
+</header>
+<main class="wrap" id="content"></main>
+<footer id="footer">
+  <div class="wrap row">
+    <div>
+      <p id="chosen" role="status"></p>
+      <p id="notice" role="alert"></p>
+    </div>
+    <div class="row">
+      <button type="button" class="quiet" id="quit">Done</button>
+      <button type="button" class="primary" id="preview">Review changes</button>
+    </div>
+  </div>
+</footer>
+<dialog id="confirmation" aria-labelledby="dialog-title"></dialog>
+<script type="application/json" id="scan">__SCAN__</script>
+<script nonce="__NONCE__">
+"use strict";
+let scan = JSON.parse(document.querySelector("#scan").textContent);
+let filter = "differ";
+let choices;
+let pluginDraft = new Map();
+let pluginFeedback = "";
+let busy = false;
+const content = document.querySelector("#content");
+const dialog = document.querySelector("#confirmation");
+const preview = document.querySelector("#preview");
+const quit = document.querySelector("#quit");
+const notice = document.querySelector("#notice");
+const filters = Array.from(document.querySelectorAll("[data-filter]"));
+const kindLabels = {
+  instructions: ["¶", "Instructions"],
+  rule: ["≡", "Rule"],
+  roles: ["⇄", "Model roles"],
+  skill: ["✦", "Skill"],
+  mcp: ["⌘", "MCP server"],
+};
+const statusLabels = {differ: "Differ", missing: "Only in one tool", same: "The same"};
+const dateLabels = {
+  yours: "Edited", "edited-copy": "Edited", copy: "Copied", package: "Updated",
+  plugin: "Plugin updated", settings: "Settings file changed",
+};
+const relativeDate = new Intl.RelativeTimeFormat(undefined, {numeric: "auto"});
+const exactDate = new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "long"});
+const joinedTools = new Intl.ListFormat(undefined, {style: "long", type: "conjunction"});
+
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (className) node.className = className;
+  return node;
+}
+
+function button(label, action, className) {
+  const node = el("button", label, className);
+  node.type = "button";
+  node.addEventListener("click", action);
+  return node;
+}
+
+function toolNames(tools) {
+  return joinedTools.format(tools.map(tool => scan.tools[tool]));
+}
+
+function relativeTime(timestamp) {
+  const seconds = timestamp - Date.now() / 1000;
+  for (const [unit, size] of [["day", 86400], ["hour", 3600], ["minute", 60]]) {
+    if (Math.abs(seconds) >= size) return relativeDate.format(Math.round(seconds / size), unit);
+  }
+  return "just now";
+}
+
+function resetChoices() {
+  choices = new Map(scan.groups.map(group => [group.key, group.status === "differ" ? group.winner : "leave"]));
+}
+
+function updateFooter() {
+  const count = Array.from(choices.values()).filter(choice => choice !== "leave").length;
+  document.querySelector("#chosen").textContent = `${count} ${count === 1 ? "change" : "changes"} chosen`;
+  preview.disabled = busy || count === 0;
+  quit.disabled = busy;
+}
+
+function showCounts() {
+  const counts = {differ: 0, missing: 0, same: 0};
+  for (const group of scan.groups) counts[group.status]++;
+  document.querySelector("#counts").textContent =
+    `${counts.differ} differ · ${counts.missing} only in one tool · ${counts.same} the same`;
+}
+
+function versionColumn(group, version, longest, choiceButton) {
+  const node = el("div", undefined, "version");
+  const ribbon = el("div", undefined, "recommendation");
+  const isWinner = version.id === group.winner;
+  if (isWinner) ribbon.append(el("span", "Recommended", "ribbon"));
+  node.append(ribbon);
+  const tools = el("div", undefined, "badges");
+  for (const tool of version.tools) tools.append(el("span", scan.tools[tool], `chip ${tool}`));
+  node.append(tools);
+
+  const provenance = el("div", undefined, "row");
+  provenance.append(el("span", version.label, `chip ${version.origin}`));
+  const date = new Date(version.modified * 1000);
+  const time = el("time", `${dateLabels[version.origin]} ${relativeTime(version.modified)}`, "date");
+  time.dateTime = date.toISOString();
+  time.title = exactDate.format(date);
+  provenance.append(time);
+  node.append(provenance);
+
+  const lengthText = `${version.lines} ${version.lines === 1 ? "line" : "lines"}`;
+  const length = el("div", lengthText, "length");
+  const meter = el("progress");
+  meter.max = Math.max(1, longest);
+  meter.value = version.lines;
+  meter.setAttribute("aria-label", lengthText);
+  length.append(meter);
+  node.append(length, el("code", version.path, "path"));
+  if (version.note) node.append(el("p", version.note, "note"));
+  for (const caution of version.cautions) node.append(el("p", caution, "caution"));
+  if (isWinner && group.reasons.length) {
+    const why = el("ul", undefined, "reason");
+    why.append(...group.reasons.map(reason => el("li", reason)));
+    node.append(why);
+  }
+  const label = group.status === "missing" ? `Copy to ${toolNames(group.missing)}` : "Keep this one";
+  const choose = choiceButton(label, version.id);
+  choose.setAttribute("aria-label", `${label} · ${toolNames(version.tools)} · ${version.path}`);
+  node.append(choose);
+  return node;
+}
+
+function diffView(group, panel) {
+  const recommended = group.versions.find(version => version.id === group.winner);
+  for (const version of group.versions) {
+    if (version.id === group.winner) continue;
+    const heading = `${toolNames(version.tools)} · ${version.path}`;
+    panel.append(el("h3", heading));
+    if (!version.diff.length) {
+      const differs = group.snapshot.versions[version.id].digest !== group.snapshot.versions[recommended.id].digest;
+      const message = group.kind === "skill" && differs
+        ? "The skill folder differs outside SKILL.md."
+        : "No text differences from the recommended version.";
+      panel.append(el("p", message, "note"));
+      continue;
+    }
+    const code = el("pre");
+    code.tabIndex = 0;
+    code.setAttribute("aria-label", `Differences for ${heading}`);
+    const appendLines = lines => {
+      const rows = document.createDocumentFragment();
+      for (const line of lines) {
+        let kind = "";
+        if (line.startsWith("@@")) kind = "range";
+        if (line.startsWith("+")) kind = "added";
+        if (line.startsWith("-")) kind = "removed";
+        rows.append(el("span", line || " ", kind));
+      }
+      code.append(rows);
+    };
+    appendLines(version.diff.slice(0, 400));
+    panel.append(code);
+    if (version.diff.length > 400) {
+      const show = button(`Show all ${version.diff.length} lines`, () => {
+        appendLines(version.diff.slice(400));
+        code.focus();
+        show.remove();
+      });
+      panel.append(show);
+    }
+  }
+}
+
+function settingCard(group, index) {
+  const [icon, label] = kindLabels[group.kind];
+  const card = el("section", undefined, "card");
+  const title = el("h2", group.name);
+  title.id = `setting-${index}`;
+  card.setAttribute("aria-labelledby", title.id);
+  const meta = el("div", undefined, "card-meta");
+  const kind = el("span", undefined, "kind");
+  const glyph = el("span", icon);
+  glyph.setAttribute("aria-hidden", "true");
+  kind.append(glyph, label);
+  meta.append(kind, el("span", statusLabels[group.status], `chip ${group.status}`));
+  if (group.matched_by) meta.append(el("span", group.matched_by));
+  card.append(meta, title);
+
+  const buttons = new Map();
+  const choiceButton = (label, id) => {
+    const choice = button(label, () => {
+      if (busy) return;
+      choices.set(group.key, id);
+      for (const [value, option] of buttons) option.setAttribute("aria-pressed", value === id);
+      updateFooter();
+    }, "choice");
+    choice.setAttribute("aria-pressed", choices.get(group.key) === id);
+    buttons.set(id, choice);
+    return choice;
+  };
+  const versions = el("div", undefined, "versions");
+  const longest = Math.max(...group.versions.map(version => version.lines));
+  for (const version of group.versions) versions.append(versionColumn(group, version, longest, choiceButton));
+  card.append(versions);
+
+  const actions = el("div", undefined, "card-actions");
+  actions.append(choiceButton("Leave as it is", "leave"));
+  card.append(actions);
+  if (group.versions.length > 1) {
+    const diffs = el("div", undefined, "diff");
+    diffs.hidden = true;
+    diffs.id = `diff-${index}`;
+    const toggle = button("Show differences", () => {
+      if (!diffs.hasChildNodes()) diffView(group, diffs);
+      diffs.hidden = !diffs.hidden;
+      toggle.setAttribute("aria-expanded", !diffs.hidden);
+      toggle.textContent = diffs.hidden ? "Show differences" : "Hide differences";
+    }, "quiet");
+    toggle.setAttribute("aria-controls", diffs.id);
+    toggle.setAttribute("aria-expanded", "false");
+    actions.append(toggle);
+    card.append(diffs);
+  }
+  return card;
+}
+
+function showPlugins() {
+  const panel = el("section", undefined, "panel");
+  panel.append(el("h2", "Plugins"));
+  const entries = Object.entries(scan.plugins);
+  if (!entries.length) {
+    panel.append(el("p", "No plugins found.", "empty"));
+    content.append(panel);
+    return;
+  }
+  const table = el("table");
+  table.setAttribute("role", "table");
+  const head = el("thead");
+  const headings = el("tr");
+  const tools = Object.entries(scan.tools);
+  for (const title of ["Plugin", ...tools.map(([, name]) => name)]) {
+    const heading = el("th", title);
+    heading.scope = "col";
+    headings.append(heading);
+  }
+  head.append(headings);
+  const body = el("tbody");
+  body.setAttribute("role", "rowgroup");
+  const result = el("span", pluginFeedback, "note");
+  result.setAttribute("role", "status");
+  result.tabIndex = -1;
+  const save = button("Save plugin sharing", () => savePlugins(save, result), "primary");
+  save.disabled = !pluginDraft.size || busy;
+  for (const [name, installed] of entries) {
+    const row = el("tr");
+    row.setAttribute("role", "row");
+    const title = el("th", name);
+    title.setAttribute("role", "rowheader");
+    title.scope = "row";
+    row.append(title);
+    for (const [tool, label] of tools) {
+      const cell = el("td");
+      cell.setAttribute("role", "cell");
+      cell.dataset.label = label;
+      const plugins = installed[tool] || [];
+      if (!plugins.length) cell.append(el("p", "Absent", "note"));
+      for (const plugin of plugins) {
+        const detail = el("div", undefined, "plugin-detail");
+        const status = tool === "cursor" ? "Installed" : (plugin.enabled ? "Enabled" : "Disabled");
+        detail.append(el("p", status));
+        if (plugin.id !== name) detail.append(el("small", plugin.id, "note"));
+        if (tool === "claude" && plugin.skills > 0) {
+          const checkbox = el("input");
+          checkbox.type = "checkbox";
+          checkbox.setAttribute("role", "switch");
+          checkbox.checked = pluginDraft.get(plugin.id) ?? plugin.shared;
+          checkbox.onchange = () => {
+            if (checkbox.checked === plugin.shared) pluginDraft.delete(plugin.id);
+            else pluginDraft.set(plugin.id, checkbox.checked);
+            save.disabled = !pluginDraft.size || busy;
+            pluginFeedback = result.textContent = "";
+          };
+          const share = el("label", undefined, "share");
+          const noun = plugin.skills === 1 ? "skill" : "skills";
+          share.append(checkbox, `Share its ${plugin.skills} ${noun} with ${toolNames(["codex", "cursor"])}`);
+          detail.append(share);
+        }
+        cell.append(detail);
+      }
+      row.append(cell);
+    }
+    body.append(row);
+  }
+  table.append(head, body);
+  const actions = el("div", undefined, "row");
+  actions.append(save, result);
+  panel.append(table, actions);
+  content.append(panel);
+}
+
+function showManaged() {
+  const panel = el("section", undefined, "panel");
+  panel.append(el("h2", "Kept in step automatically"));
+  const entries = Object.entries(scan.managed);
+  if (!entries.length) panel.append(el("p", "No package skills or agents found.", "empty"));
+  else {
+    panel.append(el("p", "Agent-sync keeps these skills and agents in step every day."));
+    const stats = el("dl", undefined, "managed");
+    for (const [name, count] of entries) {
+      const item = el("div");
+      item.append(el("dt", name), el("dd", `${count} ${count === 1 ? "item" : "items"}`));
+      stats.append(item);
+    }
+    panel.append(stats);
+  }
+  content.append(panel);
+}
+
+function render() {
+  content.replaceChildren();
+  if (filter === "plugins") showPlugins();
+  else if (filter === "managed") showManaged();
+  else {
+    const groups = scan.groups.filter(group => group.status === filter);
+    if (!groups.length) {
+      const empty = {differ: "No settings differ between tools.", missing: "No settings are missing from a tool.",
+        same: "No settings match across tools."};
+      content.append(el("p", empty[filter], "empty panel"));
+    }
+    groups.forEach((group, index) => content.append(settingCard(group, index)));
+  }
+  showCounts();
+  updateFooter();
+}
+
+async function post(route, data) {
+  const response = await fetch(route, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(data),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error);
+  return result;
+}
+
+async function savePlugins(save, result) {
+  const selected = new Set(scan.plugin_skills);
+  for (const [name, installed] of Object.entries(scan.plugins)) {
+    const options = (installed.claude || []).filter(plugin => plugin.skills > 0);
+    if (!options.some(plugin => pluginDraft.has(plugin.id))) continue;
+    selected.delete(name);
+    for (const plugin of options) {
+      if (pluginDraft.get(plugin.id) ?? plugin.shared) selected.add(plugin.id);
+      else selected.delete(plugin.id);
+    }
+  }
+  busy = true;
+  save.disabled = true;
+  pluginFeedback = result.textContent = "";
+  const switches = Array.from(content.querySelectorAll("[role='switch']"));
+  switches.forEach(node => { node.disabled = true; });
+  updateFooter();
+  try {
+    const {scan: updated} = await post("plugins", {ids: [...selected]});
+    scan.plugins = updated.plugins;
+    scan.plugin_skills = updated.plugin_skills;
+    pluginDraft.clear();
+    pluginFeedback = "Plugin sharing saved.";
+  } catch (error) {
+    pluginFeedback = result.textContent = error.message;
+  } finally {
+    busy = false;
+    if (pluginDraft.size) {
+      save.disabled = false;
+      switches.forEach(node => { node.disabled = false; });
+      updateFooter();
+    } else {
+      render();
+      content.querySelector("[role='status']")?.focus();
+    }
+  }
+}
+
+function titleDialog(text) {
+  const title = el("h2", text);
+  title.id = "dialog-title";
+  dialog.replaceChildren(title);
+}
+
+async function confirmChanges() {
+  const selected = Array.from(choices).filter(([, choice]) => choice !== "leave");
+  const keys = new Set(selected.map(([key]) => key));
+  const data = {
+    choices: Object.fromEntries(selected),
+    digests: Object.fromEntries(scan.groups.filter(group => keys.has(group.key))
+      .map(group => [group.key, group.snapshot])),
+  };
+  busy = true;
+  notice.textContent = "";
+  updateFooter();
+  try {
+    const plan = await post("plan", data);
+    titleDialog("Review changes");
+    for (const group of scan.groups) {
+      const steps = plan.steps.filter(step => step.key === group.key);
+      if (!steps.length) continue;
+      const list = el("ul");
+      for (const step of steps) {
+        const verb = step.action === "create" ? "Create" : "Replace";
+        const item = el("li", `${verb} for ${toolNames(step.tools)} `);
+        item.append(el("code", step.path, "path"));
+        list.append(item);
+      }
+      dialog.append(el("h3", group.name), list);
+    }
+    const message = plan.steps.length
+      ? "Agent-sync will save existing files in a timestamped folder under "
+      : "These choices require no file changes.";
+    const backups = el("p", message);
+    if (plan.steps.length) backups.append(el("code", plan.backup, "path"), ".");
+    const error = el("p", undefined, "error");
+    error.setAttribute("role", "alert");
+    const actions = el("div", undefined, "row");
+    const back = button("Back", () => dialog.close());
+    const apply = button("Apply", () => applyChanges(data, apply, back, error), "primary");
+    apply.disabled = !plan.steps.length;
+    actions.append(back, apply);
+    dialog.append(backups, error, actions);
+    dialog.showModal();
+  } catch (error) {
+    notice.textContent = error.message;
+  } finally {
+    busy = false;
+    updateFooter();
+  }
+}
+
+async function applyChanges(data, apply, back, alert) {
+  busy = true;
+  apply.disabled = back.disabled = true;
+  alert.textContent = "";
+  try {
+    const result = await post("apply", data);
+    if (result.scan) {
+      scan = result.scan;
+      pluginDraft.clear();
+      resetChoices();
+      render();
+    }
+    titleDialog(result.error ? "Review could not finish" : "Changes applied");
+    if (result.error) dialog.append(el("p", result.error, "error"));
+    if (result.changes?.length) {
+      const list = el("ul");
+      list.append(...result.changes.map(line => el("li", line)));
+      dialog.append(list);
+    }
+    if (result.backup) {
+      const backups = el("p", "Backup folder ");
+      backups.append(el("code", result.backup, "path"));
+      dialog.append(backups);
+    }
+    const actions = el("div", undefined, "row");
+    const done = button("Done", () => finish(done), "primary");
+    actions.append(button("Back", () => dialog.close()), done);
+    dialog.append(actions);
+    done.focus();
+  } catch (error) {
+    alert.textContent = error.message;
+    apply.disabled = back.disabled = false;
+  } finally {
+    busy = false;
+    updateFooter();
+  }
+}
+
+async function finish(trigger) {
+  busy = true;
+  updateFooter();
+  trigger.disabled = true;
+  try {
+    await post("quit", {});
+    if (dialog.open) dialog.close();
+    for (const navButton of filters) navButton.disabled = true;
+    document.querySelector("#footer").hidden = true;
+    content.replaceChildren(el("p", "You can close this window.", "panel"));
+    content.tabIndex = -1;
+    content.focus();
+  } catch (error) {
+    const alert = el("p", error.message, "error");
+    alert.setAttribute("role", "alert");
+    if (dialog.open) dialog.append(alert);
+    else notice.textContent = error.message;
+    trigger.disabled = false;
+  } finally {
+    busy = false;
+    updateFooter();
+  }
+}
+
+dialog.addEventListener("cancel", event => {
+  if (busy) event.preventDefault();
+});
+for (const tab of filters) {
+  tab.addEventListener("click", () => {
+    if (busy) return;
+    filter = tab.dataset.filter;
+    for (const option of filters) option.setAttribute("aria-pressed", option === tab);
+    render();
+  });
+}
+preview.addEventListener("click", confirmChanges);
+quit.addEventListener("click", () => finish(quit));
+resetChoices();
+render();
+</script>
+</body>
+</html>

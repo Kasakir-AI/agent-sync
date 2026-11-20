@@ -9,11 +9,10 @@ approvals or tool settings), and nothing is ever deleted.
 from __future__ import annotations
 
 import json
-import re
 import tomllib
 from pathlib import Path
 
-from .tomledit import basic_string
+from .tomledit import basic_string, key_text
 
 
 def read(home: Path, tool: str) -> dict[str, dict]:
@@ -27,7 +26,8 @@ def read(home: Path, tool: str) -> dict[str, dict]:
     if not p.exists():
         return {}
     servers = tomllib.loads(p.read_text()).get("mcp_servers") or {}
-    return {k: {kk: vv for kk, vv in v.items() if kk in ("command", "args", "env", "url")} for k, v in servers.items()}
+    return {name: {key: value for key, value in entry.items() if key in ("command", "args", "env", "url")}
+            for name, entry in servers.items() if isinstance(entry, dict)}
 
 
 def portable(server: dict) -> dict | None:
@@ -51,8 +51,7 @@ def toml_value(v) -> str:
 
 
 def codex_block(name: str, s: dict) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
-        raise ValueError(f"unsupported MCP server name for Codex: {name!r}")
+    name = key_text(name)
     lines = [f"\n[mcp_servers.{name}]"]
     for key in ("command", "args", "url"):
         if key in s:

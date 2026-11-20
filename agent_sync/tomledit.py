@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import date, time
 
 # One part of a key: bare (codex), "basic" (may have \ escapes) or 'literal' (no escapes). TOML allows all three
 # in table headers and keys, so all three must be recognized, or a table would be missed and deleted with its neighbor.
@@ -39,11 +40,6 @@ def key_name(part: str) -> str:
     return part
 
 
-def header_name(text: str) -> str:
-    """The plain name of a table header such as 'cli_commands' or "agent_models" (dotted parts joined by '.')."""
-    return ".".join(key_name(p) for p in PARTS.findall(text))
-
-
 def value_text(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -53,6 +49,10 @@ def value_text(value) -> str:
         return basic_string(value)
     if isinstance(value, list):
         return "[" + ", ".join(value_text(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{key_text(key)} = {value_text(val)}" for key, val in value.items()) + " }"
+    if isinstance(value, date | time):
+        return value.isoformat()
     raise TypeError(f"can't write {type(value).__name__} to TOML")
 
 
@@ -94,11 +94,12 @@ class Section:
     start: int              # where its header line starts (0 for the top)
     body: int               # where the lines after the header start
     end: int
+    parts: tuple[str, ...]
     keys: list[tuple[str, int, int, int]]   # (key, line start, value start, value end)
 
 
 def sections(text: str) -> list[Section]:
-    out = [Section(None, False, 0, 0, len(text), [])]
+    out = [Section(None, False, 0, 0, len(text), (), [])]
     i = 0
     while i < len(text):
         eol = text.find("\n", i)
@@ -108,7 +109,8 @@ def sections(text: str) -> list[Section]:
         k = KEY.match(text, i)
         if m:
             out[-1].end = i
-            out.append(Section(header_name(m.group(2)), bool(m.group(1)), i, min(eol + 1, len(text)), len(text), []))
+            parts = tuple(key_name(part) for part in PARTS.findall(m.group(2)))
+            out.append(Section(".".join(parts), bool(m.group(1)), i, min(eol + 1, len(text)), len(text), parts, []))
         elif k and k.start() == i:
             ve = value_end(text, k.end())
             out[-1].keys.append((key_name(k.group(1)),
@@ -119,8 +121,17 @@ def sections(text: str) -> list[Section]:
     return out
 
 
-def section(text: str, table: str | None) -> Section | None:
-    return next((s for s in sections(text) if s.name == table and not s.array), None)
+Table = str | tuple[str, ...]
+
+
+def section(text: str, table: Table | None) -> Section | None:
+    return next((s for s in sections(text)
+                 if not s.array and (s.parts == table if isinstance(table, tuple) else s.name == table)), None)
+
+
+def has_value(text: str, table: Table | None, key: str) -> bool:
+    s = section(text, table)
+    return bool(s and any(entry[0] == key for entry in s.keys))
 
 
 def append_block(text: str, block: str) -> str:
@@ -129,12 +140,13 @@ def append_block(text: str, block: str) -> str:
     return text.rstrip("\n") + "\n\n" + block
 
 
-def set_value(text: str, table: str | None, key: str, value) -> str:
+def set_value(text: str, table: Table | None, key: str, value) -> str:
     """`key = value` at the top (table None) or in [table]: the old value replaced, or a new line added."""
     line = f"{key_text(key)} = {value_text(value)}"
     s = section(text, table)
     if s is None:
-        return append_block(text, f"[{table}]\n{line}\n")
+        heading = ".".join(map(key_text, table)) if isinstance(table, tuple) else table
+        return append_block(text, f"[{heading}]\n{line}\n")
     hit = next((k for k in s.keys if k[0] == key), None)
     if hit:
         return text[:hit[1]] + line + text[hit[3]:]
@@ -159,7 +171,7 @@ def set_value(text: str, table: str | None, key: str, value) -> str:
     return before + line + "\n" + after
 
 
-def remove_value(text: str, table: str | None, key: str) -> str:
+def remove_value(text: str, table: Table | None, key: str) -> str:
     s = section(text, table)
     hit = next((k for k in s.keys if k[0] == key), None) if s else None
     if not hit:
@@ -168,7 +180,7 @@ def remove_value(text: str, table: str | None, key: str) -> str:
     return text[:hit[1]] + (text[eol + 1:] if eol >= 0 else "")
 
 
-def set_table(text: str, table: str, values: dict) -> str:
+def set_table(text: str, table: Table, values: dict) -> str:
     """Make [table] hold exactly `values`: changed keys replaced in place, removed keys deleted, new ones added.
     An empty `values` removes the table's settings (and the [table] line when nothing else is under it)."""
     s = section(text, table)
@@ -178,8 +190,9 @@ def set_table(text: str, table: str, values: dict) -> str:
     for key, value in values.items():
         text = set_value(text, table, key, value)
     s = section(text, table)
-    if s and not values and not text[s.body:s.end].strip():
-        text = text[:s.start].rstrip("\n") + "\n" + ("\n" + text[s.end:].lstrip("\n") if text[s.end:].strip() else "")
+    if s and not values and all(not line.strip() or line.lstrip().startswith("#")
+                                for line in text[s.body:s.end].splitlines()):
+        text = text[:s.start] + text[s.body:]
     return text
 
 

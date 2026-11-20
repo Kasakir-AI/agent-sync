@@ -28,8 +28,8 @@ agent-sync makes the other two match it, once a day:
 - **agent-sync itself** is updated the way you installed it: `brew upgrade` for the Homebrew formula,
   `pipx upgrade`, or a fresh install from GitHub for a pip install from the repository.
 - **A double-click launcher** (macOS, optional): "Agent Upkeep" on the Desktop runs the upkeep with every step on
-  screen, then lets you press `s` to change the settings. Every run puts it back if it is missing and rewrites it
-  when a new version of agent-sync changes it.
+  screen, then lets you press `r` to review differences or `s` to change the settings. Every run puts it back if
+  it is missing and rewrites it when a new version of agent-sync changes it.
 - **A small log** with a timestamp on every line keeps the last 7 days, and warns when a model you listed in
   `warn_models` (one you have no subscription for, say) shows up in any tool's settings.
 
@@ -49,6 +49,7 @@ folder on your PATH.
 brew install kasakir-ai/tap/agent-sync      # or: pipx install git+https://github.com/Kasakir-AI/agent-sync.git
 agent-sync setup                  # install whatever is missing: git, Node, Claude Code, Codex, Cursor Agent
 agent-sync config                 # change the settings by answering questions (optional)
+agent-sync review                 # compare settings across the tools and choose which versions to keep
 agent-sync run --dry-run          # see what it would change first
 agent-sync run --force --echo     # first run, with every step on screen
 agent-sync install --launcher     # schedule it (hourly + at login, works once a day); --launcher adds
@@ -71,6 +72,26 @@ and changes nothing: no log, no state, no package cache. `agent-sync status` sho
 location and the installed CLI versions, and which Claude Code plugins have skills you could offer to Codex and
 Cursor. `agent-sync uninstall` removes the schedule and the launcher (and switches the launcher setting off, so
 the next run doesn't bring it back).
+
+## Review differences
+
+Run `agent-sync review` to open a local page. Compare global instructions, rule files, pstack model roles, your
+skills, and MCP servers side by side. You can also see which plugins are installed, choose which plugin skills to
+share, and see what packages keep up to date automatically. The upkeep log points you to the page when settings
+differ or a tool is missing a copy.
+
+Each version shows its tools, path, date, length, and origin. The origin label identifies your edits, copies
+agent-sync made, copies you edited, package updates, plugin skills, and entries from a tool's settings file.
+A copy can look newer because agent-sync rewrote it. Recommendations consider origin first and use the date to
+compare edits.
+
+Choose a version to keep across the tools, or leave the setting as it is. Select **Review changes** to see which
+files your choices would change before you apply them. The review saves copies of existing files and folders it
+replaces under `~/.local/state/agent-sync/backups/review-YYYYmmdd-HHMMSS/`. On Linux, the backups follow
+`XDG_STATE_HOME` when it is set.
+
+- `agent-sync review --list` prints the comparison and recommendations in your terminal.
+- `agent-sync review --no-open` prints a local URL you can open yourself.
 
 ## Configure
 
@@ -136,6 +157,8 @@ go in `[[extra_steps]]`, models you never want in `warn_models`. Then:
 3. `agent-sync run --force --echo`, then `agent-sync install --launcher`.
 
 ## What it changes
+
+The review writes only the settings you pick and apply.
 
 | tool | files |
 | --- | --- |

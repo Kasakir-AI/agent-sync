@@ -100,6 +100,8 @@ def launcher(path: str | None = None) -> str:
     start = " ".join(shlex.quote(a) for a in cmd)
     if pythonpath:
         start = f"PYTHONPATH={shlex.quote(pythonpath)} {start}"
+    prompt = ("Press r to review differences between the tools, s to change the settings, "
+              "or any other key to close this window. ")
     return f"""#!/bin/bash
 {LAUNCHER_MARK}
 # Written by agent-sync {__version__}; agent-sync rewrites this file when a new version changes it.
@@ -110,11 +112,12 @@ status=$?
 echo
 [ "$status" -eq 0 ] && echo "Finished." || echo "Finished with problems (exit $status); see the lines above."
 echo
-read -n 1 -s -r -p "Press s to change the settings, or any other key to close this window. " key
+read -n 1 -s -r -p "{prompt}" key
 echo
-if [ "$key" = s ] || [ "$key" = S ]; then
-    {start} config
-fi
+case "$key" in
+    r|R) {start} review ;;
+    s|S) {start} config ;;
+esac
 """
 
 

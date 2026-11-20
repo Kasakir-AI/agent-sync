@@ -11,6 +11,8 @@
     agent-sync setup [--dry-run] [--yes] install what is missing: Homebrew, git, Node, Claude Code, Codex, Cursor
     agent-sync config                   change the settings by answering questions (also: agent-sync settings)
     agent-sync status                   last run, log location, installed versions
+    agent-sync review [--no-open]        compare settings and choose which versions to keep in a local page
+    agent-sync review --list             print the comparison and recommendations in the terminal
 """
 from __future__ import annotations
 
@@ -21,10 +23,14 @@ import shutil
 import tempfile
 import time
 import urllib.request
+from collections import Counter
+from contextlib import ExitStack
+from datetime import datetime
 from pathlib import Path
 
-from . import __version__, agents, checks, instructions, mcp, roles, schedule, skills, tools
-from .config import load, save_setting
+from . import __version__, agents, checks, instructions, mcp, review, roles, schedule, skills, tools
+from .config import Config, load, save_setting
+from .locking import run_lock
 from .log import Log
 
 DUE_HOURS = 20
@@ -40,23 +46,25 @@ def online() -> bool:
 
 def run(force: bool, echo: bool, dry: bool = False) -> int:
     cfg = load()
-    log = Log(cfg.log_file, echo=echo or dry, write=not dry)
-    # A dry run works in a throwaway folder, so it leaves no state, lock or package cache behind.
-    work = Path(tempfile.mkdtemp(prefix="agent-sync-dry.")) if dry else cfg.state_dir
-    if dry:
-        os.environ["npm_config_cache"] = str(work / "npm-cache")   # npx keeps its downloads there too
-    stamp, lock = cfg.state_dir / "last-run", work / "lock"
-    work.mkdir(parents=True, exist_ok=True)
+    stamp = cfg.state_dir / "last-run"
     if not (force or dry) and stamp.exists() and time.time() - stamp.stat().st_mtime < DUE_HOURS * 3600:
         return 0
-    try:
-        lock.mkdir()
-    except FileExistsError:
-        if time.time() - lock.stat().st_mtime < 7200:
+    with ExitStack() as stack:
+        work = cfg.state_dir
+        if dry:
+            # Keep both the package checkouts and npm downloads out of the real state directories.
+            work = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="agent-sync-dry.")))
+            cache = os.environ.get("npm_config_cache")
+            if cache is None:
+                stack.callback(os.environ.pop, "npm_config_cache", None)
+            else:
+                stack.callback(os.environ.__setitem__, "npm_config_cache", cache)
+            os.environ["npm_config_cache"] = str(work / "npm-cache")
+        if not stack.enter_context(run_lock(work / "lock")):
             if echo:
                 print("another agent-sync run is in progress")
             return 0
-    try:
+        log = Log(cfg.log_file, echo=echo or dry, write=not dry)
         if not dry:
             log.prune(cfg.log_days)
         if not online():
@@ -117,6 +125,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 log("ok", "global instructions mirrored")
             except OSError as e:
                 log("FAIL", f"global instructions: {e}")
+        log_review(cfg, log)
         if cfg.update_plugins:
             tools.update_plugins(log, dry, cfg.home)
         if cfg.update_clis:
@@ -135,13 +144,41 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         stamp.touch()
         log("done", f"agent-sync finished, {log.problems} problem(s)")
         return 1 if log.problems else 0
-    finally:
-        try:
-            lock.rmdir()
-        except OSError:
-            pass
-        if dry:
-            shutil.rmtree(work, ignore_errors=True)
+
+
+def log_review(cfg: Config, log: Log) -> None:
+    try:
+        counts = Counter(group.status for group in review.scan(cfg.home, cfg).groups)
+    except Exception as e:
+        log("WARN", f"could not compare settings for review: {e}")
+        return
+    differ, missing = counts["differ"], counts["missing"]
+    if differ or missing:
+        different = "1 setting differs" if differ == 1 else f"{differ} settings differ"
+        absent = "1 is" if missing == 1 else f"{missing} are"
+        log("info", f'{different} between the tools and {absent} only in one; run "agent-sync review" to choose')
+
+
+def review_settings(list_only: bool, no_open: bool) -> int:
+    cfg = load()
+    if not list_only:
+        from . import reviewpage
+        return reviewpage.serve(cfg.home, cfg, open_browser=not no_open)
+    for group in review.scan(cfg.home, cfg).groups:
+        winner, reasons = review.recommend(group, cfg.source)
+        print(f"{group.name} ({group.kind}, {group.status})")
+        for version in group.versions:
+            names = ", ".join(review.TOOL_LABELS[tool] for tool in version.tools)
+            date = datetime.fromtimestamp(version.modified).strftime("%Y-%m-%d %H:%M:%S")
+            path = version.path
+            location = f"~/{path.relative_to(cfg.home)}" if path.is_relative_to(cfg.home) else str(path)
+            recommended = " [Recommended]" if version == winner else ""
+            length = "1 line" if version.lines == 1 else f"{version.lines} lines"
+            print(f"  {names} | {review.ORIGIN_LABELS[version.origin]} | {date} | {length} | {location}{recommended}")
+        for reason in reasons:
+            print(f"  - {reason}")
+        print()
+    return 0
 
 
 def install(launcher: bool) -> int:
@@ -213,9 +250,14 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--yes", action="store_true", help="don't ask before installing")
     sub.add_parser("config", aliases=["settings"], help="change the settings by answering questions")
     sub.add_parser("status", help="show the last run and versions")
+    review_parser = sub.add_parser("review", help="compare settings and choose which versions to keep")
+    review_parser.add_argument("--list", action="store_true", help="print the comparison and recommendations")
+    review_parser.add_argument("--no-open", action="store_true", help="print the page URL without opening the browser")
     a = ap.parse_args(argv)
     if a.cmd == "run":
         return run(a.force, a.echo, a.dry_run)
+    if a.cmd == "review":
+        return review_settings(a.list, a.no_open)
     if a.cmd == "setup":
         from . import setup
         return setup.run(load(), a.dry_run, a.yes)
