@@ -42,6 +42,10 @@
 - [x] `agent-sync review`: compare settings across the tools, see where each version came from, and apply your
       choices with backups.
 
+0.5.1 (published 2026-11-20):
+
+- [x] No upkeep warning for skills made separately for each tool.
+
 Later:
 
 - Cursor as the source of global instructions (its User Rules live in the app's own database).

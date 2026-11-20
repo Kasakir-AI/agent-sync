@@ -488,6 +488,26 @@ def skill_marks(version: Version) -> list[tuple[str, str]]:
     return [(tool, label) for tool, label, test in SKILL_MARKS if test(front, body, version.path)]
 
 
+def tool_uses(versions: list[Version]) -> list[str]:
+    """For skill versions: each one that uses something only its own tool reads and the others lack, in words."""
+    marks = {version.id: skill_marks(version) for version in versions}
+    uses = []
+    for version in versions:
+        for tool in version.tools:
+            labels = [label for mark, label in marks[version.id] if mark == tool and any(
+                tool not in other.tools and (mark, label) not in marks[other.id] for other in versions)]
+            if labels:
+                uses.append(f"{tool_names(version.tools)}'s uses {joined(labels)} only {TOOL_LABELS[tool]} understands")
+    return uses
+
+
+def made_for_each_tool(home: Path, name: str, folders: list[tuple[tuple[str, ...], Path]]) -> bool:
+    """Whether skill folders of one name were made on purpose for their tools: the same, or each using something
+    only its own tool reads. Timing alone does not count here (a dotfiles checkout writes hand-made folders too)."""
+    versions = [skill_version(home, name, tools, path) for tools, path in folders]
+    return len({version.digest for version in versions}) == 1 or bool(tool_uses(versions))
+
+
 def tailored(group: Group, installers: Iterable[str] = ()) -> str:
     """Why a skill's versions look made on purpose for each tool (by a plugin or an installer), or "" when they don't.
     Only skills: hand-written files saved together (a dotfiles checkout, a restore) are not an installer's work."""
@@ -497,16 +517,7 @@ def tailored(group: Group, installers: Iterable[str] = ()) -> str:
     times = [version.modified for version in versions]
     together = (max(times) - min(times) <= 5
                 and all(version.origin not in {Origin.COPY, Origin.EDITED_COPY} for version in versions))
-    uses = []
-    if group.kind == "skill":
-        marks = {version.id: skill_marks(version) for version in versions}
-        for version in versions:
-            for tool in version.tools:
-                labels = [label for mark, label in marks[version.id] if mark == tool and any(
-                    tool not in other.tools and (mark, label) not in marks[other.id] for other in versions)]
-                if labels:
-                    uses.append(f"{tool_names(version.tools)}'s uses {joined(labels)} "
-                                f"only {TOOL_LABELS[tool]} understands")
+    uses = tool_uses(versions)
     if not together and not uses:
         return ""
     who = max((name for name in installers if group.name == name or group.name.startswith(name + "-")),

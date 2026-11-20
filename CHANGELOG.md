@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 (2026-11-20)
+
+- The upkeep no longer warns on every run about skills a plugin or installer made separately for each tool (for
+  example a Claude Code version using `allowed-tools` next to a Codex version with `agents/openai.yaml`), or about a
+  folder that is already the same. A folder you made by hand that differs is still reported.
+
 ## 0.5.0 (2026-11-20)
 
 New: `agent-sync review`, to see how your settings differ between the tools and choose what to keep.

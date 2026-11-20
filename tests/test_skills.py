@@ -183,3 +183,17 @@ def test_a_link_with_a_plugin_skill_name_is_left_alone(tmp_path):
         f"WARN  {shared / 'gone'} is a link agent-sync did not make; left alone",
         f"WARN  {shared / 'outline'} is a link agent-sync did not make; left alone"]
     assert (shared / "outline").is_symlink() and (shared / "gone").is_symlink()
+
+
+def test_a_version_an_installer_made_for_each_tool_is_left_alone_quietly(tmp_path):
+    claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    (claude / "inbox").mkdir(parents=True)
+    (claude / "inbox/SKILL.md").write_text("---\nname: inbox\nallowed-tools: Bash\n---\n!`inbox --open`\n")
+    (shared / "inbox/agents").mkdir(parents=True)
+    (shared / "inbox/SKILL.md").write_text("---\nname: inbox\n---\nRun `inbox --open`.\n")
+    (shared / "inbox/agents/openai.yaml").write_text("name: inbox\n")
+    make_skill(claude, "same")
+    make_skill(shared, "same")
+
+    assert skills.mirror(tmp_path, "claude") == []
+    assert "Run `inbox --open`." in (shared / "inbox/SKILL.md").read_text()

@@ -152,8 +152,10 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                     changes.append(f"WARN  {dest} is a link agent-sync did not make; left alone")
                 continue                                   # a link to the source is already the same folder
             if dest.exists() and not (dest / MARKER).exists():
-                changes.append(f"WARN  {dest} exists and is not a copy agent-sync made; left alone")
-                continue
+                from .review import made_for_each_tool  # review builds on this module, so it is imported here
+                if not made_for_each_tool(home, name, [(("claude",), src), (("codex", "cursor"), dest)]):
+                    changes.append(f"WARN  {dest} exists and is not a copy agent-sync made; left alone")
+                continue                                   # a tool's own version (an installer's): nothing to say
             if dest.exists() and in_source and not is_plugin_copy(dest):
                 changes.append(f"WARN  {dest} is a copy from an earlier source tool; left alone")
                 continue

@@ -36,7 +36,7 @@ agent-sync makes the other two match it, once a day:
 It runs hourly and at login but only does the work once every 20 hours, so a day the Mac was off is caught up
 soon after it starts.
 
-> Status: 0.5.0. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
+> Status: 0.5.1. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
 
 ## Install
 
