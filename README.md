@@ -208,6 +208,10 @@ Read [SECURITY.md](SECURITY.md). In short: skill packages and the `skills` CLI r
 permissions, so only add packages you trust, and pin `skills_cli` if you don't want new releases picked up
 automatically.
 
+## Support
+
+agent-sync is free. If it helps you, you can [star the repo](https://github.com/Kasakir-AI/agent-sync) or [sponsor on GitHub](https://github.com/sponsors/Kasakir-AI), once or monthly.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). pstack and the `skills` CLI are separate projects with their own licenses.
