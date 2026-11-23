@@ -6,6 +6,9 @@
 A copy carries a `.agent-sync` marker. Upkeep replaces or removes exact copies as their source changes. It keeps
 copies where review preserved local content and leaves folders without a marker alone.
 
+A copy is left out (and an old one removed) when every tool reading the target folder already loads the same
+skill from somewhere else, so agent-sync never makes a tool load a skill twice.
+
 Skills inside Claude Code plugins are copied to ~/.agents/skills (Codex and Cursor) only for the plugins you name in
 `plugin_skills`: most plugins only make sense in Claude Code. Their markers name the plugin.
 """
@@ -149,6 +152,8 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
         else:
             plan[shared][name] = (d, f"{PLUGIN_MARK}{pid}: {d}\n", f" (from plugin {pid})")
 
+    from .duplicates import elsewhere, views  # builds on this module, so it is imported here
+    seen = views(home)
     for target in sorted(plan):
         wanted, in_source = plan[target], target == folders(home)[source]
         for name, (src, mark, note) in wanted.items():
@@ -167,7 +172,17 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             if dest.exists() and in_source and not is_plugin_copy(dest):
                 changes.append(f"WARN  {dest} is a copy from an earlier source tool; left alone")
                 continue
-            if dest.exists() and same_tree(src, dest) and (dest / MARKER).read_text() == mark:
+            have = elsewhere(home, seen, target, name, src)
+            if have:                                       # every tool reading `target` loads it already
+                if dest.exists():
+                    if not dry:
+                        shutil.rmtree(dest)
+                    changes.append(f"{verb('removed', 'would remove')} skill {name}{note} from {target} "
+                                   f"(already loaded from {'; '.join(have)})")
+                continue
+            if dest.exists() and same_tree(src, dest):
+                if marker_text(dest) != mark and not dry:
+                    (dest / MARKER).write_text(mark)       # same files from a new place (a plugin's new version)
                 continue
             if not dry:
                 tmp = dest.with_name(f".{name}.agent-sync-new")
@@ -192,6 +207,23 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             why = "its plugin is no longer chosen or installed" if plugin else "no longer in the source tool"
             changes.append(f"{verb('removed', 'would remove')} skill {d.name} from {target} ({why})")
     return changes
+
+
+def package_choice(home: Path, package: str, checkout: Path, taken: set[str]) -> tuple[list[str] | None, list[str]]:
+    """Which skills of `package` to install, given the names packages listed before it already ship:
+    (None for all of them, or the names to install) and the installed ones to remove because an earlier
+    package has that name. Adds this package's names to `taken`."""
+    from .duplicates import skill_name, walk
+    root = checkout / "skills" if (checkout / "skills").is_dir() else checkout   # where the skills CLI looks
+    found = walk(root) or ([root] if (root / "SKILL.md").is_file() else [])        # a package that is one skill
+    ships = sorted({skill_name(d) for d in found})
+    clash = [n for n in ships if n in taken]
+    taken.update(ships)
+    if not clash:
+        return None, []
+    gone = [name for name, meta in sorted(locked(home).items()) if meta.get("source") == package
+            and (meta.get("skillName") or name).lower() in clash]
+    return [n for n in ships if n not in clash], gone
 
 
 def dropped(home: Path, package: str, checkout: Path) -> list[str]:

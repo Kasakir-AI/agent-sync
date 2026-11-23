@@ -310,6 +310,14 @@ class Editor:
         if new is not None:
             self.set("warn_models", new)
 
+    def duplicates(self) -> None:
+        self.explain("Skills a tool may load twice",
+                     "The upkeep warns when a tool loads the same skill name from two places (a plugin and a",
+                     "package, say). Name the ones you keep twice on purpose.")
+        new = self.edit_list("Allowed twice", self.cfg.allow_duplicate_skills, "Skill name", ["pdf", "skill-creator"])
+        if new is not None:
+            self.set("allow_duplicate_skills", new)
+
     def cli_updates(self) -> None:
         now = self.cfg.update_clis
         self.explain("CLI updates", "Update Claude Code, Codex and Cursor Agent during the upkeep.",
@@ -472,6 +480,7 @@ class Editor:
             ("11", "Your own install commands", few(list(c.install_commands)), self.install_commands),
             ("12", "Extra steps", few([s.get("name", "?") for s in c.extra_steps]), self.steps),
             ("13", "Advanced", "skills CLI version, days of log", self.advanced),
+            ("14", "Skills allowed twice", few(c.allow_duplicate_skills), self.duplicates),
             ("r", "pstack model roles", self.roles_path.name if self.roles_text is not None else "none yet",
              self.model_roles),
             ("i", "Global instructions", "opens your editor", self.instructions_file),

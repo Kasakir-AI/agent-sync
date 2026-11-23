@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0 (2026-11-23)
+
+New: the upkeep warns when a tool loads the same skill twice.
+
+- Every upkeep checks the skills Claude Code, Codex and Cursor each load, from their skill folders and their
+  plugins, and warns about any name a tool gets from two places. Each warning names the skills and where both
+  copies come from, for example a pack installed both with the `skills` CLI and as a Codex plugin.
+- Skills switched off in Codex and plugins switched off in Claude Code don't count. Skills you keep twice on
+  purpose can go in the new `allow_duplicate_skills` setting (or in `agent-sync config`).
+- When two packages in `skill_packages` ship a skill with the same name, the package listed first keeps it. The
+  later package's copy is no longer installed, and one installed before is removed.
+- A plugin skill is no longer copied to Codex and Cursor when both already load it from somewhere else. A copy
+  that Codex switched off counts as not needed there.
+- A plugin update that leaves a skill's files the same no longer copies the skill again on every run.
+
 ## 0.5.2 (2026-11-20)
 
 - Applying global instructions clears the old mirrored block and keeps each tool's own notes.

@@ -4,7 +4,8 @@ Keep **Claude Code**, **Codex** and **Cursor** in step on one Mac (or Linux mach
 agent-sync makes the other two match it, once a day:
 
 - **Skill packages** (for example [pstack](https://github.com/backnotprop/pstack)) are installed and updated for
-  all three tools from one shared copy, with the [`skills`](https://www.npmjs.com/package/skills) CLI.
+  all three tools from one shared copy, with the [`skills`](https://www.npmjs.com/package/skills) CLI. When two
+  packages ship a skill with the same name, the package listed first in `skill_packages` keeps it.
 - **Agents** that ship with a package (`agents/*.md`) are mirrored into each tool's own format: Claude Code
   `~/.claude/agents`, Codex `~/.codex/agents/*.toml`, and a small local Cursor plugin, because Cursor only reads
   custom agents from projects and plugins. Each tool's copy runs on a model you choose for that tool, and you can
@@ -14,7 +15,12 @@ agent-sync makes the other two match it, once a day:
   the other tool is never touched.
 - **Skills inside Claude Code plugins** (optional, per plugin): the skills of the plugins you pick are copied to
   Codex and Cursor. Most plugins only make sense in Claude Code, so none are copied until you name them in
-  `plugin_skills`.
+  `plugin_skills`. A copy is left out when every tool reading it already loads that skill from somewhere else.
+- **Duplicate skills**: every upkeep checks whether a tool loads the same skill name from two places, such as a
+  pack installed both as a package and as a plugin, and names the skills and both places in the log. Codex
+  skills you switched off and Claude Code plugins you disabled don't count. Cursor reads Claude Code's skills and
+  plugins too unless you turned off its third-party setting, so a pack installed as a Claude Code plugin and as a
+  package shows up twice there. Skills you keep twice on purpose go in `allow_duplicate_skills`.
 - **pstack model roles** (`feature, refactoring: <model>` and the rest) are copied from the source tool's
   `pstack-models` file to the others, and each tool keeps its own notes on how to run each model.
 - **MCP servers** at user level are added to the tools that don't have them yet. Nothing is ever deleted, and
@@ -146,6 +152,7 @@ and change what you need. Every key is optional:
 | `mirror_roles` / `mirror_mcp` / `mirror_skills` / `update_plugins` | `true` | switch parts off |
 | `skip_skills` | `[]` | your own skills that stay in the source tool only |
 | `plugin_skills` | `[]` | Claude Code plugins whose skills are copied to Codex and Cursor, e.g. `["my-plugin"]` or `["my-plugin@marketplace"]` |
+| `allow_duplicate_skills` | `[]` | skill names a tool may load from two places without a warning, e.g. `["pdf"]` |
 | `mirror_instructions` | `false` | copy the source tool's global instructions to the others |
 | `warn_models` | `[]` | warn when a model name containing one of these appears, e.g. `["preview-"]` |
 | `update_clis` | `true` | `false`, or a list such as `["claude", "codex"]` |
@@ -170,9 +177,9 @@ and `XDG_STATE_HOME` when set.
 - **Try changes safely.** `agent-sync run --dry-run` after every config change shows exactly what would happen
   (`agent-sync config` offers it after you save).
 - **Change the code.** Each part is one small module in `agent_sync/` with no dependencies: `agents.py` (agent
-  formats per tool), `skills.py` (your own skills, plugin skills, dropped package skills), `roles.py` (pstack
-  model roles), `mcp.py` (MCP servers), `instructions.py` (global instructions), `tools.py` (skill packages,
-  plugins, CLI updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd, launcher),
+  formats per tool), `skills.py` (your own skills, plugin skills, package skills), `duplicates.py` (skills a tool
+  loads twice), `roles.py` (pstack model roles), `mcp.py` (MCP servers), `instructions.py` (global
+  instructions), `tools.py` (skill packages, plugins, CLI updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd, launcher),
   `setup.py` (installing what is missing), `configure.py` and `tomledit.py` (the settings editor), `cli.py` (the
   order of the steps). To add a step, write a function that takes `log` and `dry`, never writes when `dry` is
   true, and call it from `run()` in `cli.py`. `tests/` shows how to test a part against a throwaway home folder

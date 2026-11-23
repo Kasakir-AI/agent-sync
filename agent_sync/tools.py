@@ -55,9 +55,10 @@ def skills(cli: str, *args: str) -> tuple[int, str]:
     return sh(["npx", "-y", "--prefer-online", cli, *args])
 
 
-def skill_args(cli: str, package: str) -> list[str]:
-    """Install or update every skill of `package` for Claude Code, Codex and Cursor (one shared copy)."""
-    return ["npx", "-y", "--prefer-online", cli, "add", package, "-g", "-s", "*",
+def skill_args(cli: str, package: str, names: list[str] | None = None) -> list[str]:
+    """Install or update the skills of `package` (all, or the ones named) for Claude Code, Codex and Cursor
+    (one shared copy)."""
+    return ["npx", "-y", "--prefer-online", cli, "add", package, "-g", "-s", *(names or ["*"]),
             "-a", "claude-code", "codex", "cursor", "-y"]
 
 

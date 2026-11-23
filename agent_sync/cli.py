@@ -28,7 +28,7 @@ from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, agents, checks, instructions, mcp, review, roles, schedule, skills, tools
+from . import __version__, agents, checks, duplicates, instructions, mcp, review, roles, schedule, skills, tools
 from .config import Config, load, save_setting
 from .locking import run_lock
 from .log import Log
@@ -77,12 +77,17 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             line = schedule.refresh_launcher(cfg.home, dry, tools.PATH)
             if line:
                 log("WARN" if line.startswith("WARN") else "sync", line.removeprefix("WARN  "))
+        taken: set[str] = set()          # skill names a package listed earlier ships: that package's version wins
         for package in cfg.skill_packages:
             dest = work / "packages" / package.replace("/", "__")
             code, out = tools.checkout(package, dest)
             log("ok" if code == 0 else "FAIL", f"fetch {package}{': ' + out if code else ''}")
+            names, gone = skills.package_choice(cfg.home, package, dest, taken) if code == 0 else (None, [])
+            for name in gone:
+                tools.act(log, dry, f"remove {name} ({package} ships it, but an earlier package has that name)",
+                          ["npx", "-y", "--prefer-online", cfg.skills_cli, "remove", "-g", "-s", name, "-y"])
             tools.act(log, dry, f"skills from {package} for claude-code, codex, cursor",
-                      tools.skill_args(cfg.skills_cli, package))
+                      tools.skill_args(cfg.skills_cli, package, names))
             if code == 0 and cfg.remove_dropped_skills:
                 for name in skills.dropped(cfg.home, package, dest):
                     tools.act(log, dry, f"remove {name} (no longer in {package})",
@@ -106,6 +111,14 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 log("ok", "your own skills" + (" and plugin skills" if cfg.plugin_skills else "") + " mirrored")
             except OSError as e:
                 log("FAIL", f"your own skills: {e}")
+        try:
+            found = duplicates.report(cfg.home, cfg.allow_duplicate_skills)
+            for line in found:
+                log("WARN", line)
+            if not found:
+                log("ok", "no tool loads a skill twice")
+        except OSError as e:
+            log("FAIL", f"duplicate skills check: {e}")
         if cfg.mirror_roles:
             for line in roles.mirror(cfg.home, cfg.source, dry):
                 kind = line.split()[0] if line.startswith(("WARN", "skip")) else "sync"

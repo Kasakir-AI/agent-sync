@@ -168,8 +168,7 @@ def test_a_copy_that_changes_origin_is_recopied(tmp_path):
     assert skills.same_tree(root / "skills/outline", tmp_path / ".claude/skills/outline")
     assert skills.mirror(tmp_path, "claude", plugin_skills=["writing"]) == [
         "WARN  skill outline from plugin writing@market has the name of one of your own skills; "
-        "only your own is copied",
-        f"copied skill outline to {shared}"]
+        "only your own is copied"]                                         # same files: only the marker changes
     assert not skills.is_plugin_copy(shared / "outline")
 
 
@@ -197,3 +196,19 @@ def test_a_version_an_installer_made_for_each_tool_is_left_alone_quietly(tmp_pat
 
     assert skills.mirror(tmp_path, "claude") == []
     assert "Run `inbox --open`." in (shared / "inbox/SKILL.md").read_text()
+
+
+def test_a_package_listed_earlier_keeps_the_names_it_ships(tmp_path):
+    first, second = tmp_path / "pstack", tmp_path / "other"
+    for name in ("tdd", "teach", "unslop"):
+        make_skill(first / "skills", name)
+    for name in ("tdd", "grilling"):
+        make_skill(second / "skills/engineering", name)
+    (tmp_path / ".agents").mkdir()
+    (tmp_path / ".agents/.skill-lock.json").write_text(json.dumps({"skills": {
+        "tdd": {"source": "a/pstack"}, "other-tdd": {"source": "b/other", "skillName": "tdd"},
+        "grilling": {"source": "b/other"}}}))
+    taken: set[str] = set()
+    assert skills.package_choice(tmp_path, "a/pstack", first, taken) == (None, [])      # all of them
+    assert skills.package_choice(tmp_path, "b/other", second, taken) == (["grilling"], ["other-tdd"])
+    assert taken == {"tdd", "teach", "unslop", "grilling"}
