@@ -210,7 +210,7 @@ automatically.
 
 ## Support
 
-agent-sync is free. If it helps you, you can [star the repo](https://github.com/Kasakir-AI/agent-sync) or [sponsor on GitHub](https://github.com/sponsors/Kasakir-AI), once or monthly.
+agent-sync is free. If it helps you, you can [star the repo](https://github.com/Kasakir-AI/agent-sync), [buy me a coffee on Ko-fi](https://ko-fi.com/kasakir), or [sponsor on GitHub](https://github.com/sponsors/Kasakir-AI), once or monthly.
 
 ### Sponsors
 
