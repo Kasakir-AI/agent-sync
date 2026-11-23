@@ -212,6 +212,15 @@ automatically.
 
 agent-sync is free. If it helps you, you can [star the repo](https://github.com/Kasakir-AI/agent-sync) or [sponsor on GitHub](https://github.com/sponsors/Kasakir-AI), once or monthly.
 
+### Sponsors
+
+<!-- sponsors:start -->
+<!-- This section is updated automatically. Edits here are overwritten. -->
+
+No sponsors featured here yet. [Become the first](https://github.com/sponsors/Kasakir-AI)!
+All sponsors: [SPONSORS.md](https://github.com/Kasakir-AI/.github/blob/main/SPONSORS.md).
+<!-- sponsors:end -->
+
 ## License
 
 MIT, see [LICENSE](LICENSE). pstack and the `skills` CLI are separate projects with their own licenses.
