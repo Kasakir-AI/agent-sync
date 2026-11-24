@@ -98,7 +98,7 @@ main { padding-top: clamp(1rem, 3vw, 2rem); }
 .section { margin: 2rem 0 0; font-size: 1.2rem; }
 .section + p { margin: .3rem 0 0; color: var(--subtle); }
 .summary { margin: -.4rem 0 .9rem; font-weight: 550; }
-.card > .note { margin: -.4rem 0 .9rem; }
+.card > .note, .card > .caution { margin: -.4rem 0 .9rem; }
 .card h2, .panel h2 { margin: .3rem 0 1rem; font-size: 1.45rem; line-height: 1.25; overflow-wrap: anywhere; }
 .card-meta, .badges, .row { display: flex; flex-wrap: wrap; gap: .4rem .65rem; align-items: center; }
 .card-meta, .note { color: var(--subtle); font-size: .875rem; }
@@ -287,6 +287,7 @@ const dateLabels = {
   yours: "Edited", "edited-copy": "Edited", copy: "Copied", package: "Updated",
   plugin: "Plugin updated", settings: "Settings file changed",
 };
+const SHORT_DIFF = 30;
 const relativeDate = new Intl.RelativeTimeFormat(undefined, {numeric: "auto"});
 const exactDate = new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "long"});
 const joinedTools = new Intl.ListFormat(undefined, {style: "long", type: "conjunction"});
@@ -348,13 +349,20 @@ function updateFooter() {
 function showCounts() {
   const counts = {differ: 0, check: 0, missing: 0, same: 0, tailored: 0, local: 0};
   for (const group of scan.groups) counts[group.status]++;
-  counts.same += counts.tailored;
-  document.querySelector("#counts").textContent =
-    `${counts.differ} differ · ${counts.check ? `${counts.check} to check once · ` : ""}` +
-    `${counts.missing + counts.local} only in one tool · ${counts.same} the same`;
+  const shown = {differ: counts.differ + counts.check, missing: counts.missing + counts.local,
+    same: counts.same + counts.tailored};
+  for (const tab of filters) {
+    tab.dataset.label ??= tab.textContent;
+    tab.textContent = tab.dataset.filter in shown ? `${tab.dataset.label} (${shown[tab.dataset.filter]})` :
+      tab.dataset.label;
+  }
+  const open = shown.differ + counts.missing;
+  document.querySelector("#counts").textContent = open
+    ? `${open} ${open === 1 ? "setting needs" : "settings need"} a choice.`
+    : "Every setting is in step. Nothing needs a choice.";
 }
 
-function versionColumn(group, version, longest, choiceButton) {
+function versionColumn(group, version, longest, shared, choiceButton) {
   const node = el("div", undefined, "version");
   const ribbon = el("div", undefined, "recommendation");
   const isWinner = group.status !== "local" && version.id === group.winner;
@@ -365,7 +373,7 @@ function versionColumn(group, version, longest, choiceButton) {
   node.append(tools);
 
   const provenance = el("div", undefined, "row");
-  provenance.append(el("span", version.label, `chip ${version.origin}`));
+  if (!shared.origin) provenance.append(el("span", version.label, `chip ${version.origin}`));
   const date = new Date(version.modified * 1000);
   const time = el("time", `${dateLabels[version.origin]} ${relativeTime(version.modified)}`, "date");
   time.dateTime = date.toISOString();
@@ -375,14 +383,18 @@ function versionColumn(group, version, longest, choiceButton) {
 
   const lengthText = `${version.lines} ${version.lines === 1 ? "line" : "lines"}`;
   const length = el("div", lengthText, "length");
-  const meter = el("progress");
-  meter.max = Math.max(1, longest);
-  meter.value = version.lines;
-  meter.setAttribute("aria-label", lengthText);
-  length.append(meter);
+  if (!shared.length) {
+    const meter = el("progress");
+    meter.max = Math.max(1, longest);
+    meter.value = version.lines;
+    meter.setAttribute("aria-label", lengthText);
+    length.append(meter);
+  }
   node.append(length, el("code", version.path, "path"));
   if (version.note) node.append(el("p", version.note, "note"));
-  for (const caution of version.cautions) node.append(el("p", caution, "caution"));
+  for (const caution of version.cautions) {
+    if (!shared.cautions.includes(caution)) node.append(el("p", caution, "caution"));
+  }
   if (isWinner && group.reasons.length) {
     const why = el("ul", undefined, "reason");
     why.append(...group.reasons.map(reason => el("li", reason)));
@@ -511,10 +523,24 @@ function settingCard(group, index) {
   glyph.setAttribute("aria-hidden", "true");
   kind.append(glyph, label);
   meta.append(kind, el("span", statusLabels[group.status], `chip ${group.status}`));
+  const [first, ...rest] = group.versions;
+  const shared = {
+    origin: rest.length > 0 && rest.every(version => version.origin === first.origin),
+    length: rest.every(version => version.lines === first.lines),
+    cautions: [],
+  };
+  const others = group.versions.filter(version => version.id !== group.winner);
+  if (others.length > 1) {
+    shared.cautions = others[0].cautions.filter(caution => others.every(other => other.cautions.includes(caution)));
+  }
+  if (shared.origin) meta.append(el("span", first.label, `chip ${first.origin}`));
   if (group.matched_by) meta.append(el("span", group.matched_by));
   card.append(meta, title);
   if (group.note) card.append(el("p", group.note, "note"));
   if (group.summary) card.append(el("p", group.summary, "summary"));
+  for (const caution of shared.cautions) {
+    card.append(el("p", caution[0].toUpperCase() + caution.slice(1) + ".", "caution"));
+  }
 
   const buttons = new Map();
   const warning = el("p", undefined, "caution");
@@ -544,7 +570,7 @@ function settingCard(group, index) {
   const versions = el("div", undefined, "versions");
   const longest = Math.max(...group.versions.map(version => version.lines));
   for (const version of group.versions) {
-    const column = versionColumn(group, version, longest, choiceButton);
+    const column = versionColumn(group, version, longest, shared, choiceButton);
     const holder = el("div");
     holder.hidden = !Object.keys(version.only).length;
     lists.set(version, holder);
@@ -561,7 +587,9 @@ function settingCard(group, index) {
   card.append(actions);
   if (group.versions.length > 1) {
     const diffs = el("div", undefined, "diff");
-    diffs.hidden = true;
+    const rows = group.versions.reduce((sum, version) => sum + version.diff.length, 0);
+    diffs.hidden = !["differ", "check"].includes(group.status) || rows === 0 || rows > SHORT_DIFF;
+    if (!diffs.hidden) diffView(group, diffs);
     diffs.id = `diff-${index}`;
     const toggle = button("Show differences", () => {
       if (!diffs.hasChildNodes()) diffView(group, diffs);
@@ -570,7 +598,8 @@ function settingCard(group, index) {
       toggle.textContent = diffs.hidden ? "Show differences" : "Hide differences";
     }, "quiet");
     toggle.setAttribute("aria-controls", diffs.id);
-    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("aria-expanded", !diffs.hidden);
+    if (!diffs.hidden) toggle.textContent = "Hide differences";
     actions.append(toggle);
     card.append(diffs);
   }
