@@ -341,6 +341,25 @@ def missing_paths(server: dict) -> tuple[str, ...]:
                  and (path == server["command"] or not os.path.isdir(os.path.dirname(path))))
 
 
+VERSION = re.compile(r"\d+(?:\.\d+)+")
+
+
+def newest(versions: list[Version]) -> Version | None:
+    """When the versions differ only in version numbers, as copies of a server an app rewrites on every update do
+    (a versioned folder, an APP_VERSION setting), the one with the highest; None otherwise."""
+    if len({version.digest for version in versions}) < 2 or len({VERSION.sub("#", v.body) for v in versions}) > 1:
+        return None
+    def numbers(version: Version) -> list[tuple[int, ...]]:
+        return [tuple(int(part) for part in found.split(".")) for found in VERSION.findall(version.body)]
+    best = max(versions, key=numbers)
+    return best if len({v.digest for v in versions if numbers(v) == numbers(best)}) == 1 else None
+
+
+def first_version(newer: Version, older: Version) -> str:
+    """The first version number where `newer` differs from `older`."""
+    return next(a for a, b in zip(VERSION.findall(newer.body), VERSION.findall(older.body), strict=True) if a != b)
+
+
 def scan_mcp(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
     for tool, filename in MCP_FILES.items():
         for name, server in sorted(mcp.read(home, tool).items()):
@@ -737,6 +756,9 @@ def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
     if not others:
         return winner, ["the only version found"]
     runner_up = preferred(others, source)
+    if group.kind == "mcp" and (best := newest([v for v in group.versions if not v.missing and not fixed(v)])):
+        older = next(v for v in group.versions if v.digest != best.digest and not v.missing)
+        return best, [f"the newest version ({first_version(best, older)})"]
     if runner_up.missing and not winner.missing:
         return winner, ["the other copies point at files that no longer exist"]
     if RANK[winner.origin] != RANK[runner_up.origin]:

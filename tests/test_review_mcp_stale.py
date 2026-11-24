@@ -60,7 +60,8 @@ def test_upkeep_replaces_stale_copies_with_the_working_one_and_keeps_tool_settin
 
 
 def test_working_copies_that_disagree_are_left_for_review(tmp_path):
-    old, new, other = versioned(tmp_path, "1.0", exists=False), versioned(tmp_path, "2.0"), versioned(tmp_path, "3.0")
+    old, new = versioned(tmp_path, "1.0", exists=False), versioned(tmp_path, "2.0")
+    other = versioned(tmp_path, "custom")
     setup(tmp_path, old, new, cursor_dir=other)
     assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
 
@@ -107,4 +108,26 @@ def test_copies_that_differ_only_in_a_log_file_are_left_for_review(tmp_path):
     (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {"repl": server_with("claude.log")}}))
     (tmp_path / ".cursor").mkdir()
     (tmp_path / ".cursor/mcp.json").write_text(json.dumps({"mcpServers": {"repl": server_with("cursor.log")}}))
+    assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+
+
+def test_a_copy_an_app_version_behind_is_brought_up_to_the_newest(tmp_path):
+    old, new = versioned(tmp_path, "26.1117.31558"), versioned(tmp_path, "26.1120.41243")   # both folders still exist
+    setup(tmp_path, old, new, cursor_dir=old)
+    cfg = Config(home=tmp_path)
+    group, = review.scan(tmp_path, cfg).groups
+    winner, reasons = review.recommend(group, "claude")
+    assert winner.tools == ("codex",) and reasons == ["the newest version (26.1120.41243)"]
+    lines = writes.repair_mcp(tmp_path, cfg)
+    assert "Claude Code and Cursor had an older version; now Codex's version (26.1120.41243)" in lines[0]
+    for name in (".claude.json", ".cursor/mcp.json"):
+        assert json.loads((tmp_path / name).read_text())["mcpServers"]["repl"]["args"] == [f"{new}/service.mjs"]
+
+
+def test_copies_that_differ_in_more_than_version_numbers_are_left_for_review(tmp_path):
+    one, other = versioned(tmp_path, "1.0"), versioned(tmp_path, "2.0")
+    setup(tmp_path, one, other)
+    data = json.loads((tmp_path / ".claude.json").read_text())
+    data["mcpServers"]["repl"]["env"]["MODE"] = "debug"                   # a setting of its own, not a version
+    (tmp_path / ".claude.json").write_text(json.dumps(data))
     assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []

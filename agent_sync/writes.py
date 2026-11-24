@@ -332,19 +332,30 @@ def backup_folder(root: Path, prefix: str) -> Path:
 
 
 def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:
-    """Replace each MCP server copy that points at files that no longer exist with the working version, when every
-    working copy agrees on it. A tool that owns a server (Codex's node_repl) updates its own copy; copies made
-    from it before then go stale and would otherwise stay so, as the MCP mirror never changes an existing server."""
+    """Bring every copy of an MCP server up to its newest working version. A tool that owns a server (Codex's
+    node_repl) rewrites its own copy on every app update; copies made from it before then point at an older version,
+    or at files that no longer exist, and would stay so, as the MCP mirror never changes an existing server. Acts
+    when the working copies agree, or differ only in version numbers; anything else is left for review."""
     scan_now = review.scan(home, cfg, ["mcp"])
     choices, why = {}, {}
     for group in scan_now.groups:
         working = [version for version in group.versions if not version.missing and not fixed(version)]
-        stale = [version for version in group.versions if version.missing]
-        if group.kind == "mcp" and stale and working and len({version.digest for version in working}) == 1:
-            choices[group.key] = working[0].id
-            broken = tool_names(sorted({tool for version in stale for tool in version.tools}, key=TOOLS.index))
-            why[group.key] = (f"MCP server {group.name}: {broken} pointed at files that no longer exist; "
-                              f"now {tool_names(working[0].tools)}'s version")
+        if not working:
+            continue
+        best = working[0] if len({v.digest for v in working}) == 1 else review.newest(working)
+        behind = [version for version in group.versions if not fixed(version) and best
+                  and version.digest != best.digest]
+        if not behind:
+            continue
+        choices[group.key] = best.id
+        names = tool_names(sorted({tool for version in behind for tool in version.tools}, key=TOOLS.index))
+        if all(version.missing for version in behind):
+            why[group.key] = (f"MCP server {group.name}: {names} pointed at files that no longer exist; "
+                              f"now {tool_names(best.tools)}'s version")
+        else:
+            older = next(version for version in behind if not version.missing)
+            why[group.key] = (f"MCP server {group.name}: {names} had an older version; now "
+                              f"{tool_names(best.tools)}'s version ({review.first_version(best, older)})")
     steps = [step for step in plan(home, scan_now, choices, cfg.source) if step.action == "replace"]
     if not steps:
         return []
