@@ -161,7 +161,7 @@ and change what you need. Every key is optional:
 | `[cli_commands]` | none | your own update command for a CLI, e.g. `codex = ["npm", "install", "-g", "@openai/codex@latest"]` |
 | `[install_commands]` | none | your own install command for `agent-sync setup`, per item: `homebrew`, `git`, `node`, `claude`, `codex`, `cursor` |
 | `[[extra_steps]]` | none | your own commands, run at the end of every upkeep |
-| `update_self` | `true` | update agent-sync itself (Homebrew, pipx, or a pip install from GitHub) |
+| `update_self` | `true` | update agent-sync itself (Homebrew, pipx, or a pip install from GitHub, which updates to the newest release) |
 | `launcher` | `false` | keep the double-click "Agent Upkeep" on the Desktop and up to date (macOS); `install --launcher` and `agent-sync launcher` switch it on |
 | `log_days` | `7` | how long log lines are kept |
 | `[agent_models]` | `opus` / `claude-opus-5-5-high-fast` / `gpt-6.2-sol` | the model each tool's copy of an agent uses |
