@@ -11,29 +11,39 @@ from collections.abc import Iterable
 from difflib import SequenceMatcher
 from pathlib import Path
 
-COMMENT = re.compile(r"^\s*<!--.*-->\s*$")
+
+def comment(line: str) -> bool:
+    """A line that is only an HTML comment."""
+    text = line.strip()
+    return len(text) >= 7 and text.startswith("<!--") and text.endswith("-->")
+
 
 def meaningful(line: str) -> bool:
-    return bool(line.strip()) and not COMMENT.match(line)
+    return bool(line.strip()) and not comment(line)
+
 
 def keys(text: str) -> list[str]:
     """The lines that carry meaning: no blank lines, no lines that are only an HTML comment."""
     return [line.rstrip() for line in text.splitlines() if meaningful(line)]
 
+
 def normalized(body: str) -> str:
-    text = "\n".join(line.rstrip() for line in body.splitlines() if not COMMENT.match(line))
+    text = "\n".join(line.rstrip() for line in body.splitlines() if not comment(line))
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
 
 def extends(longer: str, base: str) -> bool:
     """True when `longer` has every line of `base`, in the same order, plus perhaps lines of its own."""
     lines = iter(keys(longer))
     return all(line in lines for line in keys(base))
 
+
 def partner(line: str, candidates: list[str]) -> int | None:
     """The first candidate that reads like an edit of `line`, or None when `line` is unlike them all."""
     text = line.strip()
     return next((index for index, other in enumerate(candidates)
                  if SequenceMatcher(None, text, other.strip()).ratio() >= 0.6), None)
+
 
 def rows(target: str, winner: str) -> list[tuple[str, str]]:
     """What keeping `winner` does to `target`, line by line: " " stays, "+" comes from the winner,
@@ -53,7 +63,7 @@ def rows(target: str, winner: str) -> list[tuple[str, str]]:
         if tag == "equal":
             out += [(" ", line) for line in old[i1:i2]]
             continue
-        added, start = [line for line in new[j1:j2] if not COMMENT.match(line)], 0
+        added, start = [line for line in new[j1:j2] if not comment(line)], 0
         for line in old[i1:i2]:
             index = partner(line, added[start:])
             if index is None:
@@ -64,6 +74,7 @@ def rows(target: str, winner: str) -> list[tuple[str, str]]:
         out += [("+", line) for line in added[start:]]
     return out
 
+
 def merge(target: str, winner: str, drop: frozenset[str] = frozenset()) -> str:
     """Write the winner's lines into `target` and keep the lines only `target` has, except those in `drop`."""
     marked = rows(target, winner)
@@ -72,8 +83,10 @@ def merge(target: str, winner: str, drop: frozenset[str] = frozenset()) -> str:
         return target
     return "\n".join(lines) + "\n" if lines else ""
 
+
 def own_lines(target: str, winner: str) -> int:
     return sum(tag == "=" and meaningful(line) for tag, line in rows(target, winner))
+
 
 def removed_lines(target: str, winner: str, baseline: Iterable[str]) -> set[str]:
     """The lines only `target` has that the last synced version had and `winner` no longer has:
@@ -82,12 +95,14 @@ def removed_lines(target: str, winner: str, baseline: Iterable[str]) -> set[str]
     return {line.rstrip() for tag, line in rows(target, winner)
             if tag == "=" and line.rstrip() in synced and line.rstrip() not in kept}
 
+
 def load_baselines(path: Path) -> dict:
     try:
         data = json.loads(path.read_bytes().decode("utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
 
 def save_baselines(path: Path, stored: dict) -> None:
     text = json.dumps(stored, indent=2, sort_keys=True) + "\n"

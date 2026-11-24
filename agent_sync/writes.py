@@ -44,6 +44,7 @@ class Step:
     marker: str = ""
     drop: dict[Path, frozenset[str]] = field(default_factory=dict)   # file -> its own lines to remove
 
+
 @dataclass(frozen=True)
 class Edit:
     key: str
@@ -57,7 +58,9 @@ class Edit:
     removed: tuple[str, ...] = ()
     create_mode: int | None = None
 
+
 Reader = Callable[[Path], Content | None]
+
 
 def checked_path(home: Path, path: Path) -> Path:
     try:
@@ -68,8 +71,10 @@ def checked_path(home: Path, path: Path) -> Path:
         raise ValueError(f"cannot write outside the home folder: {path}")
     return real
 
+
 class ChoiceError(ValueError):
     """A choice that does not fit the settings as scanned."""
+
 
 def plan(home: Path, scan: Scan, choices: dict[str, str | dict], source: str) -> list[Step]:
     """List the target paths for the selected versions without writing. A choice is a version id, or
@@ -132,6 +137,7 @@ def plan(home: Path, scan: Scan, choices: dict[str, str | dict], source: str) ->
                               "replace" if exists else "create", winner, marker, drop))
     return steps
 
+
 def write_text(rewrite: Callable[[Step, str], str], merged: bool = True) -> Callable[[Step, Reader], dict]:
     def write(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
         before = read(step.path)
@@ -140,6 +146,7 @@ def write_text(rewrite: Callable[[Step, str], str], merged: bool = True) -> Call
             raise ValueError(f"not a text file: {step.path}")
         return {step.path: (rewrite(step, text).encode(), step.winner.body if merged else "")}
     return write
+
 
 def instruction_text(step: Step, text: str) -> str:
     body, drop = step.winner.body, step.drop.get(step.path, frozenset())
@@ -150,12 +157,14 @@ def instruction_text(step: Step, text: str) -> str:
         return front + merge(rest, body, drop)
     return merge(instructions.BLOCK.sub("\n", text), body, drop)
 
+
 def rule_text(step: Step, text: str) -> str:
     front, rest = instructions.split_front(text)
     if not front and "cursor" in step.tools and step.action == "create":
         name = step.key.split(":", 1)[1]
         front = f"---\ndescription: {name}\nalwaysApply: true\n---\n"
     return front + merge(rest, step.winner.body, step.drop.get(step.path, frozenset()))
+
 
 def role_text(step: Step, text: str) -> str:
     header, old, rest = roles.split(text)
@@ -164,6 +173,7 @@ def role_text(step: Step, text: str) -> str:
         return text
     updated = "\n".join(header + lines) + ("\n" + rest if rest else "") + "\n"
     return updated.replace("\n\n\n", "\n\n")
+
 
 def write_skill(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
     """Merge the winner's text files, add its other files and keep everything only the target has."""
@@ -195,7 +205,9 @@ def write_skill(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
             return {marker: (skills.REVIEW_MARK.encode() + mark, ""), **out}
     return out
 
+
 MCP_KEYS = ("command", "args", "env", "url")
+
 
 def codex_mcp_text(text: str, name: str, winner: dict) -> str:
     current = tomllib.loads(text).get("mcp_servers", {})
@@ -223,6 +235,7 @@ def codex_mcp_text(text: str, name: str, winner: dict) -> str:
         raise ValueError(f"could not update the MCP server {name!r} in the settings file")
     return updated
 
+
 def mcp_text(step: Step, text: str) -> str:
     winner = json.loads(step.winner.body)
     name = step.winner.key
@@ -236,6 +249,7 @@ def mcp_text(step: Step, text: str) -> str:
     servers[name] = entry
     data["mcpServers"] = servers
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
 
 def edits(steps: list[Step]) -> list[Edit]:
     """Every file the steps change, with its content before and after; steps on one settings file chain."""
@@ -265,6 +279,7 @@ def edits(steps: list[Step]) -> list[Edit]:
             changes.append(Edit(step.key, step.tools, step.path, step.action, path, before, after, winner, removed,
                                 create_mode=create_mode))
     return changes
+
 
 def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
     """Write only what changes: stage each file beside its target, back up the originals, then rename into place.
@@ -301,6 +316,7 @@ def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
     return [f"{'created' if action == 'create' else 'updated'} {shown(home, target)}"
             for target, action in targets.items()]
 
+
 def backup_folder(root: Path, prefix: str) -> Path:
     """A new, private folder for the originals of one apply."""
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -313,6 +329,7 @@ def backup_folder(root: Path, prefix: str) -> Path:
             stamp += timedelta(seconds=1)
         else:
             return backup
+
 
 def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:
     """Replace each MCP server copy that points at files that no longer exist with the working version, when every
