@@ -342,22 +342,45 @@ def missing_paths(server: dict) -> tuple[str, ...]:
 
 
 VERSION = re.compile(r"\d+(?:\.\d+)+")
+VERSION_FOLDER = re.compile(r"(?<=/)\d+(?:\.\d+)+(?=/|$)")
+
+
+def app_versions(version: Version) -> tuple[str, list[str]]:
+    """A stdio server's settings with its app version numbers taken out, and those numbers in order. Only where an
+    app update puts them: a whole folder name in a path (…/browser/26.1120.41243/…) or a setting named *VERSION*.
+    A dotted number anywhere else, such as an address, stays part of the settings; a remote server has none."""
+    server, found = json.loads(version.body), []
+    if "command" not in server:
+        return version.body, []
+
+    def take(text: str, whole: bool = False) -> str:
+        if whole and VERSION.fullmatch(text):
+            found.append(text)
+            return "#"
+        return VERSION_FOLDER.sub(lambda match: found.append(match[0]) or "#", text)
+
+    rest = {"command": take(server["command"]), "args": [take(arg) for arg in server["args"]],
+            "env": {key: take(value, "VERSION" in key.upper()) for key, value in server.get("env", {}).items()}}
+    return json.dumps(rest, sort_keys=True), found
 
 
 def newest(versions: list[Version]) -> Version | None:
-    """When the versions differ only in version numbers, as copies of a server an app rewrites on every update do
-    (a versioned folder, an APP_VERSION setting), the one with the highest; None otherwise."""
-    if len({version.digest for version in versions}) < 2 or len({VERSION.sub("#", v.body) for v in versions}) > 1:
+    """When copies of a server differ only in app version numbers, as an app's own server does after an update
+    (Codex's node_repl), the one with the highest; None otherwise."""
+    if len({version.digest for version in versions}) < 2:
+        return None
+    parts = {version.id: app_versions(version) for version in versions}
+    if len({rest for rest, _ in parts.values()}) > 1:
         return None
     def numbers(version: Version) -> list[tuple[int, ...]]:
-        return [tuple(int(part) for part in found.split(".")) for found in VERSION.findall(version.body)]
+        return [tuple(int(part) for part in found.split(".")) for found in parts[version.id][1]]
     best = max(versions, key=numbers)
     return best if len({v.digest for v in versions if numbers(v) == numbers(best)}) == 1 else None
 
 
 def first_version(newer: Version, older: Version) -> str:
-    """The first version number where `newer` differs from `older`."""
-    return next(a for a, b in zip(VERSION.findall(newer.body), VERSION.findall(older.body), strict=True) if a != b)
+    """The first app version number where `newer` differs from `older`."""
+    return next(a for a, b in zip(app_versions(newer)[1], app_versions(older)[1], strict=True) if a != b)
 
 
 def scan_mcp(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:

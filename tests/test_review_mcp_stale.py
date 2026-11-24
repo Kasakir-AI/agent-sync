@@ -131,3 +131,17 @@ def test_copies_that_differ_in_more_than_version_numbers_are_left_for_review(tmp
     data["mcpServers"]["repl"]["env"]["MODE"] = "debug"                   # a setting of its own, not a version
     (tmp_path / ".claude.json").write_text(json.dumps(data))
     assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+
+
+def test_addresses_are_never_taken_for_versions(tmp_path):
+    there = versioned(tmp_path, "2.0")
+    def server_at(host):
+        return {"command": "node", "args": [f"{there}/service.mjs", "--upstream", f"http://{host}:8000/mcp"],
+                "env": {"BIND": host}}
+    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {"repl": server_at("10.0.0.1")}}))
+    (tmp_path / ".cursor").mkdir()
+    (tmp_path / ".cursor/mcp.json").write_text(json.dumps({"mcpServers": {"repl": server_at("10.0.0.2")}}))
+    cfg = Config(home=tmp_path)
+    assert writes.repair_mcp(tmp_path, cfg) == []
+    group, = review.scan(tmp_path, cfg).groups
+    assert review.newest(group.versions) is None

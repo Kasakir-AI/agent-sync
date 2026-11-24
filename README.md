@@ -26,7 +26,8 @@ agent-sync makes the other two match it, once a day:
 - **MCP servers** at user level are added to the tools that don't have them yet. Nothing is ever deleted, and
   servers that already exist are left alone, with one exception: every copy follows the newest version of a server
   an app rewrites on its updates (Codex's `node_repl`). A copy that points at files that no longer exist, or that
-  differs only in older version numbers, is brought up to the newest working copy, and the original is backed up.
+  differs only in an older app version (a versioned folder or a `*VERSION` setting), is brought up to the newest
+  working copy, and the original is backed up.
 - **Global instructions** (optional): `CLAUDE.md` is merged into Codex's `AGENTS.md` and copied into a Cursor rule
   that always applies, or `AGENTS.md` the other way round. The merge adds new lines and replaces changed ones, and
   a line you delete from the source leaves the other file too. Lines only the other file has stay as its own notes.

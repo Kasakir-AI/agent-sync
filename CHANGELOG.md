@@ -8,8 +8,9 @@
 - The review page recommends the version that reworded a shared line since the last sync, instead of deciding by
   file dates. An agent-sync copy never wins over your own edits this way.
 - Copies of an MCP server an app rewrites on its updates, such as Codex's `node_repl`, follow its newest version.
-  They used to be replaced only when the old version's folder was gone; now a copy that differs only in older
-  version numbers is brought up to date too, and the review recommends the newest.
+  They used to be replaced only when the old version's folder was gone; now a copy that differs only in an older
+  app version (a versioned folder in a path, or a setting named like `APP_VERSION`) is brought up to date too, and
+  the review recommends the newest. Other differences, such as addresses, are left for you to choose.
 - Each run upgrades git and Node when Homebrew installed them and a newer version is out, next to the CLIs.
 
 ## 0.7.0 (2026-11-24)
