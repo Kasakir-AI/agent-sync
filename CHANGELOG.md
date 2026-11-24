@@ -6,7 +6,11 @@
   longer put back to the source's wording by the next run. It is kept, and the run warns until `CLAUDE.md` has the
   same wording, so the other tools get it too. Changes made in the source still reach every tool.
 - The review page recommends the version that reworded a shared line since the last sync, instead of deciding by
-  file dates.
+  file dates. An agent-sync copy never wins over your own edits this way.
+- Copies of an MCP server an app rewrites on its updates, such as Codex's `node_repl`, follow its newest version.
+  They used to be replaced only when the old version's folder was gone; now a copy that differs only in older
+  version numbers is brought up to date too, and the review recommends the newest.
+- Each run upgrades git and Node when Homebrew installed them and a newer version is out, next to the CLIs.
 
 ## 0.7.0 (2026-11-24)
 

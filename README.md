@@ -24,9 +24,9 @@ agent-sync makes the other two match it, once a day:
 - **pstack model roles** (`feature, refactoring: <model>` and the rest) are copied from the source tool's
   `pstack-models` file to the others, and each tool keeps its own notes on how to run each model.
 - **MCP servers** at user level are added to the tools that don't have them yet. Nothing is ever deleted, and
-  servers that already exist are left alone, with one exception. A copy that points at files that no longer exist
-  (an app update moved them, as Codex does with `node_repl`) is replaced by the working version when every working
-  copy agrees, and the original is backed up.
+  servers that already exist are left alone, with one exception: every copy follows the newest version of a server
+  an app rewrites on its updates (Codex's `node_repl`). A copy that points at files that no longer exist, or that
+  differs only in older version numbers, is brought up to the newest working copy, and the original is backed up.
 - **Global instructions** (optional): `CLAUDE.md` is merged into Codex's `AGENTS.md` and copied into a Cursor rule
   that always applies, or `AGENTS.md` the other way round. The merge adds new lines and replaces changed ones, and
   a line you delete from the source leaves the other file too. Lines only the other file has stay as its own notes.
@@ -35,9 +35,10 @@ agent-sync makes the other two match it, once a day:
 - **Plugins**: Claude Code's plugin marketplaces and the plugins you installed, the Git plugin marketplaces you
   added to Codex, and the Cursor plugin marketplaces you added (Cursor manages its built-in ones itself).
 - **The three CLIs** are updated: Claude Code and Cursor Agent through Homebrew when installed that way,
-  otherwise through their own updaters, and Codex with `codex update`.
+  otherwise through their own updaters, and Codex with `codex update`. git and Node (which runs the `skills`
+  tool) are upgraded too when Homebrew installed them.
 - **agent-sync itself** is updated the way you installed it: `brew upgrade` for the Homebrew formula,
-  `pipx upgrade`, or a fresh install from GitHub for a pip install from the repository.
+  `pipx upgrade`, or the newest release from GitHub for an install from the repository.
 - **A double-click launcher** (macOS, optional): "Agent Upkeep" on the Desktop runs the upkeep with every step on
   screen, then lets you press `r` to review differences or `s` to change the settings. Every run puts it back if
   it is missing and rewrites it when a new version of agent-sync changes it.
