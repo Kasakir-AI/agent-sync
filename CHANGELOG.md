@@ -1,14 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-11-24)
 
+New: no tool loads a skill twice, stale MCP server copies are replaced, and mirrored instructions are merged
+instead of repeated.
+
+- Skills inside Claude Code plugins are no longer copied to Codex and Cursor. Cursor loads them from Claude Code
+  itself, so the copy made Cursor load each one twice. Copies made by earlier versions are removed. The
+  `plugin_skills` setting is retired: while it is still set, a run says so. To give Codex a plugin's skills,
+  install the plugin in Codex as well (`codex plugin list` shows what it offers).
+- A skill is never copied where a tool already loads a skill of that name, and the run says which tool has it.
+- An MCP server copy that points at files that no longer exist is replaced with the working version when every
+  working copy agrees, and the original is backed up. This happens when an app updates a server it owns, such as
+  Codex's `node_repl`, while the copies in the other tools keep the old folder. The review page marks such a copy
+  stale and never recommends it.
+- Mirrored global instructions are merged into `AGENTS.md` (or `CLAUDE.md`) line by line instead of being added
+  as a marked block below the file's own text. A file that already had most of the instructions by hand used to
+  end up with each one twice. A line you delete from the source now leaves the other file too, and lines only
+  that file has stay. A run folds an old block into the merged text.
+- Updating an MCP server in `~/.claude.json` or Cursor's `mcp.json` changes only that server's lines. It used to
+  rewrite every line with a non-ASCII character, such as a long dash.
 - A run ends with what it did: how many changes, warnings and problems. Warnings used to be easy to miss.
 - `agent-sync run` prints each step when you start it from a terminal, so `--echo` is only needed elsewhere. A
   run that is not due yet says when the last one was and how to run now.
 - `agent-sync review --list` lists the settings that need a choice first. Settings that are the same in every
   tool fold into one line per kind.
 - The review page opens short differences on the cards that need a choice, so you see what differs without a
-  click. Tabs show how many settings each holds, and facts every version shares are said once per card.
+  click. Tabs show how many settings each holds, and facts every version shares are said once per card. The
+  Plugins tab shows what is installed and no longer offers to share plugin skills.
 
 ## 0.6.0 (2026-11-23)
 
