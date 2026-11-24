@@ -30,7 +30,7 @@ from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, agents, checks, duplicates, instructions, mcp, review, roles, schedule, skills, tools
+from . import __version__, agents, checks, duplicates, instructions, mcp, review, roles, schedule, skills, tools, writes
 from .config import Config, load, save_setting
 from .locking import run_lock
 from .log import Log
@@ -133,7 +133,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             log("ok", "model roles mirrored")
         if cfg.mirror_mcp:
             try:
-                log.lines(review.repair_mcp(cfg.home, cfg, dry))
+                log.lines(writes.repair_mcp(cfg.home, cfg, dry))
                 log.lines(mcp.mirror(cfg.home, cfg.source, dry))
                 log("ok", "MCP servers mirrored")
             except (ValueError, OSError) as e:

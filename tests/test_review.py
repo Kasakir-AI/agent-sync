@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_sync import instructions, review, roles, skills
+from agent_sync import instructions, review, roles, skills, textmerge, writes
 from agent_sync.config import Config
 
 
@@ -168,12 +168,12 @@ def test_apply_global_choice_backs_up_every_replacement(tmp_path):
     winner = next(version for version in group.versions if version.path == claude)
     backup = tmp_path / "backup"
 
-    steps = review.plan(tmp_path, scan, {group.key: winner.id}, "claude")
+    steps = writes.plan(tmp_path, scan, {group.key: winner.id}, "claude")
     assert {step.path for step in steps} == {codex, cursor, custom}
     assert {path: path.read_bytes() for path in snapshot} == snapshot
     assert not backup.exists()
-    assert len(review.apply(tmp_path, steps, backup)) == 3
-    assert review.apply(tmp_path, steps, backup) == []
+    assert len(writes.apply(tmp_path, steps, backup)) == 3
+    assert writes.apply(tmp_path, steps, backup) == []
     assert all((backup / path.relative_to(tmp_path)).read_bytes() == snapshot[path]
                for path in (codex, cursor, custom))
     assert custom.read_text() == "---\ndescription: My rule\n---\nNew global instructions.\n"
@@ -188,8 +188,8 @@ def test_apply_model_choices_keeps_each_tools_notes(tmp_path):
     group, = scan.groups
     winner = next(version for version in group.versions if version.tools == ("cursor",))
 
-    steps = review.plan(tmp_path, scan, {group.key: winner.id}, "claude")
-    assert len(review.apply(tmp_path, steps, tmp_path / "backup")) == 2
+    steps = writes.plan(tmp_path, scan, {group.key: winner.id}, "claude")
+    assert len(writes.apply(tmp_path, steps, tmp_path / "backup")) == 2
     for tool, path in paths.items():
         assert path.read_text() == f"# Setup for {tool}\nreviewers: model-cursor\n\n# Notes for {tool}\n"
     assert review_home(tmp_path).groups[0].status == "same"
@@ -211,10 +211,10 @@ def test_mcp_overwrites_transport_and_keeps_settings_in_each_tool(tmp_path):
     group, = scan.groups
     winner = next(version for version in group.versions if version.path == claude)
 
-    steps = review.plan(tmp_path, scan, {group.key: winner.id}, "claude")
+    steps = writes.plan(tmp_path, scan, {group.key: winner.id}, "claude")
     backup = tmp_path / "backup"
-    assert len(review.apply(tmp_path, steps, backup)) == 2
-    assert review.apply(tmp_path, steps, backup) == []
+    assert len(writes.apply(tmp_path, steps, backup)) == 2
+    assert writes.apply(tmp_path, steps, backup) == []
     settings = tomllib.loads(codex.read_text())
     assert settings["mcp_servers"]["docs.api"] == {
         "url": "https://example.com/docs", "startup_timeout_sec": 22, "tools": ["lookup"],
@@ -234,11 +234,11 @@ def test_copy_skill_to_one_shared_target_with_marker(tmp_path):
     group, = scan.groups
     winner, = group.versions
 
-    steps = review.plan(tmp_path, scan, {group.key: winner.id}, "claude")
+    steps = writes.plan(tmp_path, scan, {group.key: winner.id}, "claude")
     step, = steps
     assert step.tools == ("codex", "cursor") and step.action == "create"
-    assert len(review.apply(tmp_path, steps, tmp_path / "backup")) == 1
-    assert review.apply(tmp_path, steps, tmp_path / "backup") == []
+    assert len(writes.apply(tmp_path, steps, tmp_path / "backup")) == 1
+    assert writes.apply(tmp_path, steps, tmp_path / "backup") == []
     assert (step.path / "details.txt").read_text() == "Supporting instructions."
     assert (step.path / skills.MARKER).read_text() == f"copied by agent-sync from {source.parent}\n"
     assert review_home(tmp_path).groups[0].status == "same"
@@ -256,8 +256,8 @@ def test_replace_real_skill_folder_without_touching_link_or_marker(tmp_path):
     group, = scan.groups
     winner = next(version for version in group.versions if version.path == cursor.parent.resolve())
 
-    steps = review.plan(tmp_path, scan, {group.key: winner.id}, "claude")
-    assert len(review.apply(tmp_path, steps, tmp_path / "backup")) == 1
+    steps = writes.plan(tmp_path, scan, {group.key: winner.id}, "claude")
+    assert len(writes.apply(tmp_path, steps, tmp_path / "backup")) == 1
     assert link.is_symlink() and link.readlink() == shared.parent
     assert shared.read_text() == "New instructions.\n" and marker.read_text() == "Original marker\n"
     assert (tmp_path / "backup/.agents/skills/example/SKILL.md").read_text() == "Old instructions.\n"
@@ -288,13 +288,13 @@ def test_apply_mcp_choices_sharing_one_settings_file(tmp_path):
     old = codex.read_bytes()
     backup = tmp_path / "backup"
 
-    steps = review.plan(tmp_path, scan, choices, "claude")
-    assert len(review.apply(tmp_path, steps, backup)) == 2
+    steps = writes.plan(tmp_path, scan, choices, "claude")
+    assert len(writes.apply(tmp_path, steps, backup)) == 2
     servers = tomllib.loads(codex.read_text())["mcp_servers"]
     assert servers["documents"] == {"command": "docs", "args": [], "env": {"ROOT": "/work"}, "startup_timeout_sec": 42}
     assert servers["files.api"] == {"url": "https://example.com/files"}
     assert (backup / ".codex/config.toml").read_bytes() == old
-    assert review.apply(tmp_path, steps, backup) == []
+    assert writes.apply(tmp_path, steps, backup) == []
 
 
 def test_mcp_removes_empty_env_table_and_keeps_its_comment(tmp_path):
@@ -303,9 +303,9 @@ def test_mcp_removes_empty_env_table_and_keeps_its_comment(tmp_path):
                   '[mcp_servers.docs]\ncommand = "old"\n[mcp_servers.docs.env]\n# Keep this comment\nROOT = "/tmp"\n')
     scan = review_home(tmp_path)
     group, = scan.groups
-    steps = review.plan(tmp_path, scan, {group.key: group.versions[0].id}, "claude")
+    steps = writes.plan(tmp_path, scan, {group.key: group.versions[0].id}, "claude")
 
-    review.apply(tmp_path, steps, tmp_path / "backup")
+    writes.apply(tmp_path, steps, tmp_path / "backup")
     assert tomllib.loads(codex.read_text())["mcp_servers"]["docs"] == {"url": "https://example.com/docs"}
     assert "# Keep this comment" in codex.read_text()
 
@@ -315,8 +315,8 @@ def apply_choice(home, key_part, pick, remove=None):
     group = next(group for group in scan.groups if key_part in group.key)
     winner = next(version for version in group.versions if pick(version))
     choice = winner.id if remove is None else {"version": winner.id, "remove": remove}
-    steps = review.plan(home, scan, {group.key: choice}, "claude")
-    changes = review.apply(home, steps, home / "backup")
+    steps = writes.plan(home, scan, {group.key: choice}, "claude")
+    changes = writes.apply(home, steps, home / "backup")
     review.remember(review.baseline_file(Config(home=home)), review_home(home), {group.key: choice})
     return changes
 
@@ -324,12 +324,12 @@ def apply_choice(home, key_part, pick, remove=None):
 def test_merge_keeps_target_lines_and_is_idempotent():
     target = "# Notes\nKeep replies short.\nCodex only: run the linter.\nUse tabs.\n"
     winner = "# Notes\nKeep replies brief.\nUse tabs.\nAsk before pushing.\n"
-    merged = review.merge(target, winner)
+    merged = textmerge.merge(target, winner)
     assert merged == ("# Notes\nKeep replies brief.\nCodex only: run the linter.\nUse tabs.\n"
                       "Ask before pushing.\n")
-    assert review.merge(merged, winner) == merged
-    assert review.extends(merged, winner) and not review.extends(target, winner)
-    assert review.merge(merged + "More notes.\n", winner) == merged + "More notes.\n"
+    assert textmerge.merge(merged, winner) == merged
+    assert textmerge.extends(merged, winner) and not textmerge.extends(target, winner)
+    assert textmerge.merge(merged + "More notes.\n", winner) == merged + "More notes.\n"
 
 
 def test_picking_the_shorter_instructions_leaves_a_longer_copy_alone(tmp_path):
@@ -457,12 +457,12 @@ def test_mcp_server_from_a_plugin_counts_as_present_and_is_never_written(tmp_pat
     assert plugin.tools == ("claude",) and plugin.note == "from plugin clipper@market"
     assert json.loads(plugin.body)["command"] == f"{root}/bin/inbox"
     codex = next(version for version in inbox.versions if version.tools == ("codex",))
-    steps = review.plan(tmp_path, scan, {inbox.key: codex.id}, "claude")
+    steps = writes.plan(tmp_path, scan, {inbox.key: codex.id}, "claude")
     assert {step.path for step in steps} == {tmp_path / ".cursor/mcp.json"}
     assert review.recommend(inbox, "claude")[0] == codex     # the plugin's cache path never wins
     assert review.cautions(plugin, codex)[0].startswith("comes with the plugin")
     try:
-        review.plan(tmp_path, scan, {inbox.key: plugin.id}, "claude")
+        writes.plan(tmp_path, scan, {inbox.key: plugin.id}, "claude")
     except ValueError as e:
         assert "comes with a plugin" in str(e)
     else:
@@ -527,17 +527,17 @@ def test_hand_written_instructions_saved_together_still_differ(tmp_path):
 def test_merge_drops_only_the_named_target_lines():
     target = "Codex note.\nKeep replies short.\nAsk before pushing.\nRun the tests.\n"
     winner = "Keep replies short.\nRun the tests.\n"
-    assert review.merge(target, winner, frozenset()) == target
-    merged = review.merge(target, winner, frozenset({"Ask before pushing."}))
+    assert textmerge.merge(target, winner, frozenset()) == target
+    merged = textmerge.merge(target, winner, frozenset({"Ask before pushing."}))
     assert merged == "Codex note.\nKeep replies short.\nRun the tests.\n"
-    assert review.merge(merged, winner, frozenset({"Ask before pushing."})) == merged
+    assert textmerge.merge(merged, winner, frozenset({"Ask before pushing."})) == merged
 
 
 def test_removed_lines_are_the_synced_lines_the_winner_dropped():
     target = "Codex note.\nKeep replies short.\nAsk before pushing.\n"
-    assert review.removed_lines(target, "Keep replies short.\n", ["Keep replies short.", "Ask before pushing."]) == {
+    assert textmerge.removed_lines(target, "Keep replies short.\n", ["Keep replies short.", "Ask before pushing."]) == {
         "Ask before pushing."}
-    assert review.removed_lines(target, "Keep replies short.\n", []) == set()
+    assert textmerge.removed_lines(target, "Keep replies short.\n", []) == set()
 
 
 def deleted_rule_home(home):
@@ -583,8 +583,8 @@ def test_only_lines_a_target_has_can_be_removed(tmp_path):
     group, = scan.groups
     winner = next(version for version in group.versions if version.tools == ("claude",))
     for remove in ({"~/.codex/AGENTS.md": ["Run the tests."]}, {"~/.claude/CLAUDE.md": ["Run the tests."]}):
-        with pytest.raises(review.ChoiceError):
-            review.plan(tmp_path, scan, {group.key: {"version": winner.id, "remove": remove}}, "claude")
+        with pytest.raises(writes.ChoiceError):
+            writes.plan(tmp_path, scan, {group.key: {"version": winner.id, "remove": remove}}, "claude")
 
 
 def test_agent_syncs_copy_only_vouches_for_the_source_tool(tmp_path):

@@ -13,7 +13,7 @@ from importlib.resources import files
 from pathlib import Path
 from threading import Event, Thread
 
-from . import instructions, review
+from . import instructions, review, textmerge, writes
 from .config import Config
 from .locking import run_lock
 
@@ -76,7 +76,7 @@ def _group_data(home: Path, group: review.Group, source: str) -> dict:
     versions = []
     for version in group.versions:
         path = review.shown(home, version.path)
-        rows = review.rows(version.body, winner.body) if version.id != winner.id else []
+        rows = textmerge.rows(version.body, winner.body) if version.id != winner.id else []
         dropped = set(gone.get(version.id, ()))
         rows = [("x" if tag == "=" and line.rstrip() in dropped else tag, line) for tag, line in rows]
         versions.append({
@@ -85,7 +85,7 @@ def _group_data(home: Path, group: review.Group, source: str) -> dict:
             "note": version.note.replace(str(home) + "/", "~/"),
             "cautions": review.cautions(version, winner) if version.id != winner.id else [],
             "fixed": review.fixed(version),
-            "diff": _rows(rows), "own": sum(tag == "=" and review.meaningful(line) for tag, line in rows),
+            "diff": _rows(rows), "own": sum(tag == "=" and textmerge.meaningful(line) for tag, line in rows),
             "only": _leftovers(home, group, version),
         })
     differs = len({version.digest for version in group.versions}) > 1
@@ -95,7 +95,7 @@ def _group_data(home: Path, group: review.Group, source: str) -> dict:
             "snapshot": _snapshot(group), "versions": versions}
 
 
-def _edit_data(home: Path, edit: review.Edit) -> dict:
+def _edit_data(home: Path, edit: writes.Edit) -> dict:
     before = review.as_text(edit.before) if edit.before is not None else ""
     after = review.as_text(edit.after)
     data = {"key": edit.key, "tools": edit.tools, "path": review.shown(home, edit.path),
@@ -107,7 +107,7 @@ def _edit_data(home: Path, edit: review.Edit) -> dict:
             data["diff"] = _rows(_changes(before, after))
             if edit.winner:
                 bodies = (instructions.split_front(text)[1] for text in (before, edit.winner))
-                data["own"] = review.own_lines(*bodies) - len(edit.removed)
+                data["own"] = textmerge.own_lines(*bodies) - len(edit.removed)
     return data
 
 
@@ -254,7 +254,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(handler(self._body()))
         except _RequestError as exc:
             self._json({"error": str(exc)}, exc.status)
-        except review.ChoiceError as exc:
+        except writes.ChoiceError as exc:
             self._json({"error": f"{exc}. Reload the page."}, HTTPStatus.BAD_REQUEST)
         except (OSError, TypeError, ValueError) as exc:
             self._json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -262,8 +262,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _plan(self, data: dict) -> dict:
         home, cfg = self.server.home, self.server.cfg
         scan = review.scan(home, cfg)
-        steps = review.plan(home, scan, _choices(data, scan, applying=False), cfg.source)
-        return {"files": [_edit_data(home, edit) for edit in review.edits(steps)],
+        steps = writes.plan(home, scan, _choices(data, scan, applying=False), cfg.source)
+        return {"files": [_edit_data(home, edit) for edit in writes.edits(steps)],
                 "backup": review.shown(home, cfg.state_dir / "backups")}
 
     def _apply(self, data: dict) -> dict:
@@ -273,11 +273,11 @@ class _Handler(BaseHTTPRequestHandler):
                 raise _RequestError(HTTPStatus.CONFLICT, BUSY)
             scan = review.scan(home, cfg)
             choices = _choices(data, scan, applying=True)
-            steps = review.plan(home, scan, choices, cfg.source)
-            backup = review.backup_folder(cfg.state_dir / "backups", "review") if steps else None
+            steps = writes.plan(home, scan, choices, cfg.source)
+            backup = writes.backup_folder(cfg.state_dir / "backups", "review") if steps else None
             result = {"backup": review.shown(home, backup) if backup else None}
             try:
-                result["changes"] = review.apply(home, steps, backup) if backup else []
+                result["changes"] = writes.apply(home, steps, backup) if backup else []
                 review.remember(review.baseline_file(cfg), review.scan(home, cfg), choices)
                 if backup and not result["changes"]:
                     backup.rmdir()                     # nothing changed, so nothing was backed up

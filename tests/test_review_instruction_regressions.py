@@ -1,6 +1,6 @@
 import pytest
 
-from agent_sync import instructions, review
+from agent_sync import instructions, review, writes
 from agent_sync.config import Config
 
 
@@ -26,11 +26,11 @@ def test_review_removes_superseded_mirrored_instructions(tmp_path, already_copie
     scan = review.scan(tmp_path, Config(home=tmp_path))
     group, = scan.groups
     winner = next(version for version in group.versions if version.path == source)
-    steps = review.plan(tmp_path, scan, {group.key: winner.id}, "claude")
+    steps = writes.plan(tmp_path, scan, {group.key: winner.id}, "claude")
     backup = tmp_path / "backup"
-    review.apply(tmp_path, steps, backup)
+    writes.apply(tmp_path, steps, backup)
 
     expected = chosen if already_copied else "Use the Codex workspace profile.\n" + chosen
     assert target.read_text() == expected
     assert (backup / target.relative_to(tmp_path)).read_text() == before
-    assert review.apply(tmp_path, steps, backup) == []
+    assert writes.apply(tmp_path, steps, backup) == []

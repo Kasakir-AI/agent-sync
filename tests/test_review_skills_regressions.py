@@ -2,7 +2,7 @@ import os
 import stat
 import subprocess
 
-from agent_sync import review, skills
+from agent_sync import review, skills, writes
 from agent_sync.config import Config
 
 
@@ -10,8 +10,8 @@ def apply_claude_skill(home):
     scan = review.scan(home, Config(home=home))
     group, = scan.groups
     winner = next(version for version in group.versions if version.tools == ("claude",))
-    steps = review.plan(home, scan, {group.key: winner.id}, "claude")
-    review.apply(home, steps, home / "backup")
+    steps = writes.plan(home, scan, {group.key: winner.id}, "claude")
+    writes.apply(home, steps, home / "backup")
 
 
 def test_review_preserves_permissions_when_copying_a_new_skill_file(tmp_path):

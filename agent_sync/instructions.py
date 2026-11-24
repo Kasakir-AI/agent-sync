@@ -6,7 +6,7 @@
                Rules" of its settings screen in its own database, so a global rule file is used instead)
 In CLAUDE.md and AGENTS.md the source's lines are merged in, the way `agent-sync review` keeps a version: a line the
 source changed is replaced, a new one is added, and a line only the target has stays as that tool's own note, unless
-the source had it at the last sync and has since deleted it. The lines last synced are recorded with review's
+the source had it at the last sync and has since deleted it. The lines last synced are recorded in the
 baselines. Earlier versions wrote a marked block instead; a run folds that block into the merged text.
 Cursor can't be the source: set `source` to claude or codex.
 """
@@ -15,8 +15,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .textmerge import keys, load_baselines, merge, removed_lines, save_baselines
+
 END = "<!-- agent-sync: end -->"
-KEY = "instructions:Global instructions"   # its entry in review's baselines
+KEY = "instructions:Global instructions"   # its entry in the baselines review keeps too
 BLOCK = re.compile(r"\n*<!-- agent-sync: begin.*?<!-- agent-sync: end -->\n?", re.S)
 
 FRONT = re.compile(r"\A---[ \t]*\r?\n.*?^---[ \t]*(?:\r?\n|\Z)", re.M | re.S)
@@ -38,7 +40,6 @@ def own_text(text: str) -> str:
 
 
 def rendered(tool: str, current: str, body: str, src: Path, synced: frozenset[str] = frozenset()) -> str:
-    from .review import merge, removed_lines  # review builds on this module, so it is imported here, not at the top
     if tool == "cursor":
         _, existing = split_front(current)
         if own_text(existing) == body.strip():
@@ -55,7 +56,6 @@ def rendered(tool: str, current: str, body: str, src: Path, synced: frozenset[st
 def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = None) -> list[str]:
     if source == "cursor":
         return ["skip  Cursor can't be the source of global instructions; set source to claude or codex"]
-    from . import review
     paths = files(home)
     src = paths[source]
     if not src.exists():
@@ -63,7 +63,7 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
     body = own_text(src.read_text())
     if not body:
         return [f"skip  {src} is empty"]
-    stored = review.load_baselines(baselines) if baselines else {}
+    stored = load_baselines(baselines) if baselines else {}
     entry = stored.get(KEY) if isinstance(stored.get(KEY), dict) else {}
     lines = entry.get("lines")
     valid = isinstance(lines, list) and all(isinstance(line, str) for line in lines)
@@ -80,6 +80,6 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(new)
         changes.append(f"{'would update' if dry else 'updated'} {path}")
-    if baselines and not dry and entry.get("lines") != review.keys(body):
-        review.save_baselines(baselines, {**stored, KEY: {**entry, "lines": review.keys(body)}})
+    if baselines and not dry and entry.get("lines") != keys(body):
+        save_baselines(baselines, {**stored, KEY: {**entry, "lines": keys(body)}})
     return changes

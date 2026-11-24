@@ -1,6 +1,6 @@
 import json
 
-from agent_sync import review
+from agent_sync import review, writes
 from agent_sync.config import Config
 
 
@@ -44,11 +44,11 @@ def test_upkeep_replaces_stale_copies_with_the_working_one_and_keeps_tool_settin
     setup(tmp_path, old, new, cursor_dir=old)
     cfg = Config(home=tmp_path)
     before = (tmp_path / ".claude.json").read_text()
-    dry = review.repair_mcp(tmp_path, cfg, dry=True)
+    dry = writes.repair_mcp(tmp_path, cfg, dry=True)
     assert [line.split(" (")[0] for line in dry] == ["would update ~/.claude.json", "would update ~/.cursor/mcp.json"]
     assert (tmp_path / ".claude.json").read_text() == before
 
-    lines = review.repair_mcp(tmp_path, cfg)
+    lines = writes.repair_mcp(tmp_path, cfg)
     assert "Claude Code and Cursor pointed at files that no longer exist; now Codex's version" in lines[0]
     assert lines[-1].startswith("originals backed up in ~/")
     for name in (".claude.json", ".cursor/mcp.json"):
@@ -56,13 +56,13 @@ def test_upkeep_replaces_stale_copies_with_the_working_one_and_keeps_tool_settin
     assert 'enabled_tools = ["run"]' in (tmp_path / ".codex/config.toml").read_text()
     group, = review.scan(tmp_path, cfg).groups
     assert group.status == "same"
-    assert review.repair_mcp(tmp_path, cfg) == []
+    assert writes.repair_mcp(tmp_path, cfg) == []
 
 
 def test_working_copies_that_disagree_are_left_for_review(tmp_path):
     old, new, other = versioned(tmp_path, "1.0", exists=False), versioned(tmp_path, "2.0"), versioned(tmp_path, "3.0")
     setup(tmp_path, old, new, cursor_dir=other)
-    assert review.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+    assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
 
 
 def test_paths_inside_values_are_checked_but_urls_and_package_names_are_not(tmp_path):

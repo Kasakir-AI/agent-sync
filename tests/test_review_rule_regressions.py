@@ -1,6 +1,6 @@
 import pytest
 
-from agent_sync import review
+from agent_sync import review, writes
 from agent_sync.config import Config
 
 
@@ -26,8 +26,8 @@ def test_similar_rules_from_one_tool_stay_separate(tmp_path, scoped):
     if scoped:
         for group in scanned.groups:
             assert group.status == "local" and not group.missing
-            with pytest.raises(review.ChoiceError):
-                review.plan(tmp_path, scanned, {group.key: group.versions[0].id}, "claude")
+            with pytest.raises(writes.ChoiceError):
+                writes.plan(tmp_path, scanned, {group.key: group.versions[0].id}, "claude")
 
 
 def test_cross_tool_match_does_not_pick_up_a_second_rule_from_the_same_tool(tmp_path):
@@ -63,6 +63,6 @@ def test_global_rule_cannot_overwrite_a_scoped_rule_with_the_same_name(tmp_path)
     scanned = review.scan(tmp_path, Config(home=tmp_path))
     group = next(group for group in scanned.groups if group.versions[0].path == global_rule)
     assert group.status == "local" and not group.missing
-    with pytest.raises(review.ChoiceError):
-        review.plan(tmp_path, scanned, {group.key: group.versions[0].id}, "claude")
+    with pytest.raises(writes.ChoiceError):
+        writes.plan(tmp_path, scanned, {group.key: group.versions[0].id}, "claude")
     assert scoped.read_bytes() == original
