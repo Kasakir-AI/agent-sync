@@ -154,20 +154,31 @@ def update_clis(log, cfg, dry: bool = False) -> None:
 
 
 def how_installed(prefix: str | None = None) -> tuple[str, str]:
-    """How this copy of agent-sync was installed: ("homebrew", brew prefix), ("pipx", ""), ("git", repo URL),
-    or ("other", why it can't update itself)."""
+    """How this copy of agent-sync was installed: ("homebrew", brew prefix), ("pipx", repo URL when pipx installed
+    it from git, else ""), ("git", repo URL), or ("other", why it can't update itself)."""
     real = os.path.realpath(prefix or sys.prefix)
     if "/Cellar/agent-sync/" in real + "/":
         return "homebrew", real.split("/Cellar/")[0]
-    if "/pipx/venvs/agent-sync" in real:
-        return "pipx", ""
     try:
         direct = json.loads(metadata.distribution("agent-sync").read_text("direct_url.json") or "{}")
     except (metadata.PackageNotFoundError, ValueError):
         direct = {}
-    if direct.get("vcs_info", {}).get("vcs") == "git" and direct.get("url"):
-        return "git", direct["url"]
+    url = direct.get("url", "") if direct.get("vcs_info", {}).get("vcs") == "git" else ""
+    if "/pipx/venvs/agent-sync" in real:
+        return "pipx", url
+    if url:
+        return "git", url
     return "other", "it runs from a source checkout or a plain pip install"
+
+
+def latest_release(url: str) -> str | None:
+    """The newest vX.Y.Z tag of a git repository: a copy installed from git updates to releases, never to main."""
+    found = []
+    for line in raw(["git", "ls-remote", "--tags", "--refs", url, "v*"], timeout=60).splitlines():
+        tag = line.rsplit("refs/tags/", 1)[-1]
+        if re.fullmatch(r"v\d+(?:\.\d+)*", tag):
+            found.append((tuple(int(part) for part in tag[1:].split(".")), tag))
+    return max(found)[1] if found else None
 
 
 def update_self(log, dry: bool = False, home: Path | None = None) -> bool:
@@ -185,10 +196,18 @@ def update_self(log, dry: bool = False, home: Path | None = None) -> bool:
             log("ok", f"agent-sync {before} is current (Homebrew)")
             return False
         args = ["brew", "upgrade", "--formula", "agent-sync"]
-    elif kind == "pipx":
+    elif kind == "pipx" and not where:
         args = ["pipx", "upgrade", "agent-sync"]
-    elif kind == "git":
-        args = [sys.executable, "-m", "pip", "install", "--quiet", "--upgrade", f"git+{where}"]
+    elif kind in ("pipx", "git"):              # from a git repository: to its newest release, never to main
+        tag = latest_release(where)
+        if tag is None:
+            log("skip", f"agent-sync found no release in {where}; it only updates to a release")
+            return False
+        if tag == f"v{before}":
+            log("ok", f"agent-sync {before} is the latest release")
+            return False
+        args = (["pipx", "install", "--force", f"git+{where}@{tag}"] if kind == "pipx" else
+                [sys.executable, "-m", "pip", "install", "--quiet", "--upgrade", f"git+{where}@{tag}"])
     else:
         log("skip", f"agent-sync can't update itself: {where}")
         return False

@@ -90,8 +90,15 @@ def test_update_self_homebrew(monkeypatch):
 def test_update_self_other_installs(monkeypatch):
     _, calls, _ = run_update_self(monkeypatch, "pipx", "")
     assert ["pipx", "upgrade", "agent-sync"] in calls
+    tags = "a\trefs/tags/v0.9.0\nb\trefs/tags/v0.10.0\nc\trefs/tags/v0.10.0-rc1\n"
+    monkeypatch.setattr(tools, "raw", lambda args, timeout=120: tags)
     _, calls, _ = run_update_self(monkeypatch, "git", "https://github.com/o/agent-sync.git")
-    assert calls[0][-1] == "git+https://github.com/o/agent-sync.git"
+    assert calls[0][-1] == "git+https://github.com/o/agent-sync.git@v0.10.0"      # the newest release, not main
+    _, calls, _ = run_update_self(monkeypatch, "pipx", "https://github.com/o/agent-sync.git")
+    assert calls[0] == ["pipx", "install", "--force", "git+https://github.com/o/agent-sync.git@v0.10.0"]
+    monkeypatch.setattr(tools, "raw", lambda args, timeout=120: "")
+    upgraded, calls, lines = run_update_self(monkeypatch, "git", "https://github.com/o/agent-sync.git")
+    assert not upgraded and calls == [] and "it only updates to a release" in lines[0]
     upgraded, calls, lines = run_update_self(monkeypatch, "other", "it runs from a source checkout")
     assert not upgraded and calls == []
     assert lines == ["skip agent-sync can't update itself: it runs from a source checkout"]
