@@ -121,6 +121,7 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
     mine = own(home, source, skip)
     for target in set(folders(home).values()) - {folders(home)[source]}:
         plan[target] = {n: (d, f"{COPY_MARK}{d}\n", "") for n, d in mine.items()}
+    plan.setdefault(folders(home)["codex"], {})    # visited even as the source: old plugin copies there go too
     changes: list[str] = []
 
     from .duplicates import TOOL_NAMES, doubled, elsewhere, views  # builds on this module, so it is imported here

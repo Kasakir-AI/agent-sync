@@ -102,6 +102,18 @@ def test_plugin_skills_are_never_copied_and_old_copies_go(tmp_path):
     assert skills.mirror(tmp_path, "claude") == []
 
 
+def test_old_plugin_copies_go_when_codex_is_the_source(tmp_path):
+    shared = tmp_path / ".agents/skills"
+    root = make_plugin(tmp_path, "writing@market", ["outline"])
+    make_skill(shared, "outline", "writing's outline")
+    (shared / "outline" / skills.MARKER).write_text(f"{skills.PLUGIN_MARK}writing@market: {root}/skills/outline\n")
+    make_skill(shared, "codex-own")
+    assert skills.mirror(tmp_path, "codex") == [
+        f"removed skill outline from {shared} (agent-sync no longer copies plugin skills)",
+        f"copied skill codex-own to {tmp_path / '.claude/skills'}"]
+    assert (shared / "codex-own").exists()
+
+
 def test_a_copy_a_tool_would_load_twice_is_left_out(tmp_path):
     claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
     make_skill(claude, "outline", "my outline")
