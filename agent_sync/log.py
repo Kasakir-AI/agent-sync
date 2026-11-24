@@ -39,11 +39,13 @@ class Log:
                 self(kind, line)
 
     def summary(self) -> str:
-        """What a run did, for its last line: "2 changes, 1 warning, no problems"."""
+        """What a run did, for its last line: "2 changes, 3 commands run, 1 warning, no problems". Changes are the
+        files agent-sync wrote; commands are the installs, updates and extra steps it ran (or, dry, would run)."""
         def count(n: int, word: str) -> str:
             return f"{n or 'no'} {word}{'' if n == 1 else 's'}"
-        return ", ".join((count(self.kinds["sync"], "change"), count(self.kinds["WARN"], "warning"),
-                          count(self.problems, "problem")))
+        commands = self.kinds["ran"] + self.kinds["dry"]
+        return ", ".join((count(self.kinds["sync"], "change"), count(commands, "command") + " run",
+                          count(self.kinds["WARN"], "warning"), count(self.problems, "problem")))
 
     def prune(self, days: int, now: datetime | None = None) -> int:
         """Drop lines older than `days`. Rewrites the file in place (same inode, so a viewer keeps following)."""

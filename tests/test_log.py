@@ -28,4 +28,6 @@ def test_mirror_lines_keep_their_own_kind_and_the_summary_counts_them(tmp_path):
     text = (tmp_path / "c.log").read_text()
     assert " sync  updated ~/.codex/AGENTS.md" in text
     assert " WARN  ~/x is not a copy" in text and " skip  no ~/.claude" in text
-    assert log.summary() == "1 change, 1 warning, no problems"
+    assert log.summary() == "1 change, no commands run, 1 warning, no problems"
+    log("ran", "codex update"); log("dry", "would run: claude update")
+    assert log.summary() == "1 change, 2 commands run, 1 warning, no problems"

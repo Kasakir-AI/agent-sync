@@ -22,7 +22,7 @@ def test_extra_steps_run_and_dry_run_only_prints(tmp_path):
     tools.extra_steps(log, steps, dry=True)
     assert not out.exists() and lines[-1][0] == "dry"
     tools.extra_steps(log, steps)
-    assert out.exists() and lines[-1] == ("ok", "make a file")
+    assert out.exists() and lines[-1] == ("ran", "make a file")
 
 
 def test_dry_run_writes_nothing(tmp_path):

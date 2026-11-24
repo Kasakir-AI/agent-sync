@@ -105,7 +105,7 @@ def act(log, dry: bool, label: str, args: list[str], timeout: int = 900) -> None
         log("dry", f"would run: {' '.join(args)}  ({label})")
         return
     code, out = sh(args, timeout)
-    log("ok" if code == 0 else "FAIL", f"{label}{': ' + out if code else ''}")
+    log("ran" if code == 0 else "FAIL", f"{label}{': ' + out if code else ''}")
 
 
 DEFAULT_CLIS = (("claude", "claude-code", ["claude", "update"]),
