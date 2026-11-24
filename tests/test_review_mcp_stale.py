@@ -69,9 +69,9 @@ def test_paths_inside_values_are_checked_but_urls_and_package_names_are_not(tmp_
     there = versioned(tmp_path, "2.0")
     value = {"command": "node", "args": ["@scope/pkg/service", "https://example.com/a/b"],
              "env": {"SERVICES": json.dumps({"web": f"{there}/service.mjs", "gone": f"{tmp_path}/nowhere/x.mjs"}),
-                     "PATHS": f"{there}:{tmp_path}/also-gone", "HOME_DIR": f"{tmp_path}/Folder With Spaces"}}
+                     "PATHS": f"{there}:{tmp_path}/gone-dir/bin", "HOME_DIR": f"{tmp_path}/Folder With Spaces"}}
     (tmp_path / "Folder With Spaces").mkdir()
-    assert review.missing_paths(value) == (f"{tmp_path}/nowhere/x.mjs", f"{tmp_path}/also-gone")
+    assert review.missing_paths(value) == (f"{tmp_path}/nowhere/x.mjs", f"{tmp_path}/gone-dir/bin")
 
 
 def test_only_the_servers_lines_change_in_a_settings_file_with_other_text(tmp_path):
@@ -87,3 +87,24 @@ def test_only_the_servers_lines_change_in_a_settings_file_with_other_text(tmp_pa
     after = claude.read_text().splitlines()
     assert after[1] == before[1] == '  "tip": "Say what you\'re doing — then continue.",'
     assert sum(a != b for a, b in zip(before, after, strict=True)) == 1          # only the args line
+
+
+def test_a_file_the_server_creates_in_a_folder_that_exists_is_not_stale(tmp_path):
+    there = versioned(tmp_path, "2.0")
+    (tmp_path / "logs").mkdir()
+    for log in ("new.log", "other.log"):
+        assert review.missing_paths({"command": "node", "args": [f"{there}/service.mjs"],
+                                     "env": {"LOG_FILE": f"{tmp_path}/logs/{log}"}}) == ()
+    assert review.missing_paths({"command": f"{tmp_path}/gone/bin/node", "args": []}) == (f"{tmp_path}/gone/bin/node",)
+
+
+def test_copies_that_differ_only_in_a_log_file_are_left_for_review(tmp_path):
+    there = versioned(tmp_path, "2.0")
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs/claude.log").write_text("")
+    def server_with(log):
+        return {"command": "node", "args": [f"{there}/service.mjs"], "env": {"LOG_FILE": f"{tmp_path}/logs/{log}"}}
+    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {"repl": server_with("claude.log")}}))
+    (tmp_path / ".cursor").mkdir()
+    (tmp_path / ".cursor/mcp.json").write_text(json.dumps({"mcpServers": {"repl": server_with("cursor.log")}}))
+    assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []

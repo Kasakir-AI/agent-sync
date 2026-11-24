@@ -325,8 +325,10 @@ ABSOLUTE = re.compile(r"(?<![\w/.~-])/(?!/)[^\s:\"',;{}()\[\]]+")
 
 
 def missing_paths(server: dict) -> tuple[str, ...]:
-    """The absolute paths a stdio server's command, arguments and environment name that don't exist: a copy made
-    before the tool that owns the server moved it (an app update renames a versioned folder)."""
+    """The paths a stdio server names whose program or folder is gone: its command, or a path in its arguments or
+    environment whose folder no longer exists. That is a copy made before the tool that owns the server moved it
+    (an app update renames a versioned folder). A missing file in a folder that exists may be one the server
+    creates, such as a log, so it does not count."""
     if "command" not in server:
         return ()
     found = []
@@ -334,7 +336,8 @@ def missing_paths(server: dict) -> tuple[str, ...]:
         if text.startswith("/") and os.path.exists(text):
             continue
         found += text.split(os.pathsep) if text.startswith("/") else ABSOLUTE.findall(text)
-    return tuple(path for path in dict.fromkeys(found) if path.startswith("/") and not os.path.exists(path))
+    return tuple(path for path in dict.fromkeys(found) if path.startswith("/") and not os.path.exists(path)
+                 and (path == server["command"] or not os.path.isdir(os.path.dirname(path))))
 
 
 def scan_mcp(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
