@@ -230,11 +230,12 @@ def mcp_text(step: Step, text: str) -> str:
         return codex_mcp_text(text, name, winner)
     data = json.loads(text) if text else {}
     servers = data.get("mcpServers") or {}
-    entry = servers.get(name) or {}
-    keep = {key: value for key, value in entry.items() if key not in MCP_KEYS and key != "type"}
-    servers[name] = {**keep, **winner, "type": "stdio" if "command" in winner else "http"}
+    entry = {key: value for key, value in (servers.get(name) or {}).items()       # keeps the file's key order
+             if key not in MCP_KEYS or key in winner}
+    entry.update(winner, type="stdio" if "command" in winner else "http")
+    servers[name] = entry
     data["mcpServers"] = servers
-    return json.dumps(data, indent=2) + "\n"
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 def edits(steps: list[Step]) -> list[Edit]:
     """Every file the steps change, with its content before and after; steps on one settings file chain."""

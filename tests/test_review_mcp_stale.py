@@ -72,3 +72,18 @@ def test_paths_inside_values_are_checked_but_urls_and_package_names_are_not(tmp_
                      "PATHS": f"{there}:{tmp_path}/also-gone", "HOME_DIR": f"{tmp_path}/Folder With Spaces"}}
     (tmp_path / "Folder With Spaces").mkdir()
     assert review.missing_paths(value) == (f"{tmp_path}/nowhere/x.mjs", f"{tmp_path}/also-gone")
+
+
+def test_only_the_servers_lines_change_in_a_settings_file_with_other_text(tmp_path):
+    old, new = versioned(tmp_path, "1.0", exists=False), versioned(tmp_path, "2.0")
+    setup(tmp_path, old, new)
+    claude = tmp_path / ".claude.json"
+    data = json.loads(claude.read_text())
+    data["mcpServers"]["repl"]["type"] = "stdio"                       # as Claude Code writes it
+    claude.write_text(json.dumps({"tip": "Say what you're doing — then continue.", **data}, indent=2,
+                                 ensure_ascii=False) + "\n")
+    before = claude.read_text().splitlines()
+    writes.repair_mcp(tmp_path, Config(home=tmp_path))
+    after = claude.read_text().splitlines()
+    assert after[1] == before[1] == '  "tip": "Say what you\'re doing — then continue.",'
+    assert sum(a != b for a, b in zip(before, after, strict=True)) == 1          # only the args line

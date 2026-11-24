@@ -87,6 +87,6 @@ def mirror(home: Path, source: str, dry: bool = False) -> list[str]:
             data = json.loads(p.read_text()) if p.exists() else {}
             data.setdefault("mcpServers", {}).update(missing)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(data, indent=2) + "\n")
+            p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
         changes += [f"added MCP server {n} to {tool}" for n in missing]
     return changes
