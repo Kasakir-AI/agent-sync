@@ -179,13 +179,14 @@ and `XDG_STATE_HOME` when set.
 - **Try changes safely.** `agent-sync run --dry-run` after every config change shows exactly what would happen
   (`agent-sync config` offers it after you save).
 - **Change the code.** Each part is one small module in `agent_sync/` with no dependencies: `agents.py` (agent
-  formats per tool), `skills.py` (your own skills, package skills), `duplicates.py` (skills a tool
-  loads twice), `roles.py` (pstack model roles), `mcp.py` (MCP servers), `textmerge.py` (line merging), `writes.py` (applying a choice), `instructions.py` (global
-  instructions), `tools.py` (skill packages, plugins, CLI updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd, launcher),
-  `setup.py` (installing what is missing), `configure.py` and `tomledit.py` (the settings editor), `cli.py` (the
-  order of the steps). To add a step, write a function that takes `log` and `dry`, never writes when `dry` is
-  true, and call it from `run()` in `cli.py`. `tests/` shows how to test a part against a throwaway home folder
-  (`python -m pytest`).
+  formats per tool), `skills.py` (your own skills, package skills), `duplicates.py` (skills a tool loads twice),
+  `roles.py` (pstack model roles), `mcp.py` (MCP servers), `instructions.py` (global instructions), `tools.py`
+  (skill packages, plugins, CLI updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd,
+  launcher), `setup.py` (installing what is missing), `configure.py` and `tomledit.py` (the settings editor),
+  `review.py` (comparing settings and recommending one), `textmerge.py` (merging lines), `writes.py` (writing a
+  choice), `reviewpage.py` and `review.html` (the review page), `cli.py` (the order of the steps). To add a step,
+  write a function that takes `log` and `dry`, never writes when `dry` is true, and call it from `run()` in
+  `cli.py`. `tests/` shows how to test a part against a throwaway home folder (`python -m pytest`).
 
 ## Moving from your own upkeep scripts
 
