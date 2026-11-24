@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 (2026-11-24)
+
+- A shared instruction you reword in Codex's `AGENTS.md` (or that Codex rewords when it remembers something) is no
+  longer put back to the source's wording by the next run. It is kept, and the run warns until `CLAUDE.md` has the
+  same wording, so the other tools get it too. Changes made in the source still reach every tool.
+- The review page recommends the version that reworded a shared line since the last sync, instead of deciding by
+  file dates.
+
 ## 0.7.0 (2026-11-24)
 
 New: no tool loads a skill twice, stale MCP server copies are replaced, and mirrored instructions are merged

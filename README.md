@@ -30,6 +30,8 @@ agent-sync makes the other two match it, once a day:
 - **Global instructions** (optional): `CLAUDE.md` is merged into Codex's `AGENTS.md` and copied into a Cursor rule
   that always applies, or `AGENTS.md` the other way round. The merge adds new lines and replaces changed ones, and
   a line you delete from the source leaves the other file too. Lines only the other file has stay as its own notes.
+  A shared line you reword in the other file (or Codex rewords when it remembers something) is kept, and the run
+  warns until the source has the same wording, so make lasting changes in the source.
 - **Plugins**: Claude Code's plugin marketplaces and the plugins you installed, the Git plugin marketplaces you
   added to Codex, and the Cursor plugin marketplaces you added (Cursor manages its built-in ones itself).
 - **The three CLIs** are updated: Claude Code and Cursor Agent through Homebrew when installed that way,
