@@ -1,16 +1,21 @@
+# One pull request a week, Monday morning, with every update in it: the workflow actions and the pinned test tools
+# in requirements-dev.txt. agent-sync itself has no dependencies; a version range in pyproject.toml is raised only
+# when the newest version falls outside it.
 version: 2
+multi-ecosystem-groups:
+  weekly:
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/New_York
 updates:
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: weekly
-    groups:
-      actions:
-        patterns: ["*"]
+    patterns: ["*"]
+    multi-ecosystem-group: weekly
   - package-ecosystem: pip
     directory: /
-    schedule:
-      interval: weekly
-    groups:
-      dependencies:
-        patterns: ["*"]
+    patterns: ["*"]
+    multi-ecosystem-group: weekly
+    versioning-strategy: increase-if-necessary
