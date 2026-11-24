@@ -11,7 +11,7 @@ import tomllib
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from enum import StrEnum
 from pathlib import Path
@@ -58,6 +58,7 @@ class Version:
     origin: Origin
     note: str
     scoped_rule: bool = False
+    missing: tuple[str, ...] = ()    # an MCP server's: the absolute paths it names that don't exist
 
 
 @dataclass
@@ -240,12 +241,13 @@ def removed_lines(target: str, winner: str, baseline: Iterable[str]) -> set[str]
 
 def make_version(kind: str, name: str, tools: tuple[str, ...], path: Path, body: str, origin: Origin,
                  note: str = "", *, key: str = "", digest: str = "", modified: float | None = None,
-                 scoped_rule: bool = False) -> Version:
+                 scoped_rule: bool = False, missing: tuple[str, ...] = ()) -> Version:
     identity = json.dumps((kind, name, os.fspath(path), key)).encode()
     return Version(
         hashlib.sha1(identity).hexdigest()[:10], tools, path, key, body,
         digest or hashlib.sha256(normalized(body).encode()).hexdigest(),
         path.stat().st_mtime if modified is None else modified, len(body.splitlines()), origin, note, scoped_rule,
+        missing,
     )
 
 
@@ -417,12 +419,29 @@ def plugin_servers(root: Path) -> Iterator[tuple[Path, str, dict]]:
                 yield path, name, server
 
 
+ABSOLUTE = re.compile(r"(?<![\w/.~-])/(?!/)[^\s:\"',;{}()\[\]]+")
+
+
+def missing_paths(server: dict) -> tuple[str, ...]:
+    """The absolute paths a stdio server's command, arguments and environment name that don't exist: a copy made
+    before the tool that owns the server moved it (an app update renames a versioned folder)."""
+    if "command" not in server:
+        return ()
+    found = []
+    for text in [server["command"], *server["args"], *server.get("env", {}).values()]:
+        if text.startswith("/") and os.path.exists(text):
+            continue
+        found += text.split(os.pathsep) if text.startswith("/") else ABSOLUTE.findall(text)
+    return tuple(path for path in dict.fromkeys(found) if path.startswith("/") and not os.path.exists(path))
+
+
 def scan_mcp(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
     for tool, filename in MCP_FILES.items():
         for name, server in sorted(mcp.read(home, tool).items()):
             if (value := portable(server)) is not None:
                 body = json.dumps(value, indent=2, sort_keys=True)
-                yield name, make_version("mcp", name, (tool,), home / filename, body, Origin.SETTINGS, key=name)
+                yield name, make_version("mcp", name, (tool,), home / filename, body, Origin.SETTINGS, key=name,
+                                         missing=missing_paths(value))
     for pid, root in skills.plugins(home).items():
         for path, name, server in plugin_servers(root):
             if (value := portable(server)) is not None:
@@ -760,11 +779,12 @@ def scan_plugins(home: Path, cfg: Config) -> dict[str, dict[str, list[Plugin]]]:
     return dict(sorted(plugins.items()))
 
 
-def scan(home: Path, cfg: Config) -> Scan:
-    """Read the user settings and count the files kept in step by package updates."""
+def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
+    """Read the user settings (all kinds, or the ones named) and count the files kept in step by package updates."""
     locked = skills.locked(home)
     groups = []
-    for kind, entry in KINDS.items():
+    for kind in kinds or KINDS:
+        entry = KINDS[kind]
         by_name: dict[tuple[str, str], list[Version]] = {}
         for name, version in entry.scan(home, cfg, locked):
             by_name.setdefault((name, version.id if version.scoped_rule else ""), []).append(version)
@@ -807,6 +827,7 @@ def scan(home: Path, cfg: Config) -> Scan:
 
 def preferred(versions: list[Version], source: str) -> Version:
     versions = [version for version in versions if not fixed(version)] or versions
+    versions = [version for version in versions if not version.missing] or versions
     rank = max(RANK[version.origin] for version in versions)
     candidates = [version for version in versions if RANK[version.origin] == rank]
     if candidates[0].origin in DATED:
@@ -829,6 +850,8 @@ def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
     if not others:
         return winner, ["the only version found"]
     runner_up = preferred(others, source)
+    if runner_up.missing and not winner.missing:
+        return winner, ["the other copies point at files that no longer exist"]
     if RANK[winner.origin] != RANK[runner_up.origin]:
         lead = {
             Origin.YOURS: "your own edit",
@@ -860,6 +883,9 @@ def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
 
 
 def cautions(version: Version, winner: Version) -> list[str]:
+    if version.missing and not winner.missing:
+        more = f" and {counted(len(version.missing) - 1, 'other path')}" if len(version.missing) > 1 else ""
+        return [f"stale: {version.missing[0]}{more} no longer exists"]
     if version.origin == Origin.COPY and version.modified > winner.modified:
         return ["newer only because agent-sync rewrote it"]
     if fixed(version):
@@ -1133,6 +1159,47 @@ def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
     targets = {edit.target: edit.action for edit in changes}
     return [f"{'created' if action == 'create' else 'updated'} {shown(home, target)}"
             for target, action in targets.items()]
+
+
+def backup_folder(root: Path, prefix: str) -> Path:
+    """A new, private folder for the originals of one apply."""
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    stamp = datetime.now()
+    while True:
+        backup = root / f"{prefix}-{stamp:%Y%m%d-%H%M%S}"
+        try:
+            backup.mkdir(mode=0o700)
+        except FileExistsError:
+            stamp += timedelta(seconds=1)
+        else:
+            return backup
+
+
+def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:
+    """Replace each MCP server copy that points at files that no longer exist with the working version, when every
+    working copy agrees on it. A tool that owns a server (Codex's node_repl) updates its own copy; copies made
+    from it before then go stale and would otherwise stay so, as the MCP mirror never changes an existing server."""
+    scan_now = scan(home, cfg, ["mcp"])
+    choices, why = {}, {}
+    for group in scan_now.groups:
+        working = [version for version in group.versions if not version.missing and not fixed(version)]
+        stale = [version for version in group.versions if version.missing]
+        if group.kind == "mcp" and stale and working and len({version.digest for version in working}) == 1:
+            choices[group.key] = working[0].id
+            broken = tool_names(sorted({tool for version in stale for tool in version.tools}, key=TOOLS.index))
+            why[group.key] = (f"MCP server {group.name}: {broken} pointed at files that no longer exist; "
+                              f"now {tool_names(working[0].tools)}'s version")
+    steps = [step for step in plan(home, scan_now, choices, cfg.source) if step.action == "replace"]
+    if not steps:
+        return []
+    if dry:
+        return [f"would update {shown(home, step.path)} ({why[step.key]})" for step in steps]
+    backup = backup_folder(cfg.state_dir / "backups", "repair")
+    if not apply(home, steps, backup):
+        backup.rmdir()
+        return []
+    return [f"updated {shown(home, step.path)} ({why[step.key]})" for step in steps] + [
+        f"originals backed up in {shown(home, backup)}"]
 
 
 def label(version: Version, group: Group) -> str:

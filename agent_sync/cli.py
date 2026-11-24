@@ -129,6 +129,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             log("ok", "model roles mirrored")
         if cfg.mirror_mcp:
             try:
+                log.lines(review.repair_mcp(cfg.home, cfg, dry))
                 log.lines(mcp.mirror(cfg.home, cfg.source, dry))
                 log("ok", "MCP servers mirrored")
             except (ValueError, OSError) as e:

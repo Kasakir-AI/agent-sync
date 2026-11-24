@@ -6,7 +6,6 @@ import secrets
 import time
 import webbrowser
 from dataclasses import asdict, replace
-from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -119,19 +118,6 @@ def _scan_data(home: Path, cfg: Config, scan: review.Scan) -> dict:
                     for name, tools in scan.plugins.items()},
         "managed": scan.managed, "tools": review.TOOL_LABELS, "plugin_skills": cfg.plugin_skills,
     }
-
-
-def _backup_folder(root: Path) -> Path:
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    stamp = datetime.now()
-    while True:
-        backup = root / f"review-{stamp:%Y%m%d-%H%M%S}"
-        try:
-            backup.mkdir(mode=0o700)
-        except FileExistsError:
-            stamp += timedelta(seconds=1)
-        else:
-            return backup
 
 
 class _RequestError(ValueError):
@@ -288,7 +274,7 @@ class _Handler(BaseHTTPRequestHandler):
             scan = review.scan(home, cfg)
             choices = _choices(data, scan, applying=True)
             steps = review.plan(home, scan, choices, cfg.source)
-            backup = _backup_folder(cfg.state_dir / "backups") if steps else None
+            backup = review.backup_folder(cfg.state_dir / "backups", "review") if steps else None
             result = {"backup": review.shown(home, backup) if backup else None}
             try:
                 result["changes"] = review.apply(home, steps, backup) if backup else []
