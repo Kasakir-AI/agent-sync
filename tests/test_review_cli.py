@@ -137,3 +137,15 @@ def test_a_run_that_is_not_due_says_why_when_asked_to_print(upkeep_home, capsys)
     assert capsys.readouterr().out == ""
     assert cli.main(["run", "--echo"]) == 0
     assert "The last run was under an hour ago; the next is due in 20 hours" in capsys.readouterr().out
+
+
+def test_review_list_puts_choices_first_and_folds_settings_that_match(home, capsys):
+    put(home, ".claude/rules/zebra.md", "Same everywhere.\n")
+    put(home, ".cursor/rules/zebra.mdc", "Same everywhere.\n")
+    put(home, ".claude/CLAUDE.md", "Keep the checklist.\n")
+    put(home, ".cursor/rules/agent-sync-instructions.mdc", "Use a new checklist.\n")
+    assert cli.main(["review", "--list"]) == 0
+    output = capsys.readouterr().out
+    assert output.index("Global instructions (instructions, differ)") < output.index("zebra")
+    assert output.rstrip().endswith("The same in every tool that has them:\n  rule: zebra")
+    assert "zebra (rule, same)" not in output

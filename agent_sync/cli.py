@@ -184,7 +184,8 @@ def review_settings(list_only: bool, no_open: bool) -> int:
     print(f"{counts['differ']} differ, {counts['check']} to check once, "
           f"{counts['missing'] + counts['local']} only in one tool, "
           f"{counts['same'] + counts['tailored']} the same ({counts['tailored']} made for each tool)\n")
-    for group in groups:
+    order = ("differ", "check", "missing", "local", "tailored")
+    for group in sorted((g for g in groups if g.status != "same"), key=lambda g: order.index(g.status)):
         winner, reasons = review.recommend(group, cfg.source)
         print(f"{group.name} ({group.kind}, {group.status})")
         if group.note:
@@ -202,6 +203,14 @@ def review_settings(list_only: bool, no_open: bool) -> int:
             for reason in reasons:
                 print(f"  - {reason}")
         print()
+    same: dict[str, list[str]] = {}
+    for group in groups:
+        if group.status == "same":
+            same.setdefault(group.kind, []).append(group.name)
+    if same:
+        print("The same in every tool that has them:")
+        for kind, names in same.items():
+            print(f"  {kind}: {', '.join(names)}")
     return 0
 
 
