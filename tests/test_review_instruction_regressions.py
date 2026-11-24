@@ -19,7 +19,8 @@ def test_review_removes_superseded_mirrored_instructions(tmp_path, already_copie
     chosen = "Run tests using pytest.\n"
     source.write_text(chosen)
     if already_copied:
-        before = chosen + before.replace("Use the Codex workspace profile.\n\n", "")
+        before = chosen + ("\n<!-- agent-sync: begin (mirrored from CLAUDE.md; edit the source, not this block) -->"
+                           "\nRun the tests.\n<!-- agent-sync: end -->\n")
         target.write_text(before)
 
     scan = review.scan(tmp_path, Config(home=tmp_path))

@@ -135,7 +135,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 log("FAIL", f"MCP servers: {e}")
         if cfg.mirror_instructions:
             try:
-                log.lines(instructions.mirror(cfg.home, cfg.source, dry))
+                log.lines(instructions.mirror(cfg.home, cfg.source, dry, review.baseline_file(cfg)))
                 log("ok", "global instructions mirrored")
             except OSError as e:
                 log("FAIL", f"global instructions: {e}")

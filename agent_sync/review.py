@@ -673,6 +673,10 @@ def remember(path: Path, scan: Scan, choices: dict[str, str | dict]) -> None:
         kept = {str(file): sorted({line for line, _ in lines}) for version in group.versions
                 if version.id != winner.id for file, lines in leftovers(group, version, winner).items()}
         stored[key] = {**baseline(group.kind, winner), "kept": kept}
+    save_baselines(path, stored)
+
+
+def save_baselines(path: Path, stored: dict) -> None:
     text = json.dumps(stored, indent=2, sort_keys=True) + "\n"
     if path.is_file() and read_text(path) == text:
         return
