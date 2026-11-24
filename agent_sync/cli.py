@@ -1,6 +1,7 @@
 """agent-sync: keep Claude Code, Codex and Cursor in step.
 
-    agent-sync run [--force] [--echo]   do the upkeep (only when the last run is 20+ hours old, unless --force)
+    agent-sync run [--force] [--echo]   do the upkeep (only when the last run is 20+ hours old, unless --force;
+                                        prints each step when started from a terminal)
     agent-sync run --dry-run            show everything a run would change, and change nothing
     agent-sync install [--launcher]     schedule it: hourly + at login, so a missed day catches up
                                         (macOS launchd or a Linux systemd user timer); --launcher adds a
@@ -20,6 +21,7 @@ import argparse
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 import urllib.request
@@ -44,10 +46,19 @@ def online() -> bool:
         return False
 
 
+def hours(n: float) -> str:
+    return "under an hour" if n < 1 else f"{n:.0f} hour{'' if round(n) == 1 else 's'}"
+
+
 def run(force: bool, echo: bool, dry: bool = False) -> int:
     cfg = load()
+    echo = echo or sys.stdout.isatty()
     stamp = cfg.state_dir / "last-run"
-    if not (force or dry) and stamp.exists() and time.time() - stamp.stat().st_mtime < DUE_HOURS * 3600:
+    age = time.time() - stamp.stat().st_mtime if stamp.exists() else None
+    if not (force or dry) and age is not None and age < DUE_HOURS * 3600:
+        if echo:
+            print(f"The last run was {hours(age / 3600)} ago; the next is due in "
+                  f"{hours(DUE_HOURS - age / 3600)}. Run `agent-sync run --force` to run now.")
         return 0
     with ExitStack() as stack:
         work = cfg.state_dir
@@ -74,9 +85,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             + ("  (dry run: nothing is changed)" if dry else ""))
         log("info", f"skills tool: {tools.skills(cfg.skills_cli, '--version')[1]}")
         if cfg.launcher and cfg.macos:
-            line = schedule.refresh_launcher(cfg.home, dry, tools.PATH)
-            if line:
-                log("WARN" if line.startswith("WARN") else "sync", line.removeprefix("WARN  "))
+            log.lines(filter(None, [schedule.refresh_launcher(cfg.home, dry, tools.PATH)]))
         taken: set[str] = set()          # skill names a package listed earlier ships: that package's version wins
         for package in cfg.skill_packages:
             dest = work / "packages" / package.replace("/", "__")
@@ -85,56 +94,48 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             names, gone = skills.package_choice(cfg.home, package, dest, taken) if code == 0 else (None, [])
             for name in gone:
                 tools.act(log, dry, f"remove {name} ({package} ships it, but an earlier package has that name)",
-                          ["npx", "-y", "--prefer-online", cfg.skills_cli, "remove", "-g", "-s", name, "-y"])
+                          tools.remove_args(cfg.skills_cli, name))
             tools.act(log, dry, f"skills from {package} for claude-code, codex, cursor",
                       tools.skill_args(cfg.skills_cli, package, names))
             if code == 0 and cfg.remove_dropped_skills:
                 for name in skills.dropped(cfg.home, package, dest):
                     tools.act(log, dry, f"remove {name} (no longer in {package})",
-                              ["npx", "-y", "--prefer-online", cfg.skills_cli, "remove", "-g", "-s", name, "-y"])
+                              tools.remove_args(cfg.skills_cli, name))
             if (dest / "agents").is_dir():
                 version = "0"
                 manifest = dest / ".cursor-plugin/plugin.json"
                 if manifest.exists():
                     version = json.loads(manifest.read_text()).get("version", "0")
                 try:
-                    for line in agents.mirror(dest, package, cfg.home, cfg.agent_models, version, dry,
-                                              cfg.agent_notes):
-                        log("sync", line)
+                    log.lines(agents.mirror(dest, package, cfg.home, cfg.agent_models, version, dry, cfg.agent_notes))
                     log("ok", f"agents from {package} mirrored")
                 except (ValueError, OSError) as e:
                     log("FAIL", f"agents from {package}: {e}")
         if cfg.mirror_skills:
             try:
-                for line in skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry, cfg.plugin_skills):
-                    log("WARN" if line.startswith("WARN") else "sync", line.removeprefix("WARN  "))
+                log.lines(skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry, cfg.plugin_skills))
                 log("ok", "your own skills" + (" and plugin skills" if cfg.plugin_skills else "") + " mirrored")
             except OSError as e:
                 log("FAIL", f"your own skills: {e}")
         try:
             found = duplicates.report(cfg.home, cfg.allow_duplicate_skills)
-            for line in found:
-                log("WARN", line)
+            log.lines(found, "WARN")
             if not found:
                 log("ok", "no tool loads a skill twice")
         except OSError as e:
             log("FAIL", f"duplicate skills check: {e}")
         if cfg.mirror_roles:
-            for line in roles.mirror(cfg.home, cfg.source, dry):
-                kind = line.split()[0] if line.startswith(("WARN", "skip")) else "sync"
-                log(kind, line.removeprefix(kind).strip() if kind != "sync" else line)
+            log.lines(roles.mirror(cfg.home, cfg.source, dry))
             log("ok", "model roles mirrored")
         if cfg.mirror_mcp:
             try:
-                for line in mcp.mirror(cfg.home, cfg.source, dry):
-                    log("sync", line)
+                log.lines(mcp.mirror(cfg.home, cfg.source, dry))
                 log("ok", "MCP servers mirrored")
             except (ValueError, OSError) as e:
                 log("FAIL", f"MCP servers: {e}")
         if cfg.mirror_instructions:
             try:
-                for line in instructions.mirror(cfg.home, cfg.source, dry):
-                    log("skip" if line.startswith("skip") else "sync", line.removeprefix("skip  "))
+                log.lines(instructions.mirror(cfg.home, cfg.source, dry))
                 log("ok", "global instructions mirrored")
             except OSError as e:
                 log("FAIL", f"global instructions: {e}")
@@ -149,13 +150,12 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             exe = shutil.which("agent-sync", path=tools.PATH)
             if exe:
                 tools.act(log, dry, "Desktop launcher from the new version", [exe, "launcher"])
-        for line in checks.unwanted_models(cfg.home, cfg.warn_models):
-            log("WARN", line)
+        log.lines(checks.unwanted_models(cfg.home, cfg.warn_models), "WARN")
         if dry:
-            log("done", "dry run finished: nothing was changed")
+            log("done", f"dry run finished, nothing was changed. A real run: {log.summary()}")
             return 0
         stamp.touch()
-        log("done", f"agent-sync finished, {log.problems} problem(s)")
+        log("done", f"agent-sync finished: {log.summary()}")
         return 1 if log.problems else 0
 
 
@@ -263,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="do the upkeep")
     r.add_argument("--force", action="store_true", help="run even if the last run is recent")
-    r.add_argument("--echo", action="store_true", help="also print each log line")
+    r.add_argument("--echo", action="store_true", help="also print each log line (the default in a terminal)")
     r.add_argument("--dry-run", action="store_true", help="show what would change; change nothing")
     i = sub.add_parser("install", help="schedule the daily upkeep")
     i.add_argument("--launcher", action="store_true", help="also put a double-click launcher on the Desktop (macOS)")

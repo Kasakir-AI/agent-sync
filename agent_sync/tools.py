@@ -62,6 +62,11 @@ def skill_args(cli: str, package: str, names: list[str] | None = None) -> list[s
             "-a", "claude-code", "codex", "cursor", "-y"]
 
 
+def remove_args(cli: str, name: str) -> list[str]:
+    """Remove one skill from every tool."""
+    return ["npx", "-y", "--prefer-online", cli, "remove", "-g", "-s", name, "-y"]
+
+
 # A CLI writes its own settings the first time it starts (Claude Code ~/.claude.json, Cursor Agent
 # ~/.cursor/cli-config.json), so a dry run or `status` never starts one that has not run in this account yet.
 FIRST_RUN_FILES = {"claude": ".claude.json", "cursor-agent": ".cursor/cli-config.json", "codex": ".codex"}

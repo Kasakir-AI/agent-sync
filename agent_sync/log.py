@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -11,7 +12,7 @@ STAMP = "%Y-%m-%d %H:%M:%S"
 
 class Log:
     def __init__(self, path: Path, echo: bool = False, write: bool = True):
-        self.path, self.echo, self.write, self.problems = path, echo, write, 0
+        self.path, self.echo, self.write, self.kinds = path, echo, write, Counter()
         if write:
             path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -20,10 +21,29 @@ class Log:
         if self.write:
             with self.path.open("a") as f:
                 f.write(line + "\n")
-        if kind == "FAIL":
-            self.problems += 1
+        self.kinds[kind] += 1
         if self.echo:
             print(line, file=sys.stdout, flush=True)
+
+    @property
+    def problems(self) -> int:
+        return self.kinds["FAIL"]
+
+    def lines(self, lines, kind: str = "sync") -> None:
+        """Log the lines a mirror returned. A line may name its own kind first ("WARN  ...", "skip  ...")."""
+        for line in lines:
+            head, _, rest = line.partition("  ")
+            if head in ("WARN", "skip"):
+                self(head, rest)
+            else:
+                self(kind, line)
+
+    def summary(self) -> str:
+        """What a run did, for its last line: "2 changes, 1 warning, no problems"."""
+        def count(n: int, word: str) -> str:
+            return f"{n or 'no'} {word}{'' if n == 1 else 's'}"
+        return ", ".join((count(self.kinds["sync"], "change"), count(self.kinds["WARN"], "warning"),
+                          count(self.problems, "problem")))
 
     def prune(self, days: int, now: datetime | None = None) -> int:
         """Drop lines older than `days`. Rewrites the file in place (same inode, so a viewer keeps following)."""

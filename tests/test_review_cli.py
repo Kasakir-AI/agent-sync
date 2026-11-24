@@ -78,7 +78,7 @@ def test_scan_failure_warns_without_failing_upkeep(upkeep_home, capsys):
     assert cli.main(["run", "--force", "--echo"]) == 0
     output = capsys.readouterr().out
     assert "WARN  could not compare settings for review" in output
-    assert "agent-sync finished, 0 problem(s)" in output
+    assert "no problems" in output
 
 
 def test_run_recovers_an_expired_lock(upkeep_home, capsys):
@@ -92,7 +92,7 @@ def test_run_recovers_an_expired_lock(upkeep_home, capsys):
     stale = time.time() - 3 * 60 * 60
     os.utime(lock, (stale, stale))
     assert cli.main(["run", "--force", "--echo"]) == 0
-    assert "agent-sync finished, 0 problem(s)" in capsys.readouterr().out
+    assert "no problems" in capsys.readouterr().out
     assert not lock.exists() and (cfg.state_dir / "last-run").exists()
 
 
@@ -106,7 +106,7 @@ def test_run_shares_the_review_lock_but_dry_run_uses_its_own(upkeep_home, capsys
         assert cli.main(["run", "--force", "--echo"]) == 0
         assert "another agent-sync run is in progress" in capsys.readouterr().out
         assert cli.main(["run", "--dry-run"]) == 0
-        assert "dry run finished: nothing was changed" in capsys.readouterr().out
+        assert "dry run finished, nothing was changed" in capsys.readouterr().out
         assert lock.is_dir() and not (cfg.state_dir / "last-run").exists() and not cfg.log_file.exists()
     assert not lock.exists()
 
@@ -127,3 +127,13 @@ def test_tool_made_skills_are_listed_but_not_counted(upkeep_home, capsys):
             "  Codex has 1 line Claude Code doesn't that you haven't checked yet\n") in output
     assert cli.main(["run", "--force", "--echo"]) == 0
     assert '0 settings differ between the tools, 1 to check once and 0 are only in one' in capsys.readouterr().out
+
+
+def test_a_run_that_is_not_due_says_why_when_asked_to_print(upkeep_home, capsys):
+    cfg = load(home=upkeep_home)
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.state_dir / "last-run").touch()
+    assert cli.main(["run"]) == 0
+    assert capsys.readouterr().out == ""
+    assert cli.main(["run", "--echo"]) == 0
+    assert "The last run was under an hour ago; the next is due in 20 hours" in capsys.readouterr().out
