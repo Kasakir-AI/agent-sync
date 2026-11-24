@@ -25,6 +25,7 @@ from .textmerge import (
     normalized,
     own_lines,
     removed_lines,
+    reworded,
     rows,
     save_baselines,
 )
@@ -753,6 +754,11 @@ def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
             Origin.PLUGIN: "from a plugin",
         }[runner_up.origin]
         return winner, [f"{lead}; the other is {other}"]
+    for version in group.versions:
+        synced = group.synced.get(version.id, {}).get("", frozenset())
+        others = [other for other in group.versions if other.digest != version.digest]
+        if synced and others and all(reworded(version.body, other.body, synced) for other in others):
+            return version, ["it rewords lines the others still have as they were at the last sync"]
     gap = winner.modified - runner_up.modified
     if winner.origin in DATED and gap > 60:
         unit, seconds = next((unit, seconds) for unit, seconds in (("day", 86400), ("hour", 3600), ("minute", 60))

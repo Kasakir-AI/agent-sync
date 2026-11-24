@@ -63,3 +63,45 @@ def test_a_target_that_already_has_every_source_line_is_left_alone(tmp_path):
     files["cursor"].parent.mkdir(parents=True)
     assert instructions.mirror(tmp_path, "claude") == [f"updated {files['cursor']}"]
     assert files["codex"].read_text() == "Codex-only note.\n# Mine\n\nBe brief.\n"
+
+
+def test_a_rule_reworded_in_the_target_is_kept_and_reported_until_the_source_has_it(tmp_path):
+    files = setup(tmp_path, "Be brief.\nAsk before pushing to a shared branch.\nRun the tests.\n", "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+
+    codex = files["codex"]
+    codex.write_text(codex.read_text().replace("Ask before pushing to a shared branch.",
+                                               "Ask before pushing to any shared branch."))
+    files["claude"].write_text("Be very brief.\nAsk before pushing to a shared branch.\nRun the tests.\n")
+    out = instructions.mirror(tmp_path, "claude", baselines=baselines)
+    text = codex.read_text()
+    assert "Ask before pushing to any shared branch." in text and "to a shared branch." not in text
+    assert "Be very brief." in text                                     # the source's own change still arrives
+    assert out[0] == (f"WARN  {codex} rewords 1 line CLAUDE.md still has as last synced; kept it. Make the same "
+                      f"change in {files['claude']} (or run agent-sync review) so every tool has it")
+
+    files["claude"].write_text("Be very brief.\nAsk before pushing to any shared branch.\nRun the tests.\n")
+    assert not [line for line in instructions.mirror(tmp_path, "claude", baselines=baselines)
+                if line.startswith("WARN")]
+    assert codex.read_text().count("shared branch") == 1
+
+
+def test_without_a_record_of_the_last_sync_the_source_wording_wins(tmp_path):
+    files = setup(tmp_path, "Ask before pushing to a shared branch.\n", "Ask before pushing to any shared branch.\n")
+    instructions.mirror(tmp_path, "claude")
+    assert files["codex"].read_text() == "Ask before pushing to a shared branch.\n"
+
+
+def test_review_recommends_the_tool_that_reworded_a_synced_line(tmp_path):
+    from agent_sync import review
+    from agent_sync.config import Config
+    cfg = Config(home=tmp_path)
+    files = setup(tmp_path, "Be brief.\nAsk before pushing to a shared branch.\n", "")
+    instructions.mirror(tmp_path, "claude", baselines=review.baseline_file(cfg))
+    codex = files["codex"]
+    codex.write_text(codex.read_text().replace("to a shared branch", "to any shared branch"))
+    group = next(group for group in review.scan(tmp_path, cfg).groups if group.kind == "instructions")
+    winner, reasons = review.recommend(group, "claude")
+    assert winner.tools == ("codex",)
+    assert reasons == ["it rewords lines the others still have as they were at the last sync"]

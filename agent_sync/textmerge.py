@@ -84,6 +84,22 @@ def merge(target: str, winner: str, drop: frozenset[str] = frozenset()) -> str:
     return "\n".join(lines) + "\n" if lines else ""
 
 
+def reworded(target: str, winner: str, synced: Iterable[str]) -> dict[str, str]:
+    """The lines `target` reworded since the last sync while `winner` still has them as synced: the winner's line ->
+    the target's. Without a record of the last sync, a reworded line can't be told from a stale one: none."""
+    synced, marked, out = set(synced), rows(target, winner), {}
+    for index, (tag, line) in enumerate(marked):
+        if tag != "-" or line.rstrip() in synced:
+            continue
+        end = index + 1
+        while end < len(marked) and marked[end][0] == "+":
+            end += 1
+        partner = marked[end - 1][1]          # rows puts the line that replaces this one last in its "+" run
+        if end > index + 1 and partner.rstrip() in synced:
+            out[partner] = line
+    return out
+
+
 def own_lines(target: str, winner: str) -> int:
     return sum(tag == "=" and meaningful(line) for tag, line in rows(target, winner))
 

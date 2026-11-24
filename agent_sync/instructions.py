@@ -6,8 +6,10 @@
                Rules" of its settings screen in its own database, so a global rule file is used instead)
 In CLAUDE.md and AGENTS.md the source's lines are merged in, the way `agent-sync review` keeps a version: a line the
 source changed is replaced, a new one is added, and a line only the target has stays as that tool's own note, unless
-the source had it at the last sync and has since deleted it. The lines last synced are recorded in the
-baselines. Earlier versions wrote a marked block instead; a run folds that block into the merged text.
+the source had it at the last sync and has since deleted it. A line the target reworded since the last sync, while
+the source kept it as it was, stays as the target has it, and the run warns until the source has the same wording.
+The lines last synced are recorded in the baselines. Earlier versions wrote a marked block instead; a run folds that
+block into the merged text.
 Cursor can't be the source: set `source` to claude or codex.
 """
 from __future__ import annotations
@@ -15,7 +17,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .textmerge import keys, load_baselines, merge, removed_lines, save_baselines
+from .textmerge import keys, load_baselines, merge, removed_lines, reworded, save_baselines
 
 END = "<!-- agent-sync: end -->"
 KEY = "instructions:Global instructions"   # its entry in the baselines review keeps too
@@ -49,6 +51,8 @@ def rendered(tool: str, current: str, body: str, src: Path, synced: frozenset[st
     mine = own_text(current)
     if not mine:
         return body + "\n"
+    kept = reworded(mine, body, synced)
+    body = "\n".join(kept.get(line, line) for line in body.splitlines())
     merged = merge(mine + "\n", body, frozenset(removed_lines(mine, body, synced)))
     return current if merged.strip() == current.strip() else merged
 
@@ -73,6 +77,10 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
         if tool == source:
             continue
         current = path.read_text() if path.exists() else ""
+        if tool != "cursor" and (kept := reworded(own_text(current), body, synced)):
+            changes.append(f"WARN  {path} rewords {len(kept)} line{'' if len(kept) == 1 else 's'} {src.name} still has "
+                           f"as last synced; kept {'it' if len(kept) == 1 else 'them'}. Make the same change in {src} "
+                           "(or run agent-sync review) so every tool has it")
         new = rendered(tool, current, body, src, synced)
         if new == current:
             continue
