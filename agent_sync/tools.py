@@ -153,6 +153,29 @@ def update_clis(log, cfg, dry: bool = False) -> None:
             log("info", f"{cmd}: {before} -> {version(cmd)}")
 
 
+PREREQUISITES = ("git", "node")
+
+
+def update_prerequisites(log, dry: bool = False) -> None:
+    """git and Node (npx runs the skills tool), when Homebrew installed them and a newer version is out. A copy from
+    elsewhere (the Command Line Tools' git, a Node installer) is left to whatever installed it."""
+    brew = shutil.which("brew", path=PATH)
+    if not brew:
+        return
+    prefix = Path(os.path.realpath(brew)).parents[1]
+    if not brew_writable(prefix):
+        log("skip", f"git and Node come from Homebrew in {prefix}, which another account owns; update them there")
+        return
+    if not dry:
+        code, out = sh(["brew", "update", "-q"])
+        if code:
+            log("FAIL", f"brew update: {out}")
+    outdated = set(sh(["brew", "outdated", "--formula", "--quiet"], timeout=300)[1].split())
+    for formula in PREREQUISITES:
+        if formula in outdated:
+            act(log, dry, f"{formula} upgrade (Homebrew)", ["brew", "upgrade", "--formula", formula])
+
+
 def how_installed(prefix: str | None = None) -> tuple[str, str]:
     """How this copy of agent-sync was installed: ("homebrew", brew prefix), ("pipx", repo URL when pipx installed
     it from git, else ""), ("git", repo URL), or ("other", why it can't update itself)."""

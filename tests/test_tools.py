@@ -102,3 +102,19 @@ def test_update_self_other_installs(monkeypatch):
     upgraded, calls, lines = run_update_self(monkeypatch, "other", "it runs from a source checkout")
     assert not upgraded and calls == []
     assert lines == ["skip agent-sync can't update itself: it runs from a source checkout"]
+
+
+def test_prerequisites_homebrew_installed_are_upgraded_when_outdated(monkeypatch, tmp_path):
+    calls, lines = [], []
+    monkeypatch.setattr(tools.shutil, "which",
+                        lambda cmd, path=None: "/opt/homebrew/bin/brew" if cmd == "brew" else None)
+    monkeypatch.setattr(tools, "brew_writable", lambda prefix: True)
+
+    def sh(args, timeout=900, cwd=None):
+        calls.append(args)
+        return 0, "node\nwget\n" if args[:2] == ["brew", "outdated"] else ""
+    monkeypatch.setattr(tools, "sh", sh)
+    tools.update_prerequisites(lambda kind, text: lines.append(f"{kind} {text}"))
+    assert ["brew", "upgrade", "--formula", "node"] in calls
+    assert not any("wget" in args or "git" in args[3:] for args in calls if args[:2] == ["brew", "upgrade"])
+    assert lines == ["ran node upgrade (Homebrew)"]

@@ -149,6 +149,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             tools.update_plugins(log, dry, cfg.home)
         if cfg.update_clis:
             tools.update_clis(log, cfg, dry)
+            tools.update_prerequisites(log, dry)
         tools.extra_steps(log, cfg.extra_steps, dry)
         if cfg.update_self and tools.update_self(log, dry, cfg.home) and cfg.launcher and cfg.macos:
             # the new version writes its own launcher now, not at the next run
