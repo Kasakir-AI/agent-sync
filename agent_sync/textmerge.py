@@ -49,29 +49,36 @@ def rows(target: str, winner: str) -> list[tuple[str, str]]:
     """What keeping `winner` does to `target`, line by line: " " stays, "+" comes from the winner,
     "-" is an edited line the winner's replaces, "=" is the target's own line and stays.
     The winner's lines that are only an HTML comment are metadata of its own file and are not added."""
+    return [(tag, line) for tag, line, _ in marked_rows(target, winner)]
+
+
+def marked_rows(target: str, winner: str) -> list[tuple[str, str, int | None]]:
+    """`rows`, with the position in `winner` of the line that replaces each "-" line (None on the other rows)."""
     old, new = target.splitlines(), winner.splitlines()
     if extends(target, winner):
         wanted, found, out = keys(winner), 0, []
         for line in old:
             matched = meaningful(line) and found < len(wanted) and wanted[found] == line.rstrip()
             found += matched
-            out.append((" " if matched or not meaningful(line) else "=", line))
+            out.append((" " if matched or not meaningful(line) else "=", line, None))
         return out
     out = []
     match = SequenceMatcher(None, [line.rstrip() for line in old], [line.rstrip() for line in new], autojunk=False)
     for tag, i1, i2, j1, j2 in match.get_opcodes():
         if tag == "equal":
-            out += [(" ", line) for line in old[i1:i2]]
+            out += [(" ", line, None) for line in old[i1:i2]]
             continue
-        added, start = [line for line in new[j1:j2] if not comment(line)], 0
+        added = [(at, line) for at, line in enumerate(new[j1:j2], j1) if not comment(line)]
+        start = 0
         for line in old[i1:i2]:
-            index = partner(line, added[start:])
+            index = partner(line, [other for _, other in added[start:]])
             if index is None:
-                out.append(("=", line))
+                out.append(("=", line, None))
             else:
-                out += [("-", line)] + [("+", other) for other in added[start:start + index + 1]]
+                out += [("-", line, added[start + index][0])]
+                out += [("+", other, None) for _, other in added[start:start + index + 1]]
                 start += index + 1
-        out += [("+", line) for line in added[start:]]
+        out += [("+", line, None) for _, line in added[start:]]
     return out
 
 
@@ -84,20 +91,13 @@ def merge(target: str, winner: str, drop: frozenset[str] = frozenset()) -> str:
     return "\n".join(lines) + "\n" if lines else ""
 
 
-def reworded(target: str, winner: str, synced: Iterable[str]) -> dict[str, str]:
-    """The lines `target` reworded since the last sync while `winner` still has them as synced: the winner's line ->
-    the target's. Without a record of the last sync, a reworded line can't be told from a stale one: none."""
-    synced, marked, out = set(synced), rows(target, winner), {}
-    for index, (tag, line) in enumerate(marked):
-        if tag != "-" or line.rstrip() in synced:
-            continue
-        end = index + 1
-        while end < len(marked) and marked[end][0] == "+":
-            end += 1
-        partner = marked[end - 1][1]          # rows puts the line that replaces this one last in its "+" run
-        if end > index + 1 and partner.rstrip() in synced:
-            out[partner] = line
-    return out
+def reworded(target: str, winner: str, synced: Iterable[str]) -> dict[int, str]:
+    """The lines `target` reworded since the last sync while `winner` still has them as synced: the position of the
+    winner's line -> the target's wording. Without a record of the last sync, a reworded line can't be told from a
+    stale one: none."""
+    synced, lines = set(synced), winner.splitlines()
+    return {at: line for tag, line, at in marked_rows(target, winner)
+            if tag == "-" and line.rstrip() not in synced and lines[at].rstrip() in synced}
 
 
 def own_lines(target: str, winner: str) -> int:

@@ -52,7 +52,7 @@ def rendered(tool: str, current: str, body: str, src: Path, synced: frozenset[st
     if not mine:
         return body + "\n"
     kept = reworded(mine, body, synced)
-    body = "\n".join(kept.get(line, line) for line in body.splitlines())
+    body = "\n".join(kept.get(at, line) for at, line in enumerate(body.splitlines()))
     merged = merge(mine + "\n", body, frozenset(removed_lines(mine, body, synced)))
     return current if merged.strip() == current.strip() else merged
 

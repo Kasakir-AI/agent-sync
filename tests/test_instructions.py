@@ -105,3 +105,33 @@ def test_review_recommends_the_tool_that_reworded_a_synced_line(tmp_path):
     winner, reasons = review.recommend(group, "claude")
     assert winner.tools == ("codex",)
     assert reasons == ["it rewords lines the others still have as they were at the last sync"]
+
+
+def test_a_rewording_is_kept_when_the_source_adds_a_line_right_after_it():
+    from agent_sync import textmerge
+    synced = ["Ask before pushing to a shared branch."]
+    winner = "Ask before pushing to a shared branch.\nRun the tests before committing.\n"
+    assert textmerge.reworded("Ask before pushing to any shared branch.\n", winner, synced) == {
+        0: "Ask before pushing to any shared branch."}
+
+
+def test_a_rewording_of_one_of_two_identical_lines_changes_only_that_one(tmp_path):
+    from pathlib import Path
+    source = "## Frontend\n- Run `npm test`.\n\n## Backend\n- Run `npm test`.\n"
+    target = source.replace("- Run `npm test`.", "- Run `npm run test:unit`.", 1)
+    merged = instructions.rendered("codex", target, source.strip(), Path("CLAUDE.md"),
+                                   frozenset(["## Frontend", "- Run `npm test`.", "## Backend"]))
+    assert merged.split("## Backend")[0].count("npm run test:unit") == 1
+    assert merged.split("## Backend")[1].strip() == "- Run `npm test`."
+
+
+def test_review_never_recommends_a_reworded_copy_over_your_own_edits(tmp_path):
+    from agent_sync import review
+    from agent_sync.config import Config
+    cfg = Config(home=tmp_path)
+    files = setup(tmp_path, "Be brief.\nAsk before pushing to a shared branch.\n", "")
+    instructions.mirror(tmp_path, "claude", baselines=review.baseline_file(cfg))
+    cursor = files["cursor"]
+    cursor.write_text(cursor.read_text().replace("to a shared branch", "to any shared branch"))
+    group = next(group for group in review.scan(tmp_path, cfg).groups if group.kind == "instructions")
+    assert "cursor" not in review.recommend(group, "claude")[0].tools

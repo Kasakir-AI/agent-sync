@@ -754,7 +754,8 @@ def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
             Origin.PLUGIN: "from a plugin",
         }[runner_up.origin]
         return winner, [f"{lead}; the other is {other}"]
-    for version in group.versions:
+    top = max(RANK[version.origin] for version in group.versions)
+    for version in (version for version in group.versions if RANK[version.origin] == top):
         synced = group.synced.get(version.id, {}).get("", frozenset())
         others = [other for other in group.versions if other.digest != version.digest]
         if synced and others and all(reworded(version.body, other.body, synced) for other in others):
