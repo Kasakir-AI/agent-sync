@@ -57,7 +57,7 @@ agent-sync setup                  # install whatever is missing: git, Node, Clau
 agent-sync config                 # change the settings by answering questions (optional)
 agent-sync review                 # compare settings across the tools and choose which versions to keep
 agent-sync run --dry-run          # see what it would change first
-agent-sync run --force --echo     # first run, with every step on screen
+agent-sync run --force            # first run, with every step on screen
 agent-sync install --launcher     # schedule it (hourly + at login, works once a day); --launcher adds
                                   # a double-click "Agent Upkeep" to the Desktop (macOS)
 agent-sync launcher               # just the Desktop launcher, if you want it without reinstalling
@@ -128,7 +128,8 @@ Select **Review changes** to see the exact lines each file gains or loses before
 a copy of each file it changes under `~/.local/state/agent-sync/backups/review-YYYYmmdd-HHMMSS/`. On Linux, the
 backups follow `XDG_STATE_HOME` when it is set.
 
-- `agent-sync review --list` prints the comparison and recommendations in your terminal.
+- `agent-sync review --list` prints the comparison and recommendations in your terminal, the settings that
+  need a choice first.
 - `agent-sync review --no-open` prints a local URL you can open yourself.
 
 ## Configure
@@ -193,7 +194,7 @@ go in `[[extra_steps]]`, models you never want in `warn_models`. Then:
 
 1. `agent-sync run --dry-run` until it lists only changes you expect (ideally none).
 2. Stop and remove your old scheduled job, so two jobs never write the same files.
-3. `agent-sync run --force --echo`, then `agent-sync install --launcher`.
+3. `agent-sync run --force`, then `agent-sync install --launcher`.
 
 ## What it changes
 

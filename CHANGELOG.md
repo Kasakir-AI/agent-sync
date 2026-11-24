@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- A run ends with what it did: how many changes, warnings and problems. Warnings used to be easy to miss.
+- `agent-sync run` prints each step when you start it from a terminal, so `--echo` is only needed elsewhere. A
+  run that is not due yet says when the last one was and how to run now.
+- `agent-sync review --list` lists the settings that need a choice first. Settings that are the same in every
+  tool fold into one line per kind.
+- The review page opens short differences on the cards that need a choice, so you see what differs without a
+  click. Tabs show how many settings each holds, and facts every version shares are said once per card.
+
 ## 0.6.0 (2026-11-23)
 
 New: the upkeep warns when a tool loads the same skill twice.
