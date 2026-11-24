@@ -81,7 +81,7 @@ def test_scan_aligns_plugins_by_bare_name(tmp_path):
     plugins = review_home(tmp_path, plugin_skills=["clip"]).plugins
 
     assert list(plugins) == ["clip"]
-    assert plugins["clip"]["claude"] == [review.Plugin("clip@market", skills=1, shared=True)]
+    assert plugins["clip"]["claude"] == [review.Plugin("clip@market", skills=1)]
     assert plugins["clip"]["codex"] == [review.Plugin("clip@registry", enabled=False)]
     assert plugins["clip"]["cursor"] == [review.Plugin("clip")]
 

@@ -1,7 +1,6 @@
 import json
-import shutil
 
-from agent_sync import duplicates, skills
+from agent_sync import duplicates
 from tests.test_skills import make_plugin, make_skill
 
 
@@ -77,46 +76,6 @@ def test_cursor_reads_one_folder_per_path_and_claude_code_plugins(tmp_path):
         "Cursor loads notes more than once, from Claude Code plugin pack@market; ~/.claude/skills",
         "Cursor loads unslop more than once, from Cursor plugin pstack@cursor-public; "
         "~/.agents/skills (package backnotprop/pstack)"]
-
-
-def test_a_copy_every_reader_already_loads_is_removed(tmp_path):
-    shared = tmp_path / ".agents/skills"
-    make_plugin(tmp_path, "writing@market", ["outline"])
-    assert skills.mirror(tmp_path, "claude", plugin_skills=["writing"]) == [
-        f"copied skill outline (from plugin writing@market) to {shared}"]   # Codex has no other copy
-
-    native = codex_plugin(tmp_path, "writing@market", [])
-    shutil.copytree(tmp_path / ".claude/plugins/cache/market/writing/1.0.0/skills/outline", native / "outline")
-    codex_config(tmp_path, '[plugins."writing@market"]\nenabled = true\n')
-    assert duplicates.report(tmp_path) != []
-    assert skills.mirror(tmp_path, "claude", plugin_skills=["writing"]) == [
-        f"removed skill outline (from plugin writing@market) from {shared} (already loaded from "
-        "Codex: Codex plugin writing@market; Cursor: Claude Code plugin writing@market)"]
-    assert not (shared / "outline").exists()
-    assert skills.mirror(tmp_path, "claude", plugin_skills=["writing"]) == []
-    assert duplicates.report(tmp_path) == []
-
-
-def test_a_new_plugin_version_with_the_same_files_is_not_copied_again(tmp_path):
-    shared = tmp_path / ".agents/skills"
-    root = make_plugin(tmp_path, "writing@market", ["outline"])
-    skills.mirror(tmp_path, "claude", plugin_skills=["writing"])
-    newer = root.with_name("1.0.1")
-    shutil.copytree(root, newer)
-    index = tmp_path / ".claude/plugins/installed_plugins.json"
-    index.write_text(index.read_text().replace(str(root), str(newer)))
-    assert skills.mirror(tmp_path, "claude", plugin_skills=["writing"]) == []
-    assert str(newer) in skills.marker_text(shared / "outline")
-
-
-def test_a_copy_codex_switched_off_and_cursor_loads_elsewhere_is_removed(tmp_path):
-    shared = tmp_path / ".agents/skills"
-    make_plugin(tmp_path, "maker@market", ["skill-creator"])
-    skills.mirror(tmp_path, "claude", plugin_skills=["maker"])
-    codex_config(tmp_path, f'[[skills.config]]\npath = "{shared}/skill-creator/SKILL.md"\nenabled = false\n')
-    assert skills.mirror(tmp_path, "claude", plugin_skills=["maker"]) == [
-        f"removed skill skill-creator (from plugin maker@market) from {shared} (already loaded from "
-        "Codex: switched off there; Cursor: Claude Code plugin maker@market)"]
 
 
 def test_a_codex_plugin_from_its_online_catalog_does_not_count(tmp_path):

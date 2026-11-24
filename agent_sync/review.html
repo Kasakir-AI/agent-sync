@@ -207,8 +207,6 @@ thead th { color: var(--subtle); }
 td p { margin: 0; }
 td > .plugin-detail + .plugin-detail { margin-top: .6rem; }
 table .note { display: block; }
-.share { display: flex; gap: .35rem; align-items: flex-start; margin-top: .4rem; }
-.share input { margin: .2rem 0 0; flex: 0 0 1rem; width: 1rem; height: 1rem; accent-color: var(--accent); }
 .panel > .row { margin-top: .85rem; }
 .managed { margin: 0; }
 .managed div { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
@@ -265,8 +263,6 @@ let scan = JSON.parse(document.querySelector("#scan").textContent);
 let filter = "differ";
 let choices;
 let removals = new Map();
-let pluginDraft = new Map();
-let pluginFeedback = "";
 let busy = false;
 const content = document.querySelector("#content");
 const dialog = document.querySelector("#confirmation");
@@ -629,11 +625,6 @@ function showPlugins() {
   head.append(headings);
   const body = el("tbody");
   body.setAttribute("role", "rowgroup");
-  const result = el("span", pluginFeedback, "note");
-  result.setAttribute("role", "status");
-  result.tabIndex = -1;
-  const save = button("Save plugin sharing", () => savePlugins(save, result), "primary");
-  save.disabled = !pluginDraft.size || busy;
   for (const [name, installed] of entries) {
     const row = el("tr");
     row.setAttribute("role", "row");
@@ -653,20 +644,8 @@ function showPlugins() {
         detail.append(el("p", status));
         if (plugin.id !== name) detail.append(el("small", plugin.id, "note"));
         if (tool === "claude" && plugin.skills > 0) {
-          const checkbox = el("input");
-          checkbox.type = "checkbox";
-          checkbox.setAttribute("role", "switch");
-          checkbox.checked = pluginDraft.get(plugin.id) ?? plugin.shared;
-          checkbox.onchange = () => {
-            if (checkbox.checked === plugin.shared) pluginDraft.delete(plugin.id);
-            else pluginDraft.set(plugin.id, checkbox.checked);
-            save.disabled = !pluginDraft.size || busy;
-            pluginFeedback = result.textContent = "";
-          };
-          const share = el("label", undefined, "share");
-          const noun = plugin.skills === 1 ? "skill" : "skills";
-          share.append(checkbox, `Share its ${plugin.skills} ${noun} with ${toolNames(["codex", "cursor"])}`);
-          detail.append(share);
+          detail.append(el("small", `${plugin.skills} ${plugin.skills === 1 ? "skill" : "skills"}, also loaded by ` +
+            "Cursor", "note"));
         }
         cell.append(detail);
       }
@@ -675,9 +654,7 @@ function showPlugins() {
     body.append(row);
   }
   table.append(head, body);
-  const actions = el("div", undefined, "row");
-  actions.append(save, result);
-  panel.append(table, actions);
+  panel.append(el("p", "To give Codex a plugin's skills, install the plugin in Codex as well.", "note"), table);
   content.append(panel);
 }
 
@@ -740,44 +717,6 @@ async function post(route, data) {
   const result = await response.json();
   if (!response.ok) throw new Error(result.error);
   return result;
-}
-
-async function savePlugins(save, result) {
-  const selected = new Set(scan.plugin_skills);
-  for (const [name, installed] of Object.entries(scan.plugins)) {
-    const options = (installed.claude || []).filter(plugin => plugin.skills > 0);
-    if (!options.some(plugin => pluginDraft.has(plugin.id))) continue;
-    selected.delete(name);
-    for (const plugin of options) {
-      if (pluginDraft.get(plugin.id) ?? plugin.shared) selected.add(plugin.id);
-      else selected.delete(plugin.id);
-    }
-  }
-  busy = true;
-  save.disabled = true;
-  pluginFeedback = result.textContent = "";
-  const switches = Array.from(content.querySelectorAll("[role='switch']"));
-  switches.forEach(node => { node.disabled = true; });
-  updateFooter();
-  try {
-    const {scan: updated} = await post("plugins", {ids: [...selected]});
-    scan.plugins = updated.plugins;
-    scan.plugin_skills = updated.plugin_skills;
-    pluginDraft.clear();
-    pluginFeedback = "Plugin sharing saved.";
-  } catch (error) {
-    pluginFeedback = result.textContent = error.message;
-  } finally {
-    busy = false;
-    if (pluginDraft.size) {
-      save.disabled = false;
-      switches.forEach(node => { node.disabled = false; });
-      updateFooter();
-    } else {
-      render();
-      content.querySelector("[role='status']")?.focus();
-    }
-  }
 }
 
 function titleDialog(text) {
@@ -851,7 +790,6 @@ async function applyChanges(data, apply, back, alert) {
     const result = await post("apply", data);
     if (result.scan) {
       scan = result.scan;
-      pluginDraft.clear();
       resetChoices();
       render();
     }

@@ -88,100 +88,45 @@ def make_plugin(home, pid, skills_in, enabled=True, scope="user", manifest_skill
     return root
 
 
-def test_plugin_skills_only_for_the_plugins_you_choose(tmp_path):
+def test_plugin_skills_are_never_copied_and_old_copies_go(tmp_path):
     shared = tmp_path / ".agents/skills"
-    make_plugin(tmp_path, "writing@market", ["edit-prose", "outline"])
-    make_plugin(tmp_path, "lsp@market", ["lsp-only"])
-    make_plugin(tmp_path, "off@market", ["off-skill"], enabled=False)
-    make_plugin(tmp_path, "project@market", ["project-skill"], scope="project")
+    root = make_plugin(tmp_path, "writing@market", ["outline", "edit-prose"])
+    make_skill(shared, "outline", "writing's outline")                 # a copy an earlier version made
+    (shared / "outline" / skills.MARKER).write_text(f"{skills.PLUGIN_MARK}writing@market: {root}/skills/outline\n")
 
-    assert skills.mirror(tmp_path, "claude") == []                       # opt-in: nothing by default
-    out = skills.mirror(tmp_path, "claude", [], plugin_skills=["writing", "off", "project@market", "missing"])
-    assert out == [
-        "WARN  plugin_skills: off is not a Claude Code plugin installed for your user (or it is switched off)",
-        "WARN  plugin_skills: project@market is not a Claude Code plugin installed for your user "
-        "(or it is switched off)",
-        "WARN  plugin_skills: missing is not a Claude Code plugin installed for your user (or it is switched off)",
-        f"copied skill edit-prose (from plugin writing@market) to {shared}",
-        f"copied skill outline (from plugin writing@market) to {shared}"]
-    assert "writing's outline" in (shared / "outline/SKILL.md").read_text()
-    assert not (tmp_path / ".claude/skills").exists()                     # Claude Code has them already
-    assert skills.mirror(tmp_path, "claude", plugin_skills=["writing@market"]) == []
-
-    assert skills.mirror(tmp_path, "claude", plugin_skills=[]) == [
-        f"removed skill edit-prose from {shared} (its plugin is no longer chosen or installed)",
-        f"removed skill outline from {shared} (its plugin is no longer chosen or installed)"]
-    assert not (shared / "outline").exists()
+    assert skills.mirror(tmp_path, "claude", dry=True) == [
+        f"would remove skill outline from {shared} (agent-sync no longer copies plugin skills)"]
+    assert skills.mirror(tmp_path, "claude") == [
+        f"removed skill outline from {shared} (agent-sync no longer copies plugin skills)"]
+    assert not (shared / "outline").exists() and not (shared / "edit-prose").exists()
+    assert skills.mirror(tmp_path, "claude") == []
 
 
-def test_plugin_skills_from_manifest_paths_and_name_clashes(tmp_path):
-    shared = tmp_path / ".agents/skills"
-    root = make_plugin(tmp_path, "a@m", ["shared-name"], manifest_skills=["./extra", "./one-skill"])
-    make_skill(root / "extra", "extra-skill")
-    make_skill(root, "one-skill")
-    make_plugin(tmp_path, "b@m", ["shared-name", "mine"])
-    make_skill(tmp_path / ".claude/skills", "mine", "my own")
-    make_skill(shared, "hand-made")
-    make_plugin(tmp_path, "c@m", ["hand-made"])
+def test_a_copy_a_tool_would_load_twice_is_left_out(tmp_path):
+    claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    make_skill(claude, "outline", "my outline")
+    make_skill(claude, "mine")
+    make_skill(tmp_path / ".codex/plugins/cache/market/writing/1.0.0/skills", "outline", "the plugin's outline")
+    (tmp_path / ".codex/config.toml").write_text('[plugins."writing@market"]\nenabled = true\n')
+    make_skill(shared, "outline", "my outline")                         # copied before Codex had the plugin
+    (shared / "outline" / skills.MARKER).write_text(f"{skills.COPY_MARK}{claude / 'outline'}\n")
 
-    out = skills.mirror(tmp_path, "claude", plugin_skills=["a", "b", "c"])
-    assert out == [
-        "WARN  skill shared-name is in plugins a@m and b@m; only the one from a@m is copied",
-        "WARN  skill mine from plugin b@m has the name of one of your own skills; only your own is copied",
+    assert skills.mirror(tmp_path, "claude") == [
         f"copied skill mine to {shared}",
-        f"copied skill shared-name (from plugin a@m) to {shared}",
-        f"copied skill extra-skill (from plugin a@m) to {shared}",
-        f"copied skill one-skill (from plugin a@m) to {shared}",
-        f"WARN  {shared / 'hand-made'} exists and is not a copy agent-sync made; left alone"]
-    assert "my own" in (shared / "mine/SKILL.md").read_text()
-    assert "a's shared-name" in (shared / "shared-name/SKILL.md").read_text()
+        f"removed skill outline from {shared} (Codex would load it twice)",
+        f"WARN  skill outline not copied to {shared}: Codex already loads a skill of that name, so a copy would "
+        "load twice"]
+    assert not (shared / "outline").exists() and (shared / "mine").exists()
 
 
-def test_plugin_skills_with_codex_as_source(tmp_path):
+def test_a_link_with_a_skill_name_is_left_alone(tmp_path):
     shared = tmp_path / ".agents/skills"
-    make_plugin(tmp_path, "writing@market", ["outline"])
-    make_skill(shared, "codex-own")
-    make_plugin(tmp_path, "other@market", ["from-old-source"])
-    old = shared / "from-old-source"                   # a copy made while Claude Code was the source
-    make_skill(shared, "from-old-source")
-    (old / skills.MARKER).write_text("copied by agent-sync from somewhere\n")
-
-    out = skills.mirror(tmp_path, "codex", plugin_skills=["writing", "other"])
-    assert out == [f"copied skill outline (from plugin writing@market) to {shared}",
-                   f"WARN  {old} is a copy from an earlier source tool; left alone",
-                   f"copied skill codex-own to {tmp_path / '.claude/skills'}"]
-    assert "from-old-source" in (old / "SKILL.md").read_text()
-    assert not (tmp_path / ".claude/skills/outline").exists()             # not copied back into Claude Code
-    assert [line for line in skills.mirror(tmp_path, "codex", plugin_skills=["writing", "other"])
-            if not line.startswith("WARN")] == []
-    assert skills.mirror(tmp_path, "codex") == [
-        f"removed skill outline from {shared} (its plugin is no longer chosen or installed)"]
-    assert old.exists()
-
-
-def test_a_copy_that_changes_origin_is_recopied(tmp_path):
-    shared = tmp_path / ".agents/skills"
-    make_plugin(tmp_path, "writing@market", ["outline"])
-    skills.mirror(tmp_path, "claude", plugin_skills=["writing"])
-    root = tmp_path / ".claude/plugins/cache/market/writing/1.0.0"
-    make_skill(tmp_path / ".claude/skills", "outline", "writing's outline")    # same text, now your own skill
-    assert skills.same_tree(root / "skills/outline", tmp_path / ".claude/skills/outline")
-    assert skills.mirror(tmp_path, "claude", plugin_skills=["writing"]) == [
-        "WARN  skill outline from plugin writing@market has the name of one of your own skills; "
-        "only your own is copied"]                                         # same files: only the marker changes
-    assert not skills.is_plugin_copy(shared / "outline")
-
-
-def test_a_link_with_a_plugin_skill_name_is_left_alone(tmp_path):
-    shared = tmp_path / ".agents/skills"
-    make_plugin(tmp_path, "writing@market", ["outline", "gone"])
+    make_skill(tmp_path / ".claude/skills", "outline")
     shared.mkdir(parents=True)
     (shared / "outline").symlink_to(tmp_path / "elsewhere")              # dangling
-    (shared / "gone").symlink_to(tmp_path / ".claude/plugins")
-    assert skills.mirror(tmp_path, "claude", plugin_skills=["writing"]) == [
-        f"WARN  {shared / 'gone'} is a link agent-sync did not make; left alone",
+    assert skills.mirror(tmp_path, "claude") == [
         f"WARN  {shared / 'outline'} is a link agent-sync did not make; left alone"]
-    assert (shared / "outline").is_symlink() and (shared / "gone").is_symlink()
+    assert (shared / "outline").is_symlink()
 
 
 def test_a_version_an_installer_made_for_each_tool_is_left_alone_quietly(tmp_path):

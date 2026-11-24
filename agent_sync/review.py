@@ -18,7 +18,7 @@ from pathlib import Path
 from stat import S_IMODE
 
 from . import instructions, mcp, roles, skills, tomledit
-from .config import TOOLS, Config, save_setting
+from .config import TOOLS, Config
 
 TOOL_LABELS = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
 
@@ -89,7 +89,6 @@ class Plugin:
     id: str
     enabled: bool = True
     skills: int = 0
-    shared: bool = False
 
 
 @dataclass
@@ -762,8 +761,7 @@ def scan_plugins(home: Path, cfg: Config) -> dict[str, dict[str, list[Plugin]]]:
         plugins.setdefault(name, {}).setdefault(tool, []).append(plugin)
 
     for pid, root in skills.plugins(home).items():
-        shared = pid in cfg.plugin_skills or pid.split("@", 1)[0] in cfg.plugin_skills
-        add("claude", Plugin(pid, skills=len(skills.plugin_skill_dirs(root)), shared=shared))
+        add("claude", Plugin(pid, skills=len(skills.plugin_skill_dirs(root))))
     config = home / MCP_FILES["codex"]
     if config.is_file():
         for pid, entry in sorted(tomllib.loads(read_text(config)).get("plugins", {}).items()):
@@ -1240,7 +1238,3 @@ def difference(group: Group, winner: Version) -> str:
             clauses.append(f"{mine} and {them} differ only in spacing or comments")
         sentences.append("; ".join(clauses) + ".")
     return " ".join(sentences)
-
-
-def set_plugin_skills(home: Path, ids: list[str]) -> None:
-    save_setting(home, "plugin_skills", ids)

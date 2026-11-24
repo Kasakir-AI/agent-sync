@@ -9,8 +9,10 @@ copies where review preserved local content and leaves folders without a marker 
 A copy is left out (and an old one removed) when every tool reading the target folder already loads the same
 skill from somewhere else, so agent-sync never makes a tool load a skill twice.
 
-Skills inside Claude Code plugins are copied to ~/.agents/skills (Codex and Cursor) only for the plugins you name in
-`plugin_skills`: most plugins only make sense in Claude Code. Their markers name the plugin.
+A copy is also left out when a tool reading the target folder loads a skill of that name from elsewhere, so it
+would load it twice. Skills inside Claude Code plugins are not copied: Cursor loads them from Claude Code already, so a
+copy in ~/.agents/skills would load twice there. Copies earlier versions made (their markers name the plugin) are
+removed.
 """
 from __future__ import annotations
 
@@ -89,28 +91,6 @@ def plugin_skill_dirs(root: Path) -> dict[str, Path]:
     return out
 
 
-def from_plugins(home: Path, chosen: list[str], skip: list[str]) -> tuple[dict[str, tuple[str, Path]], list[str]]:
-    """The skills of the plugins in `chosen` (plugin@marketplace, or just the plugin's name):
-    name -> (plugin, folder), and a WARN line for each choice that matches nothing or name used twice."""
-    found, warnings, pkg = plugins(home), [], locked(home)
-    out: dict[str, tuple[str, Path]] = {}
-    for choice in chosen:
-        hits = [pid for pid in found if choice in (pid, pid.split("@")[0])]
-        if not hits:
-            warnings.append(f"WARN  plugin_skills: {choice} is not a Claude Code plugin installed for your user "
-                            "(or it is switched off)")
-        for pid in hits:
-            for name, d in plugin_skill_dirs(found[pid]).items():
-                if name in skip or name in pkg:
-                    continue
-                if name in out and out[name][0] != pid:
-                    warnings.append(f"WARN  skill {name} is in plugins {out[name][0]} and {pid}; "
-                                    f"only the one from {out[name][0]} is copied")
-                    continue
-                out[name] = (pid, d)
-    return out, warnings
-
-
 def marker_text(d: Path) -> str:
     try:
         return (d / MARKER).read_text()
@@ -131,8 +111,7 @@ def same_tree(a: Path, b: Path) -> bool:
     return all(same_tree(a / d, b / d) for d in cmp.common_dirs)
 
 
-def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = False,
-           plugin_skills: list[str] | None = None) -> list[str]:
+def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = False) -> list[str]:
     skip = skip or []
     def verb(done: str, would: str) -> str:
         return would if dry else done
@@ -142,18 +121,11 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
     mine = own(home, source, skip)
     for target in set(folders(home).values()) - {folders(home)[source]}:
         plan[target] = {n: (d, f"{COPY_MARK}{d}\n", "") for n, d in mine.items()}
-    shared = folders(home)["codex"]
-    offered, changes = from_plugins(home, plugin_skills or [], skip)
-    plan.setdefault(shared, {})
-    for name, (pid, d) in offered.items():
-        if name in plan[shared]:
-            changes.append(f"WARN  skill {name} from plugin {pid} has the name of one of your own skills; "
-                           "only your own is copied")
-        else:
-            plan[shared][name] = (d, f"{PLUGIN_MARK}{pid}: {d}\n", f" (from plugin {pid})")
+    changes: list[str] = []
 
-    from .duplicates import elsewhere, views  # builds on this module, so it is imported here
+    from .duplicates import TOOL_NAMES, doubled, elsewhere, views  # builds on this module, so it is imported here
     seen = views(home)
+    left_out: dict[tuple[Path, tuple[str, ...]], list[str]] = {}   # (target, tools that have them) -> skill names
     for target in sorted(plan):
         wanted, in_source = plan[target], target == folders(home)[source]
         for name, (src, mark, note) in wanted.items():
@@ -180,6 +152,14 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                     changes.append(f"{verb('removed', 'would remove')} skill {name}{note} from {target} "
                                    f"(already loaded from {'; '.join(have)})")
                 continue
+            if twice := doubled(home, seen, target, name, src):
+                if dest.exists():
+                    if not dry:
+                        shutil.rmtree(dest)
+                    changes.append(f"{verb('removed', 'would remove')} skill {name}{note} from {target} "
+                                   f"({' and '.join(TOOL_NAMES[tool] for tool in twice)} would load it twice)")
+                left_out.setdefault((target, tuple(twice)), []).append(name)
+                continue
             if dest.exists() and same_tree(src, dest):
                 if marker_text(dest) != mark and not dry:
                     (dest / MARKER).write_text(mark)       # same files from a new place (a plugin's new version)
@@ -204,8 +184,13 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                 continue                                   # a copy from an earlier source tool; not ours to judge
             if not dry:
                 shutil.rmtree(d)
-            why = "its plugin is no longer chosen or installed" if plugin else "no longer in the source tool"
+            why = "agent-sync no longer copies plugin skills" if plugin else "no longer in the source tool"
             changes.append(f"{verb('removed', 'would remove')} skill {d.name} from {target} ({why})")
+    for (target, twice), names in sorted(left_out.items()):
+        have = " and ".join(TOOL_NAMES[tool] for tool in twice)
+        what = f"skill {names[0]}" if len(names) == 1 else f"{len(names)} skills ({', '.join(names[:8])})"
+        changes.append(f"WARN  {what} not copied to {target}: {have} already "
+                       f"{'loads' if len(twice) == 1 else 'load'} a skill of that name, so a copy would load twice")
     return changes
 
 

@@ -13,9 +13,9 @@ agent-sync makes the other two match it, once a day:
 - **Your own skills** (the ones you made in the source tool, not from a package) are copied to the other tools.
   A copy is marked as agent-sync's, so it follows the source and goes away with it; a folder you made by hand in
   the other tool is never touched.
-- **Skills inside Claude Code plugins** (optional, per plugin): the skills of the plugins you pick are copied to
-  Codex and Cursor. Most plugins only make sense in Claude Code, so none are copied until you name them in
-  `plugin_skills`. A copy is left out when every tool reading it already loads that skill from somewhere else.
+- **No skill twice**: a copy is left out when a tool that would read it already loads a skill of that name, and
+  the log says which. Skills inside Claude Code plugins are never copied: Cursor loads them from Claude Code
+  already. To give Codex a plugin's skills, install the plugin in Codex too (`codex plugin list`).
 - **Duplicate skills**: every upkeep checks whether a tool loads the same skill name from two places, such as a
   pack installed both as a package and as a plugin, and names the skills and both places in the log. Codex
   skills you switched off and Claude Code plugins you disabled don't count. Cursor reads Claude Code's skills and
@@ -24,9 +24,12 @@ agent-sync makes the other two match it, once a day:
 - **pstack model roles** (`feature, refactoring: <model>` and the rest) are copied from the source tool's
   `pstack-models` file to the others, and each tool keeps its own notes on how to run each model.
 - **MCP servers** at user level are added to the tools that don't have them yet. Nothing is ever deleted, and
-  servers that already exist are left alone.
-- **Global instructions** (optional): `CLAUDE.md` is copied into Codex's `AGENTS.md` (in a marked block, so the
-  file's own text stays) and into a Cursor rule that always applies, or `AGENTS.md` the other way round.
+  servers that already exist are left alone, with one exception. A copy that points at files that no longer exist
+  (an app update moved them, as Codex does with `node_repl`) is replaced by the working version when every working
+  copy agrees, and the original is backed up.
+- **Global instructions** (optional): `CLAUDE.md` is merged into Codex's `AGENTS.md` and copied into a Cursor rule
+  that always applies, or `AGENTS.md` the other way round. The merge adds new lines and replaces changed ones, and
+  a line you delete from the source leaves the other file too. Lines only the other file has stay as its own notes.
 - **Plugins**: Claude Code's plugin marketplaces and the plugins you installed, the Git plugin marketplaces you
   added to Codex, and the Cursor plugin marketplaces you added (Cursor manages its built-in ones itself).
 - **The three CLIs** are updated: Claude Code and Cursor Agent through Homebrew when installed that way,
@@ -82,8 +85,7 @@ the next run doesn't bring it back).
 ## Review differences
 
 Run `agent-sync review` to open a local page. Compare global instructions, rule files, pstack model roles, your
-skills, and MCP servers side by side. You can also see which plugins are installed, choose which plugin skills to
-share, and see what packages keep up to date automatically. The upkeep log points you to the page when settings
+skills, and MCP servers side by side. You can also see which plugins are installed and see what packages keep up to date automatically. The upkeep log points you to the page when settings
 differ or a tool is missing a copy.
 
 Each version shows its tools, path, date, length, and origin. The origin label identifies your edits, copies
@@ -120,9 +122,9 @@ If a reviewed skill keeps local notes or files, upkeep leaves that copy in place
 
 Some plugins and installers write a separate version of a skill for each tool on purpose. For example, a Claude Code
 copy uses `allowed-tools` while the Codex copy has `agents/openai.yaml`. The review lists these under **The same**
-as "Made separately for each tool", leaves them alone by default, and does not count them as differences. Skills
-that agent-sync copied from a plugin and MCP servers a Claude Code plugin brings count as kept in step, not as
-choices.
+as "Made separately for each tool", leaves them alone by default, and does not count them as differences. MCP servers
+a Claude Code plugin brings count as kept in step, not as choices. A copy of an MCP server that points at files
+that no longer exist is marked stale and never recommended.
 
 Select **Review changes** to see the exact lines each file gains or loses before you apply them. The review saves
 a copy of each file it changes under `~/.local/state/agent-sync/backups/review-YYYYmmdd-HHMMSS/`. On Linux, the
@@ -152,7 +154,6 @@ and change what you need. Every key is optional:
 | `remove_dropped_skills` | `true` | uninstall skills a package no longer ships |
 | `mirror_roles` / `mirror_mcp` / `mirror_skills` / `update_plugins` | `true` | switch parts off |
 | `skip_skills` | `[]` | your own skills that stay in the source tool only |
-| `plugin_skills` | `[]` | Claude Code plugins whose skills are copied to Codex and Cursor, e.g. `["my-plugin"]` or `["my-plugin@marketplace"]` |
 | `allow_duplicate_skills` | `[]` | skill names a tool may load from two places without a warning, e.g. `["pdf"]` |
 | `mirror_instructions` | `false` | copy the source tool's global instructions to the others |
 | `warn_models` | `[]` | warn when a model name containing one of these appears, e.g. `["preview-"]` |
@@ -173,12 +174,12 @@ and `XDG_STATE_HOME` when set.
 
 - **Settings first.** Most changes need only the config file, and `agent-sync config` walks you through them:
   other skill packages (`skill_packages = ["you/your-skills", "backnotprop/pstack"]`), another source tool, your
-  own models for each tool's agents, plugin skills for Codex and Cursor, parts switched off, your own update
+  own models for each tool's agents, parts switched off, your own update
   commands, notes on agents, or extra steps at the end.
 - **Try changes safely.** `agent-sync run --dry-run` after every config change shows exactly what would happen
   (`agent-sync config` offers it after you save).
 - **Change the code.** Each part is one small module in `agent_sync/` with no dependencies: `agents.py` (agent
-  formats per tool), `skills.py` (your own skills, plugin skills, package skills), `duplicates.py` (skills a tool
+  formats per tool), `skills.py` (your own skills, package skills), `duplicates.py` (skills a tool
   loads twice), `roles.py` (pstack model roles), `mcp.py` (MCP servers), `instructions.py` (global
   instructions), `tools.py` (skill packages, plugins, CLI updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd, launcher),
   `setup.py` (installing what is missing), `configure.py` and `tomledit.py` (the settings editor), `cli.py` (the

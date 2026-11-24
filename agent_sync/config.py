@@ -31,7 +31,7 @@ class Config:
     mirror_mcp: bool = True                                  # user-level MCP servers
     mirror_skills: bool = True                               # your own skills (not from a package) in the source tool
     skip_skills: list[str] = field(default_factory=list)     # skill names never mirrored
-    plugin_skills: list[str] = field(default_factory=list)   # Claude Code plugins whose skills go to Codex and Cursor
+    plugin_skills: list[str] = field(default_factory=list)   # no longer used; a run warns while it is set
     allow_duplicate_skills: list[str] = field(default_factory=list)  # skill names a tool may load more than once
     mirror_instructions: bool = False                        # CLAUDE.md <-> AGENTS.md <-> a Cursor rule
     warn_models: list[str] = field(default_factory=list)     # warn when a model name containing one of these appears

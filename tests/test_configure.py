@@ -1,7 +1,6 @@
 import tomllib
 
 from agent_sync import configure
-from tests.test_skills import make_plugin
 
 SETTINGS = """# My settings, with a comment to keep.
 source = "claude"   # Claude Code leads
@@ -24,18 +23,16 @@ def editor(home, answers, text=SETTINGS):
 
 
 def test_change_several_settings_and_save(tmp_path):
-    make_plugin(tmp_path, "writing@market", ["outline"])
     answers = ["1", "2", "",                          # source: Codex
-               "3", "1", "",                          # plugin skills: switch writing@market on
-               "8", "1", "preview-", "",              # model warnings: add preview-
-               "6", "3", "gpt-x", "",                 # agent models: Codex model
-               "9", "3", "3", "",                     # CLI updates: all but Cursor
-               "12", "1", "", "",                     # extra steps: a step with no name is skipped
+               "7", "1", "preview-", "",              # model warnings: add preview-
+               "5", "3", "gpt-x", "",                 # agent models: Codex model
+               "8", "3", "3", "",                     # CLI updates: all but Cursor
+               "11", "1", "", "",                     # extra steps: a step with no name is skipped
                "s", "q"]
     ed, path, said = editor(tmp_path, answers)
     ed.menu()
     data = tomllib.loads(path.read_text())
-    assert data["source"] == "codex" and data["plugin_skills"] == ["writing@market"]
+    assert data["source"] == "codex"
     assert data["warn_models"] == ["gemini-", "preview-"]
     assert data["agent_models"] == {"claude": "opus", "codex": "gpt-x"}
     assert data["update_clis"] == ["claude", "codex"]
@@ -51,16 +48,16 @@ def test_quit_without_saving_changes_nothing(tmp_path):
 
 
 def test_a_bad_value_is_refused_and_explained(tmp_path):
-    ed, path, said = editor(tmp_path, ["2", "1", "not a package", "", "13", "2", "seven", "q"])
+    ed, path, said = editor(tmp_path, ["2", "1", "not a package", "", "12", "2", "seven", "q"])
     ed.menu()
     assert any("owner/repo" in line for line in said) and any("whole number" in line for line in said)
     assert path.read_text() == SETTINGS
 
 
 def test_commands_notes_and_steps(tmp_path):
-    answers = ["10", "2", "npm install -g '@openai/codex@latest'", "",
-               "7", "1", "poteto-agent", "Be brief.", "",
-               "12", "1", "dotfiles", "git -C ~/dotfiles pull", "60", "",
+    answers = ["9", "2", "npm install -g '@openai/codex@latest'", "",
+               "6", "1", "poteto-agent", "Be brief.", "",
+               "11", "1", "dotfiles", "git -C ~/dotfiles pull", "60", "",
                "s", "q"]
     ed, path, said = editor(tmp_path, answers, text=None)
     ed.menu()
@@ -98,12 +95,6 @@ def test_changing_the_source_in_the_editor_moves_the_roles_file(tmp_path, monkey
     ed.settings_file()
     assert ed.roles_path == tmp_path / ".agents/pstack-models.md"
     assert ed.roles_text == "bug-fix: gpt-x\n"
-
-
-def test_switching_off_the_last_missing_plugin_is_saved(tmp_path):
-    ed, path, said = editor(tmp_path, ["1"], text='plugin_skills = ["gone@market"]\n' + SETTINGS)
-    ed.plugin_skills()
-    assert ed.cfg.plugin_skills == []
 
 
 def test_extra_step_prompt_tells_the_real_time_limit(tmp_path):

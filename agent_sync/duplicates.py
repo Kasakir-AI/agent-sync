@@ -191,6 +191,21 @@ def elsewhere(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, 
     return places
 
 
+CURSOR_FOLDERS = (".cursor/skills", ".claude/skills", ".codex/skills", ".agents/skills")
+
+
+def doubled(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, src: Path) -> list[str]:
+    """The tools reading `target` that a copy at target/name would make load the skill in `src` twice: they load a
+    skill of its name from elsewhere already. For Cursor, a folder at the same path under another of its skills
+    folders does not count: it reads only one of those."""
+    readers = [tool for tool, folder in skills.folders(home).items() if folder == target]
+    mine, wanted = os.path.realpath(target / name), skill_name(src)
+    shadows = {home / folder / name for folder in CURSOR_FOLDERS}
+    return [tool for tool in readers
+            if any(s.name == wanted and not os.path.realpath(s.path).startswith(mine)
+                   and not (tool == "cursor" and s.path in shadows) for s in seen.get(tool, []))]
+
+
 def report(home: Path, allow: list[str] | None = None) -> list[str]:
     """One line per tool and pair of places that give it the same skills, naming the skills."""
     allowed = {a.lower() for a in allow or []}

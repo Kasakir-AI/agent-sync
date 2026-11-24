@@ -111,10 +111,14 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                     log("ok", f"agents from {package} mirrored")
                 except (ValueError, OSError) as e:
                     log("FAIL", f"agents from {package}: {e}")
+        if cfg.plugin_skills:
+            log("WARN", "plugin_skills is no longer used: Cursor loads Claude Code plugins' skills itself, so copies "
+                "made it load them twice. To give Codex a plugin's skills, install the plugin in Codex "
+                "(`codex plugin list`), then remove plugin_skills from your settings.")
         if cfg.mirror_skills:
             try:
-                log.lines(skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry, cfg.plugin_skills))
-                log("ok", "your own skills" + (" and plugin skills" if cfg.plugin_skills else "") + " mirrored")
+                log.lines(skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry))
+                log("ok", "your own skills mirrored")
             except OSError as e:
                 log("FAIL", f"your own skills: {e}")
         try:
@@ -258,12 +262,6 @@ def status() -> int:
     print(f"schedule: {'installed' if schedule.installed(cfg.home) else 'not installed'}")
     for cmd in ("claude", "codex", "cursor-agent"):
         print(f"{cmd}: {tools.version(cmd, cfg.home)}")
-    chosen = set(cfg.plugin_skills)
-    for pid, root in skills.plugins(cfg.home).items():
-        names = sorted(skills.plugin_skill_dirs(root))
-        if names:
-            offered = "offered to Codex and Cursor" if chosen & {pid, pid.split("@")[0]} else "Claude Code only"
-            print(f"plugin {pid}: {len(names)} skill(s), {offered}")
     return 0
 
 

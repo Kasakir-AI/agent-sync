@@ -207,37 +207,6 @@ class Editor:
         if new is not None:
             self.set("skill_packages", new)
 
-    def plugin_skills(self) -> None:
-        self.explain("Plugin skills for Codex and Cursor",
-                     "Skills that come inside Claude Code plugins stay in Claude Code unless you pick the plugin",
-                     "here. Most plugins only make sense in Claude Code, so pick only the ones you want elsewhere.")
-        chosen = list(self.cfg.plugin_skills)
-        found = {pid: sorted(skills.plugin_skill_dirs(root)) for pid, root in skills.plugins(self.home).items()}
-        found = {pid: names for pid, names in found.items() if names}
-        before = list(chosen)
-        def on(pid: str) -> bool:
-            return any(c in (pid, pid.split("@")[0]) for c in chosen)
-
-        while True:
-            options = [(pid, f"[{'x' if on(pid) else ' '}] {pid}  " + self.dim(f"{len(n)} skill(s): " + ", ".join(n[:4])
-                                                                     + (" ..." if len(n) > 4 else "")))
-                       for pid, n in found.items()]
-            options += [(c, f"[x] {c}  " + self.dim("(not installed right now)")) for c in chosen
-                        if not any(c in (p, p.split("@")[0]) for p in found)]
-            if not options:
-                self.say("  No Claude Code plugin with skills is installed for your user.")
-                break                                   # still save any plugins switched off on this visit
-            self.say("")
-            pick = self.choose(options, "Switch which on/off")
-            if pick is None:
-                break
-            if on(pick) or pick in chosen:
-                chosen[:] = [c for c in chosen if c not in (pick, pick.split("@")[0])]
-            else:
-                chosen.append(pick)
-        if chosen != before:
-            self.set("plugin_skills", chosen)
-
     def parts(self) -> None:
         self.explain("What to keep in step", "Switch the parts of the daily upkeep on or off.")
         while True:
@@ -469,18 +438,17 @@ class Editor:
         return [
             ("1", "Source tool", TOOL_NAMES[c.source], self.source),
             ("2", "Skill packages", few(c.skill_packages), self.packages),
-            ("3", "Plugin skills for Codex/Cursor", few(c.plugin_skills), self.plugin_skills),
-            ("4", "What to keep in step", f"{len(on)} of {len(PARTS)} parts on", self.parts),
-            ("5", "Skills kept in the source", few(c.skip_skills), self.skip),
-            ("6", "Agent models", f"{m.claude} / {m.cursor} / {m.codex} ({m.codex_effort})", self.models),
-            ("7", "Notes on agents", few(list(c.agent_notes)), self.notes),
-            ("8", "Model warnings", few(c.warn_models), self.warnings),
-            ("9", "CLI updates", clis, self.cli_updates),
-            ("10", "Your own update commands", few(list(c.cli_commands)), self.update_commands),
-            ("11", "Your own install commands", few(list(c.install_commands)), self.install_commands),
-            ("12", "Extra steps", few([s.get("name", "?") for s in c.extra_steps]), self.steps),
-            ("13", "Advanced", "skills CLI version, days of log", self.advanced),
-            ("14", "Skills allowed twice", few(c.allow_duplicate_skills), self.duplicates),
+            ("3", "What to keep in step", f"{len(on)} of {len(PARTS)} parts on", self.parts),
+            ("4", "Skills kept in the source", few(c.skip_skills), self.skip),
+            ("5", "Agent models", f"{m.claude} / {m.cursor} / {m.codex} ({m.codex_effort})", self.models),
+            ("6", "Notes on agents", few(list(c.agent_notes)), self.notes),
+            ("7", "Model warnings", few(c.warn_models), self.warnings),
+            ("8", "CLI updates", clis, self.cli_updates),
+            ("9", "Your own update commands", few(list(c.cli_commands)), self.update_commands),
+            ("10", "Your own install commands", few(list(c.install_commands)), self.install_commands),
+            ("11", "Extra steps", few([s.get("name", "?") for s in c.extra_steps]), self.steps),
+            ("12", "Advanced", "skills CLI version, days of log", self.advanced),
+            ("13", "Skills allowed twice", few(c.allow_duplicate_skills), self.duplicates),
             ("r", "pstack model roles", self.roles_path.name if self.roles_text is not None else "none yet",
              self.model_roles),
             ("i", "Global instructions", "opens your editor", self.instructions_file),

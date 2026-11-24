@@ -84,9 +84,9 @@ def make_choice(request_page, files):
 def test_only_the_local_token_url_can_get_or_change_settings(request_page, tmp_path):
     assert request_page(path="/")[0] == 404
     assert request_page(host="example.com:8765")[0] == 403
-    assert request_page("plugins", {"ids": ["example"]}, path="/plugins")[0] == 404
-    assert request_page("plugins", {"ids": ["example"]}, host="example.com:8765")[0] == 403
-    assert request_page("plugins", {"ids": ["example"]}, content_type="text/plain")[0] == 415
+    assert request_page("plan", {"choices": {}}, path="/plan")[0] == 404
+    assert request_page("plan", {"choices": {}}, host="example.com:8765")[0] == 403
+    assert request_page("plan", {"choices": {}}, content_type="text/plain")[0] == 415
     assert not load(home=tmp_path).plugin_skills
 
 
@@ -148,20 +148,6 @@ def test_scan_text_cannot_close_the_embedded_json_script(request_page, tmp_path)
     scan, page = scan_on_page(request_page)
     assert text not in page
     assert any(line.endswith(text) for version in scan["groups"][0]["versions"] for line in version["diff"])
-
-
-def test_plugin_switch_saves_sharing_settings(request_page, tmp_path):
-    sample = tmp_path / "plugin-example"
-    write(sample / "skills/example/SKILL.md", "# Example\n")
-    write(tmp_path / ".claude/plugins/installed_plugins.json", json.dumps({
-        "plugins": {"example@market": [{"scope": "user", "installPath": str(sample)}]},
-    }))
-    scan, _ = scan_on_page(request_page)
-    assert scan["plugins"]["example"]["claude"][0]["shared"] is False
-    status, result = request_page("plugins", {"ids": ["example@market"]})
-    assert status == 200
-    assert result["scan"]["plugins"]["example"]["claude"][0]["shared"] is True
-    assert load(home=tmp_path).plugin_skills == ["example@market"]
 
 
 def test_page_offers_each_target_only_line_and_refuses_other_removals(request_page, tmp_path):

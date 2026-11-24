@@ -5,7 +5,7 @@ import json
 import secrets
 import time
 import webbrowser
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from difflib import SequenceMatcher
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -116,7 +116,7 @@ def _scan_data(home: Path, cfg: Config, scan: review.Scan) -> dict:
         "groups": [_group_data(home, group, cfg.source) for group in scan.groups],
         "plugins": {name: {tool: [asdict(plugin) for plugin in entries] for tool, entries in tools.items()}
                     for name, tools in scan.plugins.items()},
-        "managed": scan.managed, "tools": review.TOOL_LABELS, "plugin_skills": cfg.plugin_skills,
+        "managed": scan.managed, "tools": review.TOOL_LABELS,
     }
 
 
@@ -245,7 +245,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(page.encode(), "text/html", HTTPStatus.OK)
 
     def do_POST(self):
-        handlers = {"plan": self._plan, "apply": self._apply, "plugins": self._plugins, "quit": self._quit}
+        handlers = {"plan": self._plan, "apply": self._apply, "quit": self._quit}
         handler = handlers.get(self.route)
         if handler is None:
             self._json({"error": "Page not found."}, HTTPStatus.NOT_FOUND)
@@ -289,19 +289,6 @@ class _Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError) as exc:
                 result["error"] = " ".join(filter(None, (result.get("error"), f"Could not refresh settings. {exc}")))
         return result
-
-    def _plugins(self, data: dict) -> dict:
-        ids = data.get("ids")
-        if not isinstance(ids, list) or any(not isinstance(pid, str) or not pid for pid in ids):
-            raise _RequestError(HTTPStatus.BAD_REQUEST, "Invalid plugin choices.")
-        home, cfg = self.server.home, self.server.cfg
-        with run_lock(cfg.state_dir / "lock") as locked:
-            if not locked:
-                raise _RequestError(HTTPStatus.CONFLICT, BUSY)
-            ids = list(dict.fromkeys(ids))
-            review.set_plugin_skills(home, ids)
-            self.server.cfg = cfg = replace(cfg, plugin_skills=ids)
-            return {"scan": _scan_data(home, cfg, review.scan(home, cfg))}
 
     def _quit(self, data: dict) -> dict:
         self.server.done.set()
