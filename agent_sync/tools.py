@@ -170,7 +170,7 @@ def update_prerequisites(log, dry: bool = False) -> None:
         code, out = sh(["brew", "update", "-q"])
         if code:
             log("FAIL", f"brew update: {out}")
-    outdated = set(sh(["brew", "outdated", "--formula", "--quiet"], timeout=300)[1].split())
+    outdated = set(raw(["brew", "outdated", "--formula", "--quiet"], timeout=300).split())
     for formula in PREREQUISITES:
         if formula in outdated:
             act(log, dry, f"{formula} upgrade (Homebrew)", ["brew", "upgrade", "--formula", formula])

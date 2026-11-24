@@ -112,8 +112,10 @@ def test_prerequisites_homebrew_installed_are_upgraded_when_outdated(monkeypatch
 
     def sh(args, timeout=900, cwd=None):
         calls.append(args)
-        return 0, "node\nwget\n" if args[:2] == ["brew", "outdated"] else ""
+        return 0, ""
     monkeypatch.setattr(tools, "sh", sh)
+    listing = "node\n" + "".join(f"some-formula-{n}\n" for n in range(40)) + "wget\n"    # longer than a log line
+    monkeypatch.setattr(tools, "raw", lambda args, timeout=120: listing if args[:2] == ["brew", "outdated"] else "")
     tools.update_prerequisites(lambda kind, text: lines.append(f"{kind} {text}"))
     assert ["brew", "upgrade", "--formula", "node"] in calls
     assert not any("wget" in args or "git" in args[3:] for args in calls if args[:2] == ["brew", "upgrade"])
