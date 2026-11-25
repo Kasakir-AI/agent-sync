@@ -104,3 +104,23 @@ def test_extra_step_prompt_tells_the_real_time_limit(tmp_path):
     ed.ask_line = lambda prompt: asked.append(prompt) or next(answers)
     ed.steps()
     assert any("900" in p for p in asked) and not any("no limit" in p for p in asked)
+
+
+def test_agents_menu_only_offers_enabled_sources(tmp_path, monkeypatch):
+    from agent_sync import tools
+
+    monkeypatch.setattr(tools, "PATH", str(tmp_path / "bin"))
+    (tmp_path / ".gemini").mkdir()
+    (tmp_path / ".gemini/settings.json").write_text("{}")
+    answers = ["14", "1", "4", "2", "3", "",        # refuse to remove source, add Gemini, remove Codex and Cursor
+               "1", "2",                            # Gemini is now source
+               "14", "1", "", "s", "q"]              # remove Claude, save
+    ed, path, said = editor(tmp_path, answers)
+    ed.menu()
+    data = tomllib.loads(path.read_text())
+    assert data["source"] == "gemini"
+    assert data["agents"] == ["gemini"]
+    assert any("Change source before removing it" in line for line in said)
+    assert any("Gemini CLI (installed)" in line for line in said)
+    first = said.index(next(line for line in said if "Now: Claude Code" in line))
+    assert "Codex" not in "\n".join(said[first:first + 4])

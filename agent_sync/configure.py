@@ -15,7 +15,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import instructions, roles, skills, tomledit
+from . import instructions, membership, roles, skills, tomledit
 from .config import AgentModels, config_path, parse
 from .registry import TOOLS
 
@@ -24,7 +24,7 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("mirror_roles", "Copy pstack's model roles from the source tool to the others"),
     ("mirror_mcp", "Add the source tool's MCP servers to the other tools (never deletes any)"),
     ("mirror_instructions", "Copy the global instructions (CLAUDE.md / AGENTS.md) to the other tools"),
-    ("update_plugins", "Update plugin marketplaces and plugins in all three tools"),
+    ("update_plugins", "Update plugins and extensions for enabled agents"),
     ("remove_dropped_skills", "Uninstall skills a skill package stops shipping"),
     ("update_self", "Update agent-sync itself when a new version is out"),
     ("launcher", "Keep the double-click \"Agent Upkeep\" launcher on the Desktop (macOS)"),
@@ -187,8 +187,8 @@ class Editor:
     # ---------- the settings ----------
 
     def source(self) -> None:
-        self.explain("Source tool", "The tool you set things up in. The other two copy its skills, roles, MCP",
-                     "servers and (if you switch it on) its global instructions.",
+        self.explain("Source tool", "The other enabled agents copy its skills, roles, MCP servers, and",
+                     "global instructions (if you switch those on).",
                      f"Now: {TOOLS[self.cfg.source].name}")
         pick = self.choose([(t, TOOLS[t].name) for t in self.cfg.agents])
         if pick and pick != self.cfg.source:
@@ -196,9 +196,30 @@ class Editor:
                 self.say("  Note: Cursor can't be the source of global instructions (that part will be skipped).")
             self.set("source", pick)
 
+    def agents(self) -> None:
+        installed = membership.available(self.cfg)
+        self.explain("Agents", "Choose which agents to keep in step.")
+        while True:
+            options = [(agent, f"[{'x' if agent in self.cfg.agents else ' '}] {tool.name}"
+                        f" ({'installed' if installed[agent] else 'not installed'})"
+                        + (" (source)" if agent == self.cfg.source else ""))
+                       for agent, tool in TOOLS.items()]
+            pick = self.choose(options, "Switch which on/off")
+            if pick is None:
+                return
+            action = "remove" if pick in self.cfg.agents else "add"
+            try:
+                enabled = membership.changed(self.cfg, action, [pick])
+            except ValueError as err:
+                self.say(f"  {err}")
+                continue
+            previous = self.cfg
+            if self.set("agents", enabled):
+                membership.describe(previous, enabled, installed, self.say)
+
     def packages(self) -> None:
-        self.explain("Skill packages", "GitHub repositories (owner/repo) whose skills are installed in all three",
-                     "tools. A package with an agents/ folder also gets its agents copied to each tool.",
+        self.explain("Skill packages", "GitHub repositories (owner/repo) whose skills are installed for the enabled",
+                     "agents. A package with an agents/ folder also gets its agents copied to each tool.",
                      "Only add packages you trust: their skills run with your agents' permissions.")
         new = self.edit_list("Packages", self.cfg.skill_packages, "Package (owner/repo)",
                              ["backnotprop/pstack", "your-name/your-skills"],
@@ -290,9 +311,9 @@ class Editor:
 
     def cli_updates(self) -> None:
         now = self.cfg.update_clis
-        self.explain("CLI updates", "Update Claude Code, Codex and Cursor Agent during the upkeep.",
-                     "Now: " + ("all three" if now is True else "none" if now is False else ", ".join(now)))
-        pick = self.choose([("all", "Update all three"), ("none", "Update none"), ("some", "Choose which")])
+        self.explain("CLI updates", "Update the enabled agent CLIs during upkeep.",
+                     "Now: " + ("all enabled agents" if now is True else "none" if now is False else ", ".join(now)))
+        pick = self.choose([("all", "Update all enabled agents"), ("none", "Update none"), ("some", "Choose which")])
         if pick == "all":
             self.set("update_clis", True)
         elif pick == "none":
@@ -388,7 +409,9 @@ class Editor:
                 self.say("  " + self.dim("Changed. (Not saved yet: choose s to save.)"))
 
     def instructions_file(self) -> None:
-        path = instructions.files(self.home, self.cfg.agents)[self.cfg.source]
+        paths = instructions.files(self.home, self.cfg.agents)
+        src = "claude" if self.cfg.source == "cursor" and "claude" in paths else self.cfg.source
+        path = paths[src]
         state = "on" if self.cfg.mirror_instructions else "off (switch it on under 'What to keep in step')"
         self.explain("Global instructions", f"{self.short(path)} opens in your editor.",
                      f"Copying it to the other tools is {state}.")
@@ -431,7 +454,8 @@ class Editor:
     def summary(self) -> list[tuple[str, str, str, Callable[[], None]]]:
         c = self.cfg
         on = [label.split(" (")[0].lower() for k, label in PARTS if getattr(c, k)]
-        clis = "all three" if c.update_clis is True else "none" if c.update_clis is False else ", ".join(c.update_clis)
+        clis = ("all enabled agents" if c.update_clis is True else
+                "none" if c.update_clis is False else ", ".join(c.update_clis))
         m = c.agent_models
         def few(items):
             return ", ".join(items) if items else "none"
@@ -449,6 +473,7 @@ class Editor:
             ("11", "Extra steps", few([s.get("name", "?") for s in c.extra_steps]), self.steps),
             ("12", "Advanced", "skills CLI version, days of log", self.advanced),
             ("13", "Skills allowed twice", few(c.allow_duplicate_skills), self.duplicates),
+            ("14", "Agents", few([TOOLS[agent].name for agent in c.agents]), self.agents),
             ("r", "pstack model roles", self.roles_path.name if self.roles_text is not None else "none yet",
              self.model_roles),
             ("i", "Global instructions", "opens your editor", self.instructions_file),

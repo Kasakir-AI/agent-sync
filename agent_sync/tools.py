@@ -11,7 +11,7 @@ from importlib import metadata
 from pathlib import Path
 
 from . import __version__
-from .registry import DEFAULT_AGENTS, TOOLS
+from .registry import DEFAULT_AGENTS, TOOLS, Tool
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[─-◿]")
 # Where the CLIs usually live, added after your own PATH (a schedule starts with a bare PATH).
@@ -75,6 +75,10 @@ def remove_args(cli: str, name: str, *, enabled=DEFAULT_AGENTS) -> list[str]:
 
 # A CLI writes its own settings the first time it starts (Claude Code ~/.claude.json, Cursor Agent
 # ~/.cursor/cli-config.json), so a dry run or `status` never starts one that has not run in this account yet.
+def installed(tool: Tool, home: Path) -> bool:
+    return bool(shutil.which(tool.command, path=PATH)) or any((home / path).exists() for path in tool.detect)
+
+
 def started(cmd: str, home: Path) -> bool:
     first_run = next((tool.first_run for tool in TOOLS.values() if tool.command == cmd), None)
     return first_run is None or (home / first_run).exists()

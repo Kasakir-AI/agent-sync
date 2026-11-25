@@ -53,15 +53,15 @@ def test_homebrew_of_another_account_means_official_installers(mac):
     assert "cursor.com/install" in steps[4].command[-1]
 
 
-def test_own_brew_installs_casks_and_respects_cli_choice(mac):
+def test_own_brew_installs_casks_for_enabled_agents(mac):
     prefix = fake_brew(mac)
-    steps = setup.plan(Config(home=mac, update_clis=["codex"]))
+    steps = setup.plan(Config(home=mac, source="codex", agents=["codex"], update_clis=False))
     assert labels(steps) == [("node", str(prefix / "bin/brew")), ("codex", str(prefix / "bin/brew"))]
 
 
 def test_your_own_install_command_runs(mac, monkeypatch):
     done = mac / "installed"
-    cfg = Config(home=mac, update_clis=["codex"],
+    cfg = Config(home=mac, source="codex", agents=["codex"], update_clis=False,
                  install_commands={"homebrew": ["/usr/bin/true"], "node": ["no-such-installer"],
                                    "codex": ["/usr/bin/touch", str(done)]})
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)

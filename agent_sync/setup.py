@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import tools
+from . import membership, tools
 from .registry import TOOLS
 
 HOMEBREW = ["/bin/bash", "-c", 'curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash']
@@ -86,7 +86,7 @@ def plan(cfg) -> list[Step]:
         add("node", "Node (for npx)", ["node"], None,
             "install Node from https://nodejs.org or your system's package manager")
     for tool in TOOLS.values():
-        if cfg.wants_cli(tool.id) and not shutil.which(tool.command, path=tools.PATH):
+        if tool.id in cfg.agents and not shutil.which(tool.command, path=tools.PATH):
             brew_args = None
             if tool.brew and (tool.brew[0] == "formula" or sys.platform == "darwin"):
                 brew_args = [f"--{tool.brew[0]}", tool.brew[1]]
@@ -95,6 +95,8 @@ def plan(cfg) -> list[Step]:
 
 
 def run(cfg, dry: bool = False, yes: bool = False) -> int:
+    if not dry and not yes:
+        membership.offer(cfg, membership.available(cfg))
     steps = plan(cfg)
     if not steps:
         print("Everything agent-sync needs is installed.")

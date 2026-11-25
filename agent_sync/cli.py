@@ -30,7 +30,21 @@ from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, agents, checks, duplicates, instructions, mcp, review, roles, schedule, skills, tools, writes
+from . import (
+    __version__,
+    agents,
+    checks,
+    duplicates,
+    instructions,
+    mcp,
+    membership,
+    review,
+    roles,
+    schedule,
+    skills,
+    tools,
+    writes,
+)
 from .config import Config, load, save_setting
 from .locking import run_lock
 from .log import Log
@@ -79,6 +93,10 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         log = Log(cfg.log_file, echo=echo or dry, write=not dry)
         if not dry:
             log.prune(cfg.log_days)
+        found = membership.untracked(cfg, membership.available(cfg))
+        if found:
+            names = ", ".join(TOOLS[agent].name for agent in found)
+            log("info", f"Installed outside sync: {names}. Run `agent-sync agents add {' '.join(found)}` to add them.")
         if not online():
             log("skip", "no network; will try again at the next scheduled check")
             return 0
@@ -287,11 +305,18 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--dry-run", action="store_true", help="only list what is missing and how it would be installed")
     s.add_argument("--yes", action="store_true", help="don't ask before installing")
     sub.add_parser("config", aliases=["settings"], help="change the settings by answering questions")
+    agent_parser = sub.add_parser("agents", help="list agents and choose which to keep in step")
+    membership_commands = agent_parser.add_subparsers(dest="agent_action")
+    for action in ("add", "remove"):
+        command = membership_commands.add_parser(action, help=f"{action} agents")
+        command.add_argument("ids", metavar="id", nargs="+")
     sub.add_parser("status", help="show the last run and versions")
     review_parser = sub.add_parser("review", help="compare settings and choose which versions to keep")
     review_parser.add_argument("--list", action="store_true", help="print the comparison and recommendations")
     review_parser.add_argument("--no-open", action="store_true", help="print the page URL without opening the browser")
     a = ap.parse_args(argv)
+    if a.cmd == "agents":
+        return membership.run(load(), a.agent_action, getattr(a, "ids", []))
     if a.cmd == "run":
         return run(a.force, a.echo, a.dry_run)
     if a.cmd == "review":
