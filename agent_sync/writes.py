@@ -239,7 +239,7 @@ def codex_mcp_text(text: str, name: str, winner: dict) -> str:
 
 def json_mcp_text(text: str, name: str, winner: dict, *, aliases: tuple[str, ...] = (),
                   typed: bool = True) -> str:
-    data = json.loads(text) if text else {}
+    data = json.loads(text) if text.strip() else {}
     servers = data.get("mcpServers") or {}
     entry = {key: value for key, value in (servers.get(name) or {}).items()
              if key not in (*MCP_KEYS, *aliases) or key in winner}

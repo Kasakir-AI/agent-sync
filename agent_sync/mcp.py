@@ -17,7 +17,7 @@ from .tomledit import basic_string, key_text
 
 
 def json_servers(text: str) -> dict[str, dict]:
-    return json.loads(text).get("mcpServers") or {}
+    return (json.loads(text).get("mcpServers") or {}) if text.strip() else {}   # an app may leave the file empty
 
 
 def codex_servers(text: str) -> dict[str, dict]:
@@ -96,7 +96,7 @@ def add_codex(text: str, missing: dict[str, dict]) -> str:
 
 
 def add_json(text: str, missing: dict[str, dict]) -> str:
-    data = json.loads(text) if text else {}
+    data = json.loads(text) if text.strip() else {}
     data["mcpServers"] = {**(data.get("mcpServers") or {}), **missing}
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 

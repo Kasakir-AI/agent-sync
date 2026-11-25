@@ -26,3 +26,15 @@ def test_emoji_in_a_server_makes_valid_codex_toml():
     block = mcp.codex_block("party", {"command": "run", "args": ["🚀"], "env": {"MOOD 😀": "😀\x7f"}})
     server = tomllib.loads(block)["mcp_servers"]["party"]
     assert server["args"] == ["🚀"] and server["env"] == {"MOOD 😀": "😀\x7f"}
+
+
+def test_an_empty_mcp_file_counts_as_no_servers(tmp_path):
+    # Antigravity creates ~/.gemini/config/mcp_config.json empty until a server is added.
+    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {"files": {"command": "npx", "args": ["f"]}}}))
+    target = tmp_path / ".gemini/config/mcp_config.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("")
+    assert mcp.read(tmp_path, "antigravity") == {}
+    changes = mcp.mirror(tmp_path, "claude", enabled=("claude", "antigravity"))
+    assert changes == ["added MCP server files to antigravity"]
+    assert json.loads(target.read_text())["mcpServers"]["files"] == {"command": "npx", "args": ["f"]}
