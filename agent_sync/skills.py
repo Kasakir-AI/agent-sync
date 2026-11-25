@@ -22,14 +22,16 @@ import os
 import shutil
 from pathlib import Path
 
+from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
+
 MARKER = ".agent-sync"
 COPY_MARK = "copied by agent-sync from "
 PLUGIN_MARK = COPY_MARK + "Claude Code plugin "
 REVIEW_MARK = "kept by agent-sync review\n"
 
 
-def folders(home: Path) -> dict[str, Path]:
-    return {"claude": home / ".claude/skills", "codex": home / ".agents/skills", "cursor": home / ".agents/skills"}
+def folders(home: Path, enabled=DEFAULT_AGENTS) -> dict[str, Path]:
+    return paths(home, enabled, "skills_dir")
 
 
 def locked(home: Path) -> dict[str, dict]:
@@ -111,7 +113,8 @@ def same_tree(a: Path, b: Path) -> bool:
     return all(same_tree(a / d, b / d) for d in cmp.common_dirs)
 
 
-def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = False) -> list[str]:
+def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = False, *,
+           enabled=DEFAULT_AGENTS) -> list[str]:
     skip = skip or []
     def verb(done: str, would: str) -> str:
         return would if dry else done
@@ -119,16 +122,19 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
     # target folder -> name -> (the folder copied, its marker text, a note for the change line)
     plan: dict[Path, dict[str, tuple[Path, str, str]]] = {}
     mine = own(home, source, skip)
-    for target in set(folders(home).values()) - {folders(home)[source]}:
+    roots = grouped_paths(folders(home, enabled))
+    source_dir = folders(home, enabled)[source]
+    for target in roots.keys() - {source_dir}:
         plan[target] = {n: (d, f"{COPY_MARK}{d}\n", "") for n, d in mine.items()}
-    plan.setdefault(folders(home)["codex"], {})    # visited even as the source: old plugin copies there go too
+    if source_dir == home / TOOLS["codex"].skills_dir:
+        plan.setdefault(source_dir, {})  # Clean up old plugin copies in the shared directory.
     changes: list[str] = []
 
-    from .duplicates import TOOL_NAMES, doubled, elsewhere, views  # builds on this module, so it is imported here
-    seen = views(home)
+    from .duplicates import doubled, elsewhere, views  # builds on this module, so it is imported here
+    seen = views(home, enabled=enabled)
     left_out: dict[tuple[Path, tuple[str, ...]], list[str]] = {}   # (target, tools that have them) -> skill names
     for target in sorted(plan):
-        wanted, in_source = plan[target], target == folders(home)[source]
+        wanted, in_source = plan[target], target == source_dir
         for name, (src, mark, note) in wanted.items():
             dest = target / name
             if dest.is_symlink():
@@ -139,13 +145,13 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                 continue
             if dest.exists() and not (dest / MARKER).exists():
                 from .review import made_for_each_tool  # review builds on this module, so it is imported here
-                if not made_for_each_tool(home, name, [(("claude",), src), (("codex", "cursor"), dest)]):
+                if not made_for_each_tool(home, name, [(roots[source_dir], src), (roots[target], dest)]):
                     changes.append(f"WARN  {dest} exists and is not a copy agent-sync made; left alone")
                 continue                                   # a tool's own version (an installer's): nothing to say
             if dest.exists() and in_source and not is_plugin_copy(dest):
                 changes.append(f"WARN  {dest} is a copy from an earlier source tool; left alone")
                 continue
-            have = elsewhere(home, seen, target, name, src)
+            have = elsewhere(home, seen, target, name, src, readers=roots[target])
             if have:                                       # every tool reading `target` loads it already
                 if dest.exists():
                     if not dry:
@@ -153,12 +159,12 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                     changes.append(f"{verb('removed', 'would remove')} skill {name}{note} from {target} "
                                    f"(already loaded from {'; '.join(have)})")
                 continue
-            if twice := doubled(home, seen, target, name, src):
+            if twice := doubled(home, seen, target, name, src, readers=roots[target]):
                 if dest.exists():
                     if not dry:
                         shutil.rmtree(dest)
                     changes.append(f"{verb('removed', 'would remove')} skill {name}{note} from {target} "
-                                   f"({' and '.join(TOOL_NAMES[tool] for tool in twice)} would load it twice)")
+                                   f"({' and '.join(TOOLS[tool].name for tool in twice)} would load it twice)")
                 left_out.setdefault((target, tuple(twice)), []).append(name)
                 continue
             if dest.exists() and same_tree(src, dest):
@@ -188,7 +194,7 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             why = "agent-sync no longer copies plugin skills" if plugin else "no longer in the source tool"
             changes.append(f"{verb('removed', 'would remove')} skill {d.name} from {target} ({why})")
     for (target, twice), names in sorted(left_out.items()):
-        have = " and ".join(TOOL_NAMES[tool] for tool in twice)
+        have = " and ".join(TOOLS[tool].name for tool in twice)
         what = f"skill {names[0]}" if len(names) == 1 else f"{len(names)} skills ({', '.join(names[:8])})"
         changes.append(f"WARN  {what} not copied to {target}: {have} already "
                        f"{'loads' if len(twice) == 1 else 'load'} a skill of that name, so a copy would load twice")

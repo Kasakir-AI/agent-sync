@@ -16,7 +16,8 @@ from enum import StrEnum
 from pathlib import Path
 
 from . import instructions, mcp, roles, skills
-from .config import TOOLS, Config
+from .config import Config
+from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
 from .textmerge import (
     extends,
     keys,
@@ -29,8 +30,6 @@ from .textmerge import (
     rows,
     save_baselines,
 )
-
-TOOL_LABELS = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
 
 
 class Origin(StrEnum):
@@ -123,9 +122,7 @@ class Kind:
 
 
 RULES = {"claude": (".claude/rules", ".md"), "cursor": (".cursor/rules", ".mdc")}
-MCP_FILES = {"claude": ".claude.json", "codex": ".codex/config.toml", "cursor": ".cursor/mcp.json"}
-SKILL_ROOTS = {".claude/skills": ("claude",), ".agents/skills": ("codex", "cursor"),
-               ".codex/skills": ("codex",), ".cursor/skills": ("cursor",)}
+EXTRA_SKILL_ROOTS = {"codex": ".codex/skills", "cursor": ".cursor/skills"}
 SKILL_IGNORES = {skills.MARKER, ".DS_Store"}
 
 
@@ -172,10 +169,13 @@ def text_version(kind: str, name: str, tool: str, path: Path, origin: Origin) ->
 
 def scan_instructions(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
     name = "Global instructions"
-    for tool, path in instructions.files(home).items():
+    for path, readers in grouped_paths(instructions.files(home, cfg.agents)).items():
         if path.is_file():
-            origin = Origin.COPY if tool == "cursor" else Origin.YOURS
-            yield name, text_version("instructions", name, tool, path, origin)
+            _, body = instructions.split_front(read_text(path))
+            origin = Origin.COPY if "cursor" in readers else Origin.YOURS
+            note = "mirrored global instructions" if origin == Origin.COPY else ""
+            yield name, make_version("instructions", name, readers, path, instructions.BLOCK.sub("\n", body),
+                                     origin, note)
 
 
 def rule_location(home: Path, name: str, tool: str) -> Path | None:
@@ -189,6 +189,8 @@ def rule_location(home: Path, name: str, tool: str) -> Path | None:
 
 def scan_rules(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
     for tool, (folder, suffix) in RULES.items():
+        if tool not in cfg.agents:
+            continue
         for path in sorted((home / folder).glob("*" + suffix)):
             name = path.stem
             if path.is_file() and name not in {"pstack-models", "agent-sync-instructions"}:
@@ -197,12 +199,12 @@ def scan_rules(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Ver
 
 def scan_roles(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
     name = "pstack model roles"
-    for tool, path in roles.files(home).items():
+    for path, readers in grouped_paths(roles.files(home, cfg.agents)).items():
         if path.is_file():
             _, lines, _ = roles.split(read_text(path))
-            origin = Origin.COPY if cfg.mirror_roles and tool != cfg.source else Origin.YOURS
-            note = f"mirrored from {TOOL_LABELS[cfg.source]}" if origin == Origin.COPY else ""
-            yield name, make_version("roles", name, (tool,), path, "\n".join(lines), origin, note)
+            origin = Origin.COPY if cfg.mirror_roles and cfg.source not in readers else Origin.YOURS
+            note = f"mirrored from {TOOLS[cfg.source].name}" if origin == Origin.COPY else ""
+            yield name, make_version("roles", name, readers, path, "\n".join(lines), origin, note)
 
 
 def current(path: Path) -> Content | None:
@@ -261,11 +263,13 @@ def skill_version(home: Path, name: str, tools: tuple[str, ...], path: Path) -> 
                         digest=digest, modified=modified)
 
 
-def skill_folders(home: Path) -> dict[tuple[str, Path], set[str]]:
+def skill_folders(home: Path, enabled=DEFAULT_AGENTS) -> dict[tuple[str, Path], set[str]]:
     """(name, real folder) -> the tools that read it, for every skill folder in the tools' skill folders."""
     folders: dict[tuple[str, Path], set[str]] = {}
-    for root, tools in SKILL_ROOTS.items():
-        for path in sorted((home / root).iterdir()) if (home / root).is_dir() else ():
+    roots = list(grouped_paths(skills.folders(home, enabled)).items())
+    roots.extend((home / root, (tool,)) for tool, root in EXTRA_SKILL_ROOTS.items() if tool in enabled)
+    for root, tools in roots:
+        for path in sorted(root.iterdir()) if root.is_dir() else ():
             if not path.name.startswith(".") and (path / "SKILL.md").is_file():
                 folders.setdefault((path.name, path.resolve()), set()).update(tools)
     return folders
@@ -279,7 +283,7 @@ def plugin_of(path: Path) -> str:
 
 
 def scan_skills(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
-    for (name, path), tools in skill_folders(home).items():
+    for (name, path), tools in skill_folders(home, cfg.agents).items():
         if name not in locked and not plugin_of(path):
             yield name, skill_version(home, name, tuple(tool for tool in TOOLS if tool in tools), path)
 
@@ -384,13 +388,13 @@ def first_version(newer: Version, older: Version) -> str:
 
 
 def scan_mcp(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
-    for tool, filename in MCP_FILES.items():
-        for name, server in sorted(mcp.read(home, tool).items()):
+    for path, readers in grouped_paths(paths(home, cfg.agents, "mcp")).items():
+        for name, server in sorted(mcp.read(home, readers[0]).items()):
             if (value := portable(server)) is not None:
                 body = json.dumps(value, indent=2, sort_keys=True)
-                yield name, make_version("mcp", name, (tool,), home / filename, body, Origin.SETTINGS, key=name,
+                yield name, make_version("mcp", name, readers, path, body, Origin.SETTINGS, key=name,
                                          missing=missing_paths(value))
-    for pid, root in skills.plugins(home).items():
+    for pid, root in (skills.plugins(home) if "claude" in cfg.agents else {}).items():
         for path, name, server in plugin_servers(root):
             if (value := portable(server)) is not None:
                 body = json.dumps(value, indent=2, sort_keys=True)
@@ -469,7 +473,7 @@ def joined(items: list[str]) -> str:
 
 
 def tool_names(tools: Iterable[str]) -> str:
-    return joined([TOOL_LABELS[tool] for tool in tools])
+    return joined([TOOLS[tool].name for tool in tools])
 
 
 def counted(count: int, noun: str) -> str:
@@ -490,7 +494,7 @@ def tool_uses(versions: list[Version]) -> list[str]:
             labels = [label for mark, label in marks[version.id] if mark == tool and any(
                 tool not in other.tools and (mark, label) not in marks[other.id] for other in versions)]
             if labels:
-                uses.append(f"{tool_names(version.tools)}'s uses {joined(labels)} only {TOOL_LABELS[tool]} understands")
+                uses.append(f"{tool_names(version.tools)}'s uses {joined(labels)} only {TOOLS[tool].name} understands")
     return uses
 
 
@@ -670,7 +674,7 @@ def judge(group: Group, installers: Iterable[str] = ()) -> tuple[str, str]:
                              f"of {'its' if one else 'their'} own")
         has = "has" if len(base.tools) == 1 else "have"
         lost = [f"{tool_names(base.tools)} no longer {has} {counted(count, 'line')} that "
-                f"{tool_names(sorted(tools, key=TOOLS.index))} still {'has' if len(tools) == 1 else 'have'}"
+                f"{tool_names(sorted(tools, key=tuple(TOOLS).index))} still {'has' if len(tools) == 1 else 'have'}"
                 for count, tools in behind.items()]
         new = unchecked(group, base)
         check = [f"{tool_names(version.tools)} {'has' if len(version.tools) == 1 else 'have'} "
@@ -691,18 +695,18 @@ def scan_plugins(home: Path, cfg: Config) -> dict[str, dict[str, list[Plugin]]]:
         name = plugin.id.split("@", 1)[0]
         plugins.setdefault(name, {}).setdefault(tool, []).append(plugin)
 
-    for pid, root in skills.plugins(home).items():
+    for pid, root in (skills.plugins(home) if "claude" in cfg.agents else {}).items():
         add("claude", Plugin(pid, skills=len(skills.plugin_skill_dirs(root))))
-    config = home / MCP_FILES["codex"]
-    if config.is_file():
+    config = home / TOOLS["codex"].mcp
+    if "codex" in cfg.agents and config.is_file():
         for pid, entry in sorted(tomllib.loads(read_text(config)).get("plugins", {}).items()):
             enabled = entry.get("enabled", True) if isinstance(entry, dict) else bool(entry)
             add("codex", Plugin(pid, enabled=enabled))
     cursor = home / ".cursor/plugins"
-    for path in sorted((cursor / "cache").glob("*/*")):
+    for path in sorted((cursor / "cache").glob("*/*")) if "cursor" in cfg.agents else ():
         if path.is_dir():
             add("cursor", Plugin(f"{path.name}@{path.parent.name}"))
-    for path in sorted((cursor / "local").glob("*")):
+    for path in sorted((cursor / "local").glob("*")) if "cursor" in cfg.agents else ():
         if path.is_dir():
             add("cursor", Plugin(path.name))
     return dict(sorted(plugins.items()))
@@ -737,20 +741,19 @@ def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
         have = group_tools(group)
         location = KINDS[group.kind].location
         if not group.scoped_rule:
-            group.missing = tuple(tool for tool in TOOLS if tool not in have and location(home, group.name, tool))
+            group.missing = tuple(tool for tool in cfg.agents if tool not in have and location(home, group.name, tool))
         if group.kind == "rule" and len(have) == 1 and not group.missing:
             group.status = "local"
             group.note = ("This rule stays in the tool that defines when it applies." if group.scoped_rule
                           else "A rule with this name already exists in the other tool.")
         else:
             group.status, group.note = judge(group, installers)
-    managed.update(f"{pid} plugin skills" for _, path in skill_folders(home) if (pid := plugin_of(path)))
-    patterns = {"claude": ".claude/agents/*.md", "codex": ".codex/agents/*.toml",
-                 "cursor": ".cursor/plugins/local/*-agents/agents/*.md"}
-    for tool, pattern in patterns.items():
-        count = sum(path.is_file() for path in home.glob(pattern))
+    managed.update(f"{pid} plugin skills" for _, path in skill_folders(home, cfg.agents) if (pid := plugin_of(path)))
+    for tool in cfg.agents:
+        pattern = TOOLS[tool].agent_glob
+        count = sum(path.is_file() for path in home.glob(pattern)) if pattern else 0
         if count:
-            managed[f"{TOOL_LABELS[tool]} agents"] = count
+            managed[f"{TOOLS[tool].name} agents"] = count
     return Scan(groups, scan_plugins(home, cfg), dict(sorted(managed.items())))
 
 
@@ -814,7 +817,7 @@ def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
         when = " vs ".join(f"{date:%b} {date.day}" for date in dates)
         return winner, [f"edited {count} {unit}{'s' if count != 1 else ''} later ({when})"]
     if source in winner.tools and source not in runner_up.tools:
-        return winner, [f"from your source of truth ({TOOL_LABELS[source]})"]
+        return winner, [f"from your source of truth ({TOOLS[source].name})"]
     if winner.lines > runner_up.lines:
         return winner, [f"longer: {winner.lines} lines vs {runner_up.lines}"]
     return winner, ["tied on origin, source and length"]
@@ -836,11 +839,11 @@ def cautions(version: Version, winner: Version) -> list[str]:
 
 
 KINDS = {
-    "instructions": Kind(scan_instructions, lambda home, name, tool: instructions.files(home)[tool]),
+    "instructions": Kind(scan_instructions, lambda home, name, tool: instructions.files(home, (tool,)).get(tool)),
     "rule": Kind(scan_rules, rule_location),
     "roles": Kind(scan_roles, lambda home, name, tool: None),
-    "skill": Kind(scan_skills, lambda home, name, tool: skills.folders(home)[tool] / name),
-    "mcp": Kind(scan_mcp, lambda home, name, tool: home / MCP_FILES[tool]),
+    "skill": Kind(scan_skills, lambda home, name, tool: home / TOOLS[tool].skills_dir / name),
+    "mcp": Kind(scan_mcp, lambda home, name, tool: paths(home, (tool,), "mcp").get(tool)),
 }
 
 

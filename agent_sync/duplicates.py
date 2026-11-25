@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import skills
+from .registry import DEFAULT_AGENTS, TOOLS
 
 SHOWN = 8                # names listed in a report line
-TOOL_NAMES = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ def codex_off(config: dict) -> set[str]:
             if isinstance(e, dict) and e.get("enabled") is False and isinstance(e.get("path"), str)}
 
 
-def views(home: Path) -> dict[str, list[Seen]]:
+def views(home: Path, *, enabled=DEFAULT_AGENTS) -> dict[str, list[Seen]]:
     """tool -> every skill it loads."""
     shared = [Seen(skill_name(d), shared_where(home, d), d) for d in walk(home / ".agents/skills")]
 
@@ -129,9 +129,9 @@ def views(home: Path) -> dict[str, list[Seen]]:
     # Plugins from Codex's online catalog (a .codex-remote-plugin-install.json in the cache, no [plugins] entry)
     # are left out: Codex 0.171 lists them as enabled but loads none of their skills.
     for pid, entry in (config.get("plugins") or {}).items():
-        enabled = entry.get("enabled", True) if isinstance(entry, dict) else bool(entry)
+        plugin_enabled = entry.get("enabled", True) if isinstance(entry, dict) else bool(entry)
         name, _, market = pid.partition("@")
-        version = newest(home / ".codex/plugins/cache" / market / name) if enabled and market else None
+        version = newest(home / ".codex/plugins/cache" / market / name) if plugin_enabled and market else None
         if version:
             codex += [Seen(skill_name(d), f"Codex plugin {pid}", d) for d in walk(version / "skills")]
     codex = [s for s in codex if os.path.realpath(s.path) not in off]
@@ -158,7 +158,8 @@ def views(home: Path) -> dict[str, list[Seen]]:
             rels.add(rel)
             kept.append(s)
 
-    return {"claude": unique(claude), "codex": unique(codex), "cursor": kept}
+    found = {"claude": unique(claude), "codex": unique(codex), "cursor": kept}
+    return {tool: found[tool] for tool in TOOLS if tool in enabled}
 
 
 def unique(seen: list[Seen]) -> list[Seen]:
@@ -171,10 +172,12 @@ def unique(seen: list[Seen]) -> list[Seen]:
     return out
 
 
-def elsewhere(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, src: Path) -> list[str]:
+def elsewhere(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, src: Path, *,
+              readers: tuple[str, ...] | None = None) -> list[str]:
     """Where each tool that reads `target` already gets the skill in `src` (the same SKILL.md) from a place
     other than target/name, or that it switched that copy off. Empty when some reader would have it only there."""
-    readers = [tool for tool, folder in skills.folders(home).items() if folder == target]
+    if readers is None:
+        readers = tuple(tool for tool, folder in skills.folders(home).items() if folder == target)
     mine = os.path.realpath(target / name)
     want = (src / "SKILL.md").read_bytes()
     places = []
@@ -187,18 +190,20 @@ def elsewhere(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, 
                 and (s.path / "SKILL.md").read_bytes() == want]
         if not hits:
             return []
-        places.append(f"{TOOL_NAMES[tool]}: {hits[0]}")
+        places.append(f"{TOOLS[tool].name}: {hits[0]}")
     return places
 
 
 CURSOR_FOLDERS = (".cursor/skills", ".claude/skills", ".codex/skills", ".agents/skills")
 
 
-def doubled(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, src: Path) -> list[str]:
+def doubled(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, src: Path, *,
+              readers: tuple[str, ...] | None = None) -> list[str]:
     """The tools reading `target` that a copy at target/name would make load the skill in `src` twice: they load a
     skill of its name from elsewhere already. For Cursor, a folder at the same path under another of its skills
     folders does not count: it reads only one of those."""
-    readers = [tool for tool, folder in skills.folders(home).items() if folder == target]
+    if readers is None:
+        readers = tuple(tool for tool, folder in skills.folders(home).items() if folder == target)
     mine, wanted = os.path.realpath(target / name), skill_name(src)
     shadows = {home / folder / name for folder in CURSOR_FOLDERS}
     return [tool for tool in readers
@@ -206,11 +211,11 @@ def doubled(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, sr
                    and not (tool == "cursor" and s.path in shadows) for s in seen.get(tool, []))]
 
 
-def report(home: Path, allow: list[str] | None = None) -> list[str]:
+def report(home: Path, allow: list[str] | None = None, *, enabled=DEFAULT_AGENTS) -> list[str]:
     """One line per tool and pair of places that give it the same skills, naming the skills."""
     allowed = {a.lower() for a in allow or []}
     lines = []
-    for tool, seen in views(home).items():
+    for tool, seen in views(home, enabled=enabled).items():
         by_name: dict[str, list[Seen]] = defaultdict(list)
         for s in seen:
             by_name[s.name].append(s)
@@ -221,8 +226,8 @@ def report(home: Path, allow: list[str] | None = None) -> list[str]:
         for places, names in sorted(groups.items()):
             where = "; ".join(places) if len(places) > 1 else f"{places[0]}, twice"
             if len(names) == 1:
-                lines.append(f"{TOOL_NAMES[tool]} loads {names[0]} more than once, from {where}")
+                lines.append(f"{TOOLS[tool].name} loads {names[0]} more than once, from {where}")
                 continue
             shown = ", ".join(names[:SHOWN]) + (f" and {len(names) - SHOWN} others" if len(names) > SHOWN else "")
-            lines.append(f"{TOOL_NAMES[tool]} loads {len(names)} skills more than once, from {where}: {shown}")
+            lines.append(f"{TOOLS[tool].name} loads {len(names)} skills more than once, from {where}: {shown}")
     return lines

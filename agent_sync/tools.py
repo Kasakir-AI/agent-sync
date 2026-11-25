@@ -11,6 +11,7 @@ from importlib import metadata
 from pathlib import Path
 
 from . import __version__
+from .registry import DEFAULT_AGENTS, TOOLS
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[─-◿]")
 # Where the CLIs usually live, added after your own PATH (a schedule starts with a bare PATH).
@@ -55,11 +56,16 @@ def skills(cli: str, *args: str) -> tuple[int, str]:
     return sh(["npx", "-y", "--prefer-online", cli, *args])
 
 
-def skill_args(cli: str, package: str, names: list[str] | None = None) -> list[str]:
-    """Install or update the skills of `package` (all, or the ones named) for Claude Code, Codex and Cursor
-    (one shared copy)."""
+def skill_args(cli: str, package: str, names: list[str] | None = None,
+               *, enabled=DEFAULT_AGENTS) -> list[str]:
+    """Install or update package skills for the enabled agents."""
     return ["npx", "-y", "--prefer-online", cli, "add", package, "-g", "-s", *(names or ["*"]),
-            "-a", "claude-code", "codex", "cursor", "-y"]
+            "-a", *skill_agents(enabled), "-y"]
+
+
+def skill_agents(enabled) -> list[str]:
+    return list(dict.fromkeys(agent for tool in TOOLS.values() if tool.id in enabled
+                              for agent in tool.skills_agents))
 
 
 def remove_args(cli: str, name: str) -> list[str]:
@@ -69,11 +75,9 @@ def remove_args(cli: str, name: str) -> list[str]:
 
 # A CLI writes its own settings the first time it starts (Claude Code ~/.claude.json, Cursor Agent
 # ~/.cursor/cli-config.json), so a dry run or `status` never starts one that has not run in this account yet.
-FIRST_RUN_FILES = {"claude": ".claude.json", "cursor-agent": ".cursor/cli-config.json", "codex": ".codex"}
-
-
 def started(cmd: str, home: Path) -> bool:
-    return (home / FIRST_RUN_FILES[cmd]).exists() if cmd in FIRST_RUN_FILES else True
+    first_run = next((tool.first_run for tool in TOOLS.values() if tool.command == cmd), None)
+    return first_run is None or (home / first_run).exists()
 
 
 def version(cmd: str, home: Path | None = None) -> str:
@@ -108,21 +112,16 @@ def act(log, dry: bool, label: str, args: list[str], timeout: int = 900) -> None
     log("ran" if code == 0 else "FAIL", f"{label}{': ' + out if code else ''}")
 
 
-DEFAULT_CLIS = (("claude", "claude-code", ["claude", "update"]),
-                ("cursor", "cursor-cli", ["cursor-agent", "update"]),
-                ("codex", "codex", ["codex", "update"]))
-COMMAND = {"claude": "claude", "cursor": "cursor-agent", "codex": "codex"}
-
-
 def update_clis(log, cfg, dry: bool = False) -> None:
     """Each CLI: its Homebrew cask when installed that way, otherwise its own updater (`claude update`,
     `cursor-agent update`, `codex update`). `cli_commands` in the config replaces the command for a tool."""
     brew = shutil.which("brew", path=PATH)
     brew_updated = False
-    for tool, cask, own in DEFAULT_CLIS:
+    for agent in TOOLS.values():
+        tool, cmd = agent.id, agent.command
         if not cfg.wants_cli(tool):
             continue
-        cmd = COMMAND[tool]
+        cask = agent.brew[1] if agent.brew else None
         if not shutil.which(cmd, path=PATH):
             log("skip", f"{cmd} not installed (`agent-sync setup` installs it)")
             continue
@@ -148,7 +147,7 @@ def update_clis(log, cfg, dry: bool = False) -> None:
             else:
                 log("ok", f"{cmd} is current (Homebrew)")
         else:
-            act(log, dry, f"{cmd} update", own)
+            act(log, dry, f"{cmd} update", list(agent.updater))
         if not dry:
             log("info", f"{cmd}: {before} -> {version(cmd)}")
 
@@ -244,15 +243,16 @@ def update_self(log, dry: bool = False, home: Path | None = None) -> bool:
     return False
 
 
-def update_plugins(log, dry: bool = False, home: Path | None = None) -> None:
+def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=DEFAULT_AGENTS) -> None:
     """Claude Code: refresh every marketplace, then update each user-installed plugin.
     Codex: refresh the Git plugin marketplaces you added; its installed plugins follow them.
     Cursor: refresh the plugin marketplaces you added (Cursor manages its built-in ones itself).
     A dry run skips a CLI that never started in this account (it has no plugins yet)."""
     home = home or Path.home()
 
-    def usable(cmd: str) -> bool:
-        return bool(shutil.which(cmd, path=PATH)) and (started(cmd, home) or not dry)
+    def usable(tool: str) -> bool:
+        cmd = TOOLS[tool].command
+        return tool in enabled and bool(shutil.which(cmd, path=PATH)) and (started(cmd, home) or not dry)
 
     if usable("claude"):
         act(log, dry, "Claude Code plugin marketplaces", ["claude", "plugin", "marketplace", "update"])
@@ -265,7 +265,7 @@ def update_plugins(log, dry: bool = False, home: Path | None = None) -> None:
                 act(log, dry, f"Claude Code plugin {plugin['id']}", ["claude", "plugin", "update", plugin["id"]])
     if usable("codex"):
         act(log, dry, "Codex plugin marketplaces", ["codex", "plugin", "marketplace", "upgrade"])
-    if usable("cursor-agent"):
+    if usable("cursor"):
         for line in raw(["cursor-agent", "plugin", "marketplace", "list"]).splitlines():
             parts = line.split()
             if len(parts) >= 3 and parts[1] == "user" and parts[2].startswith(("https://", "git@")):

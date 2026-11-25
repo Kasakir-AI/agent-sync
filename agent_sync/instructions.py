@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .registry import DEFAULT_AGENTS, grouped_paths, paths
 from .textmerge import keys, load_baselines, merge, removed_lines, reworded, save_baselines
 
 END = "<!-- agent-sync: end -->"
@@ -31,9 +32,8 @@ def split_front(text: str) -> tuple[str, str]:
     return (match[0], text[match.end():]) if match else ("", text)
 
 
-def files(home: Path) -> dict[str, Path]:
-    return {"claude": home / ".claude/CLAUDE.md", "codex": home / ".codex/AGENTS.md",
-            "cursor": home / ".cursor/rules/agent-sync-instructions.mdc"}
+def files(home: Path, enabled=DEFAULT_AGENTS) -> dict[str, Path]:
+    return paths(home, enabled, "instructions")
 
 
 def own_text(text: str) -> str:
@@ -57,11 +57,12 @@ def rendered(tool: str, current: str, body: str, src: Path, synced: frozenset[st
     return current if merged.strip() == current.strip() else merged
 
 
-def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = None) -> list[str]:
+def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = None, *,
+           enabled=DEFAULT_AGENTS) -> list[str]:
     if source == "cursor":
         return ["skip  Cursor can't be the source of global instructions; set source to claude or codex"]
-    paths = files(home)
-    src = paths[source]
+    locations = files(home, enabled)
+    src = locations[source]
     if not src.exists():
         return [f"skip  no {src}"]
     body = own_text(src.read_text())
@@ -73,9 +74,10 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
     valid = isinstance(lines, list) and all(isinstance(line, str) for line in lines)
     synced = frozenset(lines) if valid else frozenset()
     changes = []
-    for tool, path in paths.items():
-        if tool == source:
+    for path, readers in grouped_paths(locations).items():
+        if path == src:
             continue
+        tool = readers[0]
         current = path.read_text() if path.exists() else ""
         if tool != "cursor" and (kept := reworded(own_text(current), body, synced)):
             changes.append(f"WARN  {path} rewords {len(kept)} line{'' if len(kept) == 1 else 's'} {src.name} still has "

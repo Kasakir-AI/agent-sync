@@ -16,6 +16,7 @@ from threading import Event, Thread
 from . import instructions, review, textmerge, writes
 from .config import Config
 from .locking import run_lock
+from .registry import TOOLS
 
 IDLE_SECONDS = 30 * 60
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
@@ -116,7 +117,7 @@ def _scan_data(home: Path, cfg: Config, scan: review.Scan) -> dict:
         "groups": [_group_data(home, group, cfg.source) for group in scan.groups],
         "plugins": {name: {tool: [asdict(plugin) for plugin in entries] for tool, entries in tools.items()}
                     for name, tools in scan.plugins.items()},
-        "managed": scan.managed, "tools": review.TOOL_LABELS,
+        "managed": scan.managed, "tools": {tool: TOOLS[tool].name for tool in cfg.agents},
     }
 
 

@@ -15,13 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import tools
+from .registry import TOOLS
 
 HOMEBREW = ["/bin/bash", "-c", 'curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | bash']
-OFFICIAL = {"claude": ["/bin/bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
-            "codex": ["/bin/sh", "-c", "curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
-            "cursor": ["/bin/bash", "-c", "curl -fsS https://cursor.com/install | bash"]}
-CASK = {"claude": "claude-code", "codex": "codex", "cursor": "cursor-cli"}
-NAME = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor Agent"}
 
 
 @dataclass
@@ -89,9 +85,10 @@ def plan(cfg) -> list[Step]:
     if not shutil.which("npx", path=tools.PATH):
         add("node", "Node (for npx)", ["node"], None,
             "install Node from https://nodejs.org or your system's package manager")
-    for tool in ("claude", "codex", "cursor"):
-        if cfg.wants_cli(tool) and not shutil.which(tools.COMMAND[tool], path=tools.PATH):
-            add(tool, NAME[tool], ["--cask", CASK[tool]] if sys.platform == "darwin" else None, OFFICIAL[tool])
+    for tool in TOOLS.values():
+        if cfg.wants_cli(tool.id) and not shutil.which(tool.command, path=tools.PATH):
+            brew_args = [f"--{tool.brew[0]}", tool.brew[1]] if tool.brew and sys.platform == "darwin" else None
+            add(tool.id, tool.name, brew_args, list(tool.installer))
     return steps
 
 

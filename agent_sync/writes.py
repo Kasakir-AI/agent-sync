@@ -14,7 +14,8 @@ from pathlib import Path
 from stat import S_IMODE
 
 from . import instructions, mcp, review, roles, skills, tomledit
-from .config import TOOLS, Config
+from .config import Config
+from .registry import TOOLS
 from .review import (
     Content,
     Link,
@@ -128,7 +129,7 @@ def plan(home: Path, scan: Scan, choices: dict[str, str | dict], source: str) ->
             if path not in same:
                 targets.setdefault(path, set()).add(tool)
         source_path = next((version.path for version in group.versions if source in version.tools), None)
-        source_folder = skills.folders(home)[source].resolve()
+        source_folder = (home / TOOLS[source].skills_dir).resolve()
         for path, tools in targets.items():
             exists = path.exists()
             marker = (f"{skills.COPY_MARK}{source_path}\n"
@@ -348,7 +349,7 @@ def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:
         if not behind:
             continue
         choices[group.key] = best.id
-        names = tool_names(sorted({tool for version in behind for tool in version.tools}, key=TOOLS.index))
+        names = tool_names(sorted({tool for version in behind for tool in version.tools}, key=tuple(TOOLS).index))
         if all(version.missing for version in behind):
             why[group.key] = (f"MCP server {group.name}: {names} pointed at files that no longer exist; "
                               f"now {tool_names(best.tools)}'s version")

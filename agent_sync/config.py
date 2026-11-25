@@ -7,7 +7,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-TOOLS = ("claude", "codex", "cursor")
+from . import registry
 
 
 @dataclass
@@ -22,6 +22,7 @@ class AgentModels:
 @dataclass
 class Config:
     source: str = "claude"                                   # the tool whose setup the others mirror
+    agents: list[str] = field(default_factory=lambda: list(registry.DEFAULT_AGENTS))
     skill_packages: list[str] = field(default_factory=lambda: ["backnotprop/pstack"])
     skills_cli: str = "skills@latest"                        # https://www.npmjs.com/package/skills
     remove_dropped_skills: bool = True                       # uninstall package skills the package no longer ships
@@ -46,7 +47,8 @@ class Config:
     home: Path = field(default_factory=Path.home)
 
     def wants_cli(self, tool: str) -> bool:
-        return self.update_clis if isinstance(self.update_clis, bool) else tool in self.update_clis
+        return tool in self.agents and (
+            self.update_clis if isinstance(self.update_clis, bool) else tool in self.update_clis)
 
     @property
     def macos(self) -> bool:
@@ -64,7 +66,7 @@ class Config:
         return Path(xdg) / "agent-sync" if xdg else self.home / ".local/state/agent-sync"
 
 
-KEYS = ("source", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
+KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
         "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "allow_duplicate_skills",
         "mirror_instructions", "warn_models",
         "update_clis", "update_plugins", "cli_commands", "install_commands", "extra_steps", "launcher",
@@ -103,8 +105,14 @@ def parse(text: str, path: Path, home: Path) -> Config:
     for key in KEYS:
         if key in data:
             setattr(cfg, key, data[key])
-    if cfg.source not in TOOLS:
-        raise ValueError(f"source must be one of {', '.join(TOOLS)}, not {cfg.source!r}")
+    if not isinstance(cfg.agents, list) or any(
+            not isinstance(agent, str) or agent not in registry.TOOLS for agent in cfg.agents):
+        raise ValueError(f"agents must be a list of agent ids: {', '.join(registry.TOOLS)}")
+    cfg.agents = [agent for agent in registry.TOOLS if agent in cfg.agents]
+    if not isinstance(cfg.source, str) or cfg.source not in registry.TOOLS:
+        raise ValueError(f"source must be one of {', '.join(registry.TOOLS)}, not {cfg.source!r}")
+    if cfg.source not in cfg.agents:
+        raise ValueError(f"source {cfg.source!r} must be enabled in agents")
     for step in cfg.extra_steps:
         if not isinstance(step.get("command"), list) or not step["command"]:
             raise ValueError(f"extra step {step.get('name', '?')!r} needs command = [\"program\", \"arg\", ...]")

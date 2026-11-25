@@ -5,22 +5,29 @@ import re
 from pathlib import Path
 
 from . import roles
+from .registry import DEFAULT_AGENTS, TOOLS
 
 
-def model_files(home: Path) -> list[Path]:
-    """Where the three tools name the models they run."""
-    return [*roles.files(home).values(), home / ".codex/config.toml", home / ".cursor/cli-config.json",
-            *sorted((home / ".claude/agents").glob("*.md")), *sorted((home / ".codex/agents").glob("*.toml")),
-            *sorted((home / ".cursor/plugins/local").glob("*/agents/*.md"))]
+def model_files(home: Path, *, enabled=DEFAULT_AGENTS) -> list[Path]:
+    """Where the enabled tools name the models they run."""
+    settings = {"codex": TOOLS["codex"].mcp, "cursor": TOOLS["cursor"].first_run}
+    files = list(roles.files(home, enabled).values())
+    for tool in TOOLS.values():
+        if tool.id in enabled:
+            if filename := settings.get(tool.id):
+                files.append(home / filename)
+            if pattern := tool.agent_glob:
+                files.extend(sorted(home.glob(pattern)))
+    return list(dict.fromkeys(files))
 
 
-def unwanted_models(home: Path, words: list[str]) -> list[str]:
+def unwanted_models(home: Path, words: list[str], *, enabled=DEFAULT_AGENTS) -> list[str]:
     """One line per file that names a model containing one of `words` (for models you have no subscription for)."""
     if not words:
         return []
     pattern = re.compile("|".join(re.escape(w) for w in words), re.I)
     out = []
-    for f in model_files(home):
+    for f in model_files(home, enabled=enabled):
         try:
             hits = sorted({m.group(0).lower() for m in pattern.finditer(f.read_text())})
         except OSError:

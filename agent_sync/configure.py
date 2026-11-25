@@ -16,9 +16,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import instructions, roles, skills, tomledit
-from .config import TOOLS, AgentModels, config_path, parse
+from .config import AgentModels, config_path, parse
+from .registry import TOOLS
 
-TOOL_NAMES = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
 PARTS = [  # (setting, what it does) for the on/off switches
     ("mirror_skills", "Copy your own skills (not from a package) from the source tool to the others"),
     ("mirror_roles", "Copy pstack's model roles from the source tool to the others"),
@@ -29,7 +29,7 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("update_self", "Update agent-sync itself when a new version is out"),
     ("launcher", "Keep the double-click \"Agent Upkeep\" launcher on the Desktop (macOS)"),
 ]
-INSTALL_ITEMS = ("homebrew", "git", "node", "claude", "codex", "cursor")
+INSTALL_ITEMS = ("homebrew", "git", "node", *TOOLS)
 
 
 class Quit(Exception):
@@ -189,8 +189,8 @@ class Editor:
     def source(self) -> None:
         self.explain("Source tool", "The tool you set things up in. The other two copy its skills, roles, MCP",
                      "servers and (if you switch it on) its global instructions.",
-                     f"Now: {TOOL_NAMES[self.cfg.source]}")
-        pick = self.choose([(t, TOOL_NAMES[t]) for t in TOOLS])
+                     f"Now: {TOOLS[self.cfg.source].name}")
+        pick = self.choose([(t, TOOLS[t].name) for t in self.cfg.agents])
         if pick and pick != self.cfg.source:
             if pick == "cursor":
                 self.say("  Note: Cursor can't be the source of global instructions (that part will be skipped).")
@@ -297,19 +297,19 @@ class Editor:
         elif pick == "none":
             self.set("update_clis", False)
         elif pick == "some":
-            chosen = [t for t in TOOLS if self.cfg.wants_cli(t)]
+            chosen = [t for t in self.cfg.agents if self.cfg.wants_cli(t)]
             while True:
-                t = self.choose([(t, f"[{'x' if t in chosen else ' '}] {TOOL_NAMES[t]}") for t in TOOLS],
+                t = self.choose([(t, f"[{'x' if t in chosen else ' '}] {TOOLS[t].name}") for t in self.cfg.agents],
                                 "Switch which on/off")
                 if t is None:
                     break
-                chosen = [c for c in TOOLS if (c in chosen) != (c == t)]
-            self.set("update_clis", chosen if len(chosen) < len(TOOLS) else True)
+                chosen = [c for c in self.cfg.agents if (c in chosen) != (c == t)]
+            self.set("update_clis", chosen if len(chosen) < len(self.cfg.agents) else True)
 
     def update_commands(self) -> None:
         self.explain("Your own update commands", "Replace how agent-sync updates a CLI (normally Homebrew or the",
                      "tool's own updater).")
-        self.edit_commands("cli_commands", "Change which", TOOLS,
+        self.edit_commands("cli_commands", "Change which", tuple(TOOLS),
                            {"codex": "npm install -g @openai/codex@latest", "claude": "claude update",
                             "*": "npm install -g some-package@latest"})
 
@@ -436,7 +436,7 @@ class Editor:
         def few(items):
             return ", ".join(items) if items else "none"
         return [
-            ("1", "Source tool", TOOL_NAMES[c.source], self.source),
+            ("1", "Source tool", TOOLS[c.source].name, self.source),
             ("2", "Skill packages", few(c.skill_packages), self.packages),
             ("3", "What to keep in step", f"{len(on)} of {len(PARTS)} parts on", self.parts),
             ("4", "Skills kept in the source", few(c.skip_skills), self.skip),

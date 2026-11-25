@@ -34,6 +34,7 @@ from . import __version__, agents, checks, duplicates, instructions, mcp, review
 from .config import Config, load, save_setting
 from .locking import run_lock
 from .log import Log
+from .registry import TOOLS
 
 DUE_HOURS = 20
 
@@ -95,8 +96,8 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             for name in gone:
                 tools.act(log, dry, f"remove {name} ({package} ships it, but an earlier package has that name)",
                           tools.remove_args(cfg.skills_cli, name))
-            tools.act(log, dry, f"skills from {package} for claude-code, codex, cursor",
-                      tools.skill_args(cfg.skills_cli, package, names))
+            tools.act(log, dry, f"skills from {package} for {', '.join(tools.skill_agents(cfg.agents))}",
+                      tools.skill_args(cfg.skills_cli, package, names, enabled=cfg.agents))
             if code == 0 and cfg.remove_dropped_skills:
                 for name in skills.dropped(cfg.home, package, dest):
                     tools.act(log, dry, f"remove {name} (no longer in {package})",
@@ -107,7 +108,8 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 if manifest.exists():
                     version = json.loads(manifest.read_text()).get("version", "0")
                 try:
-                    log.lines(agents.mirror(dest, package, cfg.home, cfg.agent_models, version, dry, cfg.agent_notes))
+                    log.lines(agents.mirror(dest, package, cfg.home, cfg.agent_models, version, dry,
+                                            cfg.agent_notes, enabled=cfg.agents))
                     log("ok", f"agents from {package} mirrored")
                 except (ValueError, OSError) as e:
                     log("FAIL", f"agents from {package}: {e}")
@@ -117,36 +119,37 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 "(`codex plugin list`), then remove plugin_skills from your settings.")
         if cfg.mirror_skills:
             try:
-                log.lines(skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry))
+                log.lines(skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry, enabled=cfg.agents))
                 log("ok", "your own skills mirrored")
             except OSError as e:
                 log("FAIL", f"your own skills: {e}")
         try:
-            found = duplicates.report(cfg.home, cfg.allow_duplicate_skills)
+            found = duplicates.report(cfg.home, cfg.allow_duplicate_skills, enabled=cfg.agents)
             log.lines(found, "WARN")
             if not found:
                 log("ok", "no tool loads a skill twice")
         except OSError as e:
             log("FAIL", f"duplicate skills check: {e}")
         if cfg.mirror_roles:
-            log.lines(roles.mirror(cfg.home, cfg.source, dry))
+            log.lines(roles.mirror(cfg.home, cfg.source, dry, enabled=cfg.agents))
             log("ok", "model roles mirrored")
         if cfg.mirror_mcp:
             try:
                 log.lines(writes.repair_mcp(cfg.home, cfg, dry))
-                log.lines(mcp.mirror(cfg.home, cfg.source, dry))
+                log.lines(mcp.mirror(cfg.home, cfg.source, dry, enabled=cfg.agents))
                 log("ok", "MCP servers mirrored")
             except (ValueError, OSError) as e:
                 log("FAIL", f"MCP servers: {e}")
         if cfg.mirror_instructions:
             try:
-                log.lines(instructions.mirror(cfg.home, cfg.source, dry, review.baseline_file(cfg)))
+                log.lines(instructions.mirror(cfg.home, cfg.source, dry, review.baseline_file(cfg),
+                                              enabled=cfg.agents))
                 log("ok", "global instructions mirrored")
             except OSError as e:
                 log("FAIL", f"global instructions: {e}")
         log_review(cfg, log)
         if cfg.update_plugins:
-            tools.update_plugins(log, dry, cfg.home)
+            tools.update_plugins(log, dry, cfg.home, enabled=cfg.agents)
         if cfg.update_clis:
             tools.update_clis(log, cfg, dry)
             tools.update_prerequisites(log, dry)
@@ -156,7 +159,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             exe = shutil.which("agent-sync", path=tools.PATH)
             if exe:
                 tools.act(log, dry, "Desktop launcher from the new version", [exe, "launcher"])
-        log.lines(checks.unwanted_models(cfg.home, cfg.warn_models), "WARN")
+        log.lines(checks.unwanted_models(cfg.home, cfg.warn_models, enabled=cfg.agents), "WARN")
         if dry:
             log("done", f"dry run finished, nothing was changed. A real run: {log.summary()}")
             return 0
@@ -199,7 +202,7 @@ def review_settings(list_only: bool, no_open: bool) -> int:
         if len({version.digest for version in group.versions}) > 1:
             print(f"  {review.difference(group, winner)}")
         for version in group.versions:
-            names = ", ".join(review.TOOL_LABELS[tool] for tool in version.tools)
+            names = ", ".join(TOOLS[tool].name for tool in version.tools)
             date = datetime.fromtimestamp(version.modified).strftime("%Y-%m-%d %H:%M:%S")
             location = review.shown(cfg.home, version.path)
             recommended = " [Recommended]" if version == winner and group.status != "local" else ""
@@ -261,7 +264,8 @@ def status() -> int:
     print(f"last run: {time.ctime(stamp.stat().st_mtime) if stamp.exists() else 'never'}")
     print(f"log: {cfg.log_file}")
     print(f"schedule: {'installed' if schedule.installed(cfg.home) else 'not installed'}")
-    for cmd in ("claude", "codex", "cursor-agent"):
+    for agent in cfg.agents:
+        cmd = TOOLS[agent].command
         print(f"{cmd}: {tools.version(cmd, cfg.home)}")
     return 0
 

@@ -12,22 +12,29 @@ import json
 import tomllib
 from pathlib import Path
 
+from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
 from .tomledit import basic_string, key_text
 
 
-def read(home: Path, tool: str) -> dict[str, dict]:
-    if tool == "claude":
-        p = home / ".claude.json"
-        return (json.loads(p.read_text()).get("mcpServers") or {}) if p.exists() else {}
-    if tool == "cursor":
-        p = home / ".cursor/mcp.json"
-        return (json.loads(p.read_text()).get("mcpServers") or {}) if p.exists() else {}
-    p = home / ".codex/config.toml"
-    if not p.exists():
-        return {}
-    servers = tomllib.loads(p.read_text()).get("mcp_servers") or {}
+def json_servers(text: str) -> dict[str, dict]:
+    return json.loads(text).get("mcpServers") or {}
+
+
+def codex_servers(text: str) -> dict[str, dict]:
+    servers = tomllib.loads(text).get("mcp_servers") or {}
     return {name: {key: value for key, value in entry.items() if key in ("command", "args", "env", "url")}
             for name, entry in servers.items() if isinstance(entry, dict)}
+
+
+READERS = {"claude-json": json_servers, "codex-toml": codex_servers, "cursor-json": json_servers}
+
+
+def read(home: Path, tool: str) -> dict[str, dict]:
+    agent = TOOLS[tool]
+    if agent.mcp is None:
+        return {}
+    path = home / agent.mcp
+    return READERS[agent.mcp_format](path.read_text()) if path.exists() else {}
 
 
 def portable(server: dict) -> dict | None:
@@ -62,31 +69,38 @@ def codex_block(name: str, s: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def mirror(home: Path, source: str, dry: bool = False) -> list[str]:
+def add_codex(text: str, missing: dict[str, dict]) -> str:
+    updated = text + "".join(codex_block(name, server) for name, server in missing.items())
+    tomllib.loads(updated)
+    return updated
+
+
+def add_json(text: str, missing: dict[str, dict]) -> str:
+    data = json.loads(text) if text else {}
+    data["mcpServers"] = {**(data.get("mcpServers") or {}), **missing}
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+
+ADDERS = {"claude-json": add_json, "codex-toml": add_codex, "cursor-json": add_json}
+
+
+def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS) -> list[str]:
     wanted = {k: p for k, v in read(home, source).items() if (p := portable(v))}
+    locations = paths(home, enabled, "mcp")
     changes = []
-    for tool in ("claude", "codex", "cursor"):
-        if tool == source:
+    for path, readers in grouped_paths(locations).items():
+        if path == locations.get(source):
             continue
+        tool = readers[0]
         have = read(home, tool)
         missing = {k: v for k, v in wanted.items() if k not in have}
         if not missing:
             continue
-        if dry:
-            changes += [f"would add MCP server {n} to {tool}" for n in missing]
-            continue
-        if tool == "codex":
-            p = home / ".codex/config.toml"
-            p.parent.mkdir(parents=True, exist_ok=True)
-            with p.open("a") as f:
-                for name, s in missing.items():
-                    f.write(codex_block(name, s))
-            tomllib.loads(p.read_text())          # fail loudly rather than leave a broken config
-        else:
-            p = home / (".claude.json" if tool == "claude" else ".cursor/mcp.json")
-            data = json.loads(p.read_text()) if p.exists() else {}
-            data.setdefault("mcpServers", {}).update(missing)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-        changes += [f"added MCP server {n} to {tool}" for n in missing]
+        if not dry:
+            current = path.read_text() if path.exists() else ""
+            updated = ADDERS[TOOLS[tool].mcp_format](current, missing)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(updated)
+        verb = "would add" if dry else "added"
+        changes += [f"{verb} MCP server {name} to {tool}" for name in missing]
     return changes

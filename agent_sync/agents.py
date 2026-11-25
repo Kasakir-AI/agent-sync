@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import AgentModels
+from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths
 from .tomledit import basic_string
 
 
@@ -58,31 +59,43 @@ def write_if_changed(path: Path, text: str, dry: bool = False) -> bool:
     return True
 
 
+FORMATS = {
+    "claude-md": (".md", lambda a, models: a.markdown(models.claude)),
+    "codex-toml": (".toml", lambda a, models: a.codex_toml(models.codex, models.codex_effort)),
+    "cursor-plugin": (".md", lambda a, models: a.markdown(models.cursor)),
+}
+
+
 def mirror(package_dir: Path, package: str, home: Path, models: AgentModels, version: str = "0",
-           dry: bool = False, notes: dict[str, str] | None = None) -> list[str]:
-    """Write every agent of `package_dir/agents` for the three tools. Returns one line per changed file.
+           dry: bool = False, notes: dict[str, str] | None = None, *, enabled=DEFAULT_AGENTS) -> list[str]:
+    """Write every agent of `package_dir/agents` for the enabled tools. Returns one line per changed file.
     `notes` adds your own text to the end of an agent's prompt, by agent name.
     With dry=True nothing is written and the lines say "would ..."."""
     changes: list[str] = []
     verb = "would update" if dry else "updated"
     agents = [Agent.parse(f.read_text()) for f in sorted((package_dir / "agents").glob("*.md"))]
     slug = package.split("/")[-1]
-    plugin = home / ".cursor/plugins/local" / f"{slug}-agents"
+    targets = grouped_paths({tool.id: home / tool.agents_dir.format(pkg=slug)
+                             for tool in TOOLS.values() if tool.id in enabled and tool.agents_dir})
     for a in agents:
         if (notes or {}).get(a.name):
             a.body = a.body.rstrip() + "\n\n" + notes[a.name].strip() + "\n"
-        targets = [(home / ".claude/agents" / f"{a.name}.md", a.markdown(models.claude)),
-                   (plugin / "agents" / f"{a.name}.md", a.markdown(models.cursor)),
-                   (home / ".codex/agents" / f"{a.name}.toml", a.codex_toml(models.codex, models.codex_effort))]
-        changes += [f"{verb} {p}" for p, text in targets if write_if_changed(p, text, dry)]
-    if agents:
+        for folder, readers in targets.items():
+            suffix, render = FORMATS[TOOLS[readers[0]].agent_format]
+            path = folder / (a.name + suffix)
+            if write_if_changed(path, render(a, models), dry):
+                changes.append(f"{verb} {path}")
+    for folder, readers in targets.items():
+        if not agents or TOOLS[readers[0]].agent_format != "cursor-plugin":
+            continue
+        plugin = folder.parent
         manifest = {"name": f"{slug}-agents", "displayName": f"{package} agents", "version": version,
                     "description": f"The agents of {package}, mirrored by agent-sync (skills come from the skills "
                                    "folder; this plugin only adds agents).", "agents": "./agents/"}
         if write_if_changed(plugin / ".cursor-plugin/plugin.json", json.dumps(manifest, indent=2) + "\n", dry):
             changes.append(f"{verb} {plugin}/.cursor-plugin/plugin.json")
         names = {f"{a.name}.md" for a in agents}
-        for old in (plugin / "agents").glob("*.md"):
+        for old in folder.glob("*.md"):
             if old.name not in names:
                 if not dry:
                     old.unlink()
