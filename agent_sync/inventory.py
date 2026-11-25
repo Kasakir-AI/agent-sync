@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import duplicates, mcp, skills
@@ -39,7 +40,7 @@ class Plugin:
     skills: int
     skill_dirs: tuple[Path, ...] = ()
     server_files: tuple[Path, ...] = ()
-    parts: frozenset[str] = frozenset()
+    parts: Counter[str] = field(default_factory=Counter)
 
 
 def hook_parts(root: Path, manifest: dict, made_for: str | None) -> Iterator[str]:
@@ -70,11 +71,12 @@ def hook_parts(root: Path, manifest: dict, made_for: str | None) -> Iterator[str
                         yield f"hook:{event}:{definition}"
 
 
-def plugin_parts(root: Path, manifest: dict, made_for: str | None) -> frozenset[str]:
+def plugin_parts(root: Path, manifest: dict, made_for: str | None) -> Counter[str]:
     found = {f"command:{path.stem}" for path in root.glob("commands/*.md")}
     found |= {f"agent:{path.stem}" for path in root.glob("agents/*") if path.suffix in (".md", ".toml")}
-    found.update(hook_parts(root, manifest, made_for))
-    return frozenset(found)
+    parts = Counter(found)
+    parts.update(hook_parts(root, manifest, made_for))
+    return parts
 
 
 def family(name: str) -> str:

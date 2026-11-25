@@ -99,7 +99,7 @@ def skill_problem(old: inventory.Plugin, candidate: inventory.Plugin) -> str:
 
 
 def parts_problem(old: inventory.Plugin, candidate: inventory.Plugin) -> str:
-    missing = sorted(old.parts - candidate.parts)
+    missing = sorted((old.parts - candidate.parts).elements())
     if not missing:
         return ""
     names = ", ".join(" ".join(part.split(":", 2)[:2]) for part in missing[:8])

@@ -199,10 +199,11 @@ def test_a_replacement_that_lacks_a_command_or_hooks_is_not_taken(tmp_path):
     assert "lacks 2 of its commands, agents or hooks (command deploy, hook SessionStart)" in logs[0][1]
 
 
-def test_switch_requires_every_individual_hook_even_for_the_same_event_and_matcher(tmp_path):
+@pytest.mark.parametrize("second_command", ["second", "first"], ids=["distinct", "repeated"])
+def test_switch_requires_every_invocation_even_for_the_same_event_and_matcher(tmp_path, second_command):
     root = old_plugin(tmp_path)
     new = own_plugin(tmp_path)
-    hooks = [{"type": "command", "command": "first"}, {"type": "command", "command": "second"}]
+    hooks = [{"type": "command", "command": command} for command in ("first", second_command)]
     write(root, "hooks/hooks.json", {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": hooks}]}})
     manifest = ".codex-plugin/plugin.json"
     metadata = json.loads((new / manifest).read_text())
