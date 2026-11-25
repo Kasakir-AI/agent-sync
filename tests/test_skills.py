@@ -131,7 +131,7 @@ def test_old_plugin_copies_go_when_codex_is_the_source(tmp_path):
     assert (shared / "codex-own").exists()
 
 
-def test_a_copy_a_tool_would_load_twice_is_left_out(tmp_path):
+def test_a_copy_whose_name_another_skill_has_is_kept_with_a_warning(tmp_path):
     claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
     make_skill(claude, "outline", "my outline")
     make_skill(claude, "mine")
@@ -140,11 +140,14 @@ def test_a_copy_a_tool_would_load_twice_is_left_out(tmp_path):
     make_skill(shared, "outline", "my outline")                         # copied before Codex had the plugin
     (shared / "outline" / skills.MARKER).write_text(f"{skills.COPY_MARK}{claude / 'outline'}\n")
 
-    assert mirror_removals(tmp_path, "claude") == [
-        f"removed skill outline from {shared} (Codex would load it twice)",
-        f"WARN  skill outline not copied to {shared}: Codex already loads a skill of that name, so a copy would "
-        "load twice"]
-    assert not (shared / "outline").exists() and (shared / "mine").exists()
+    state = tmp_path / "state"
+    with pending.during(state, [], lambda *_: None, False):
+        assert skills.mirror(tmp_path, "claude") == [
+            f"copied skill mine to {shared}",
+            f"WARN  skill outline: Codex also loads a different skill of that name, so {shared} gets no new copy "
+            "and keeps any it has. Rename one to load both"]
+    assert not pending.load(state)                       # nothing is offered for removal
+    assert (shared / "outline").exists() and (shared / "mine").exists()
 
 
 def test_a_link_with_a_skill_name_is_left_alone(tmp_path):
@@ -185,3 +188,30 @@ def test_a_package_listed_earlier_keeps_the_names_it_ships(tmp_path):
     assert skills.package_choice(tmp_path, "a/pstack", first, taken) == (None, [])      # all of them
     assert skills.package_choice(tmp_path, "b/other", second, taken) == (["grilling"], ["other-tdd"])
     assert taken == {"tdd", "teach", "unslop", "grilling"}
+
+
+def test_a_copy_the_user_edited_is_replaced_only_after_approval(tmp_path):
+    claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    make_skill(claude, "notes", "first")
+    assert skills.mirror(tmp_path, "claude") == [f"copied skill notes to {shared}"]
+    (shared / "notes/SKILL.md").write_text("my own edit\n")
+    (claude / "notes/SKILL.md").write_text("---\nname: notes\ndescription: second\n---\nsecond\n")
+    state = tmp_path / "state"
+    with pending.during(state, [], lambda *_: None, False):
+        assert skills.mirror(tmp_path, "claude") == []
+    assert (shared / "notes/SKILL.md").read_text() == "my own edit\n"
+    assert "your edits to the copy of skill notes" in pending.load(state)["skill-copy:.agents/skills:notes"]["what"]
+    assert mirror_removals(tmp_path, "claude") == [f"copied skill notes to {shared}"]
+    assert "second" in (shared / "notes/SKILL.md").read_text()
+
+
+def test_a_skill_in_a_folder_whose_name_extends_the_copys_still_counts(tmp_path):
+    from agent_sync import duplicates
+
+    claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    make_skill(claude, "foo", "same")
+    make_skill(shared, "foo-bar", "same")
+    (shared / "foo-bar/SKILL.md").write_text((claude / "foo/SKILL.md").read_text())
+    seen = duplicates.views(tmp_path, enabled=("claude", "codex", "cursor"))
+    assert duplicates.elsewhere(tmp_path, seen, shared, "foo", claude / "foo", readers=("codex",)) == [
+        "Codex: ~/.agents/skills"]

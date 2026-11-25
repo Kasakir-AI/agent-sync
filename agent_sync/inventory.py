@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import json
 import re
-from fnmatch import fnmatch
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 
 from . import duplicates, mcp, skills

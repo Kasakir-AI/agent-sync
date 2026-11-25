@@ -77,12 +77,12 @@ def newest(folder: Path) -> Path | None:
     return max(versions, key=lambda d: d.stat().st_mtime, default=None)
 
 
-def shared_where(home: Path, d: Path) -> str:
-    """Where a skill in ~/.agents/skills came from."""
+def shared_where(home: Path, d: Path, locked: dict[str, dict] | None = None) -> str:
+    """Where a skill in ~/.agents/skills came from (`locked`: the skills lock, read once by the caller)."""
     rel = d.relative_to(home / ".agents/skills")
     if rel.parts[0] == "synced":
         return "~/.agents/skills (claude.ai synced skills)"
-    source = (skills.locked(home).get(d.name) or {}).get("source")
+    source = ((skills.locked(home) if locked is None else locked).get(d.name) or {}).get("source")
     if source and len(rel.parts) == 1:
         return f"~/.agents/skills (package {source})"
     if skills.is_plugin_copy(d):
@@ -93,11 +93,11 @@ def shared_where(home: Path, d: Path) -> str:
     return "~/.agents/skills"
 
 
-def claude_where(home: Path, d: Path) -> str:
+def claude_where(home: Path, d: Path, locked: dict[str, dict] | None = None) -> str:
     """Where a skill in ~/.claude/skills came from; a link into ~/.agents/skills is named after its source."""
     real, shared = Path(os.path.realpath(d)), Path(os.path.realpath(home / ".agents/skills"))
     if real.is_relative_to(shared):
-        return shared_where(home, home / ".agents/skills" / real.relative_to(shared)).replace(
+        return shared_where(home, home / ".agents/skills" / real.relative_to(shared), locked).replace(
             "~/.agents/skills", "~/.claude/skills", 1)
     return "~/.claude/skills (claude.ai synced skills)" if "synced" in d.parts else "~/.claude/skills"
 
@@ -117,7 +117,8 @@ def codex_off(config: dict) -> set[str]:
 
 def views(home: Path, *, enabled=DEFAULT_AGENTS) -> dict[str, list[Seen]]:
     """tool -> every skill it loads."""
-    shared = [Seen(skill_name(d), shared_where(home, d), d) for d in walk(home / ".agents/skills")]
+    locked = skills.locked(home)
+    shared = [Seen(skill_name(d), shared_where(home, d, locked), d) for d in walk(home / ".agents/skills")]
 
     enabled = tuple(enabled)
     loaded = inventory.plugins(home, (*enabled, "claude") if "cursor" in enabled else enabled)
@@ -126,7 +127,7 @@ def views(home: Path, *, enabled=DEFAULT_AGENTS) -> dict[str, list[Seen]]:
         return [Seen(skill_name(d), f"{TOOLS[tool].name} plugin {p.id.removesuffix('@local')}", d)
                 for p in loaded.get(tool, []) for d in p.skill_dirs]
 
-    claude = [Seen(skill_name(d), claude_where(home, d), d) for d in walk(home / ".claude/skills")]
+    claude = [Seen(skill_name(d), claude_where(home, d, locked), d) for d in walk(home / ".claude/skills")]
     claude += plugin_skills("claude")
 
     off = codex_off(codex_config(home))
@@ -174,20 +175,26 @@ def unique(seen: list[Seen]) -> list[Seen]:
     return out
 
 
+def within(path: Path, folder: str) -> bool:
+    """`path` is `folder` or inside it, links resolved (foo-bar is not inside foo)."""
+    return Path(os.path.realpath(path)).is_relative_to(folder)
+
+
 def elsewhere(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, src: Path, *,
-              readers: tuple[str, ...] | None = None) -> list[str]:
+              readers: tuple[str, ...] | None = None, off: set[str] | None = None) -> list[str]:
     """Where each tool that reads `target` already gets the skill in `src` (the same SKILL.md) from a place
-    other than target/name, or that it switched that copy off. Empty when some reader would have it only there."""
+    other than target/name, or that it switched that copy off. Empty when some reader would have it only there.
+    `off`: Codex's switched-off skill folders, read once by the caller."""
     if readers is None:
         readers = tuple(tool for tool, folder in skills.folders(home).items() if folder == target)
     mine = os.path.realpath(target / name)
     want = (src / "SKILL.md").read_bytes()
     places = []
     for tool in readers:
-        if tool == "codex" and mine in codex_off(codex_config(home)):
+        if tool == "codex" and mine in (codex_off(codex_config(home)) if off is None else off):
             places.append("Codex: switched off there")
             continue
-        hits = [s.where for s in seen.get(tool, []) if not os.path.realpath(s.path).startswith(mine)
+        hits = [s.where for s in seen.get(tool, []) if not within(s.path, mine)
                 and s.name == skill_name(src) and (s.path / "SKILL.md").is_file()
                 and (s.path / "SKILL.md").read_bytes() == want]
         if not hits:
@@ -209,7 +216,7 @@ def doubled(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, sr
     mine, wanted = os.path.realpath(target / name), skill_name(src)
     shadows = {home / folder / name for folder in CURSOR_FOLDERS}
     return [tool for tool in readers
-            if any(s.name == wanted and not os.path.realpath(s.path).startswith(mine)
+            if any(s.name == wanted and not within(s.path, mine)
                    and not (tool == "cursor" and s.path in shadows)
                    and not (tool == "gemini" and s.where == f"~/{skills.EXTRA_ROOTS['gemini']}")
                    for s in seen.get(tool, []))]

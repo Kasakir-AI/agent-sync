@@ -17,6 +17,7 @@ removed.
 from __future__ import annotations
 
 import filecmp
+import hashlib
 import json
 import os
 import shutil
@@ -32,6 +33,26 @@ MARKER = ".agent-sync"
 COPY_MARK = "copied by agent-sync from "
 PLUGIN_MARK = COPY_MARK + "Claude Code plugin "
 REVIEW_MARK = "kept by agent-sync review\n"
+DIGEST = "files: "   # a marker's second line: the digest of the files agent-sync copied
+
+
+def tree_digest(folder: Path) -> str:
+    """A digest of a skill folder's files (names, link targets and bytes), without the marker."""
+    digest = hashlib.sha256()
+    for path in sorted(folder.rglob("*")):
+        if path.name in (MARKER, ".DS_Store") or (path.is_dir() and not path.is_symlink()):
+            continue
+        digest.update(os.fsencode(path.relative_to(folder)) + b"\0")
+        digest.update(os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def edited(dest: Path) -> bool:
+    """The copy's files differ from what agent-sync copied (known only for copies that recorded a digest)."""
+    lines = marker_text(dest).splitlines()
+    recorded = next((line.removeprefix(DIGEST) for line in lines[1:] if line.startswith(DIGEST)), None)
+    return recorded is not None and recorded != tree_digest(dest)
 
 
 def folders(home: Path, enabled=DEFAULT_AGENTS) -> dict[str, Path]:
@@ -158,15 +179,16 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
 
     def remove_copy(dest: Path, reason: str) -> None:
         key = f"skill-copy:{dest.parent.relative_to(home)}:{dest.name}"
-        what = f"skill {dest.name} from {dest.parent} ({reason})"
+        what = f"skill {dest.name} from {dest.parent} ({reason}{'; you edited this copy' if edited(dest) else ''})"
         if pending.due(key, what) and not dry:
             backups.save(dest)
             shutil.rmtree(dest)
             pending.removed(key)
             changes.append(f"removed {what}")
 
-    from .duplicates import doubled, elsewhere, views  # builds on this module, so it is imported here
+    from .duplicates import codex_config, codex_off, doubled, elsewhere, views  # they build on this module
     seen = views(home, enabled=enabled)
+    off = codex_off(codex_config(home))
     left_out: dict[tuple[Path, tuple[str, ...]], list[str]] = {}   # (target, tools that have them) -> skill names
     for target in sorted(plan):
         wanted, in_source = plan[target], target == source_dir
@@ -186,21 +208,26 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             if dest.exists() and in_source and not is_plugin_copy(dest):
                 changes.append(f"WARN  {dest} is a copy from an earlier source tool; left alone")
                 continue
-            have = elsewhere(home, seen, target, name, src, readers=roots[target])
-            if have:                                       # every tool reading `target` loads it already
+            have = elsewhere(home, seen, target, name, src, readers=roots[target], off=off)
+            if have:                                       # every tool reading `target` loads this very skill already
                 if dest.exists():
                     remove_copy(dest, f"already loaded from {'; '.join(have)}")
                 continue
             if twice := doubled(home, seen, target, name, src, readers=roots[target]):
-                if dest.exists():
-                    remove_copy(dest, f"{' and '.join(TOOLS[tool].name for tool in twice)} would load it twice")
                 left_out.setdefault((target, tuple(twice)), []).append(name)
-                continue
+                continue                                   # another skill has its name: an existing copy stays
+            mark += f"{DIGEST}{tree_digest(src)}\n"
             if dest.exists() and same_tree(src, dest):
                 if marker_text(dest) != mark and not dry:
                     backups.save(dest)
                     (dest / MARKER).write_text(mark)       # same files from a new place (a plugin's new version)
                 continue
+            if dest.exists() and edited(dest):
+                key = f"skill-copy:{target.relative_to(home)}:{name}"
+                if not pending.due(key, f"your edits to the copy of skill {name} in {target} (its source changed; "
+                                        "the new version replaces them)") or dry:
+                    continue
+                pending.removed(key)
             if not dry:
                 backups.save(dest)
                 target.mkdir(parents=True, exist_ok=True)
@@ -226,8 +253,8 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
     for (target, twice), names in sorted(left_out.items()):
         have = " and ".join(TOOLS[tool].name for tool in twice)
         what = f"skill {names[0]}" if len(names) == 1 else f"{len(names)} skills ({', '.join(names[:8])})"
-        changes.append(f"WARN  {what} not copied to {target}: {have} already "
-                       f"{'loads' if len(twice) == 1 else 'load'} a skill of that name, so a copy would load twice")
+        changes.append(f"WARN  {what}: {have} also {'loads' if len(twice) == 1 else 'load'} a different skill of "
+                       f"that name, so {target} gets no new copy and keeps any it has. Rename one to load both")
     return changes
 
 
