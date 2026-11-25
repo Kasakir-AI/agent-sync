@@ -11,16 +11,21 @@ agent-sync runs on your own machine with your permissions. Things to know:
   pin. `mcp_major_updates` allows major versions.
 - **agent-sync runs only the update commands you list for programs it doesn't manage.** Programs installed with
   Homebrew, npm, pipx or uv are upgraded through those tools. Any other program runs only the command you put in
-  `program_updates`. A dry run runs none of them.
+  `program_updates`. Upkeep backs up the resolved executable and its dedicated install folder, when present,
+  before running a listed command. A dry run runs none of them.
 - **Secrets stay where they are.** An MCP server copied to another agent does not carry environment values that look
   like tokens or keys. A memory note or an instruction line that contains a secret value never leaves its tool.
   Upkeep asks you before sharing Claude Code's memory and saves your answer in `mirror_memory`. Notes about
   credentials or personal details stay in Claude Code unless you list them in `share_memory`. The other agents
   send their instructions to their own companies, so review what `mirror_memory` and `mirror_instructions` share.
+  Upkeep manages memory copies by manifest and skips symlinks. It checks the copy for concurrent edits before
+  replacing it.
 - **Upkeep backs up your files and asks before removing installed items.** Backups of changed files live in
   `~/.local/state/agent-sync/backups/` and can hold settings that contain tokens. New backup folders and MCP
   settings files are readable only by you. Retention removes expired backups, obsolete package checkouts, and
-  old records that agent-sync owns. It skips symlinked backup folders and entries and warns you.
+  old records that agent-sync owns. It skips symlinked backup folders and entries and warns you. Approval for a
+  batch of instruction deletions applies to the exact lines shown. An approval expires when the owning step
+  confirms the original item is gone.
 
 Please report a vulnerability privately through GitHub's "Report a vulnerability" (Security tab) rather than in a
 public issue.

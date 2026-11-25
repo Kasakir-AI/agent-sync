@@ -104,16 +104,17 @@ while you are logged out.
 
 `agent-sync inventory` lists, for each enabled agent, the plugins it loads (with the version and the tool each was
 made for), its MCP servers (from its settings or from a plugin, with pinned package versions and newer ones), and
-the number of skills it loads. It ends with every problem it found: skills, plugins or MCP servers loaded twice, and
-pins with a newer release. It changes nothing.
+the number of skills it loads. It reports duplicates, outdated pins, and settings files it could not read. A
+duplicate skill from two plugins awaiting a replacement approval appears as an informational message.
 
 ## Approve removals
 
 Before a run changes a file in your setup, it saves the original in
 `~/.local/state/agent-sync/backups/run-<date-time>/`. Backups use paths relative to your resolved home folder.
 Files outside your home go under `_outside/`. On macOS, upkeep uses APFS clones for folders when it can.
-At the end of a run, upkeep drops byte-identical copies and empty folders. A run with no changed originals
-leaves no backup folder.
+Global skill updates back up only the skills that have an update. A standalone update from `program_updates`
+backs up the resolved executable and its dedicated install folder under `~/.local` or `/usr/local/opt`, if present.
+Upkeep prunes unchanged copies at the end of the run. A run with no changed originals leaves no backup folder.
 
 Every `agent-sync run` checks retention, even when upkeep is skipped, offline, or fails. Backups expire after
 30 days (`backup_days`). If the backup folder exceeds 500 MiB (`backup_max_mb`), upkeep deletes the oldest
@@ -137,6 +138,11 @@ edited skill or memory copy, a large deletion in your instructions, and replacin
 - **Any time:** `agent-sync pending` lists what is waiting. `agent-sync pending --approve <key>` lets the next run
   remove it. `agent-sync pending --keep <key>` adds it to `keep_installed`, which keeps it for good.
 
+Approvals expire when the step responsible for the item confirms it is gone. A skipped or failed step preserves its
+pending choices. Approval of a large instruction deletion applies to the exact batch shown. Other instruction
+changes can proceed when they leave held lines intact. Add `"instructions"` to `keep_installed` to hold every
+deletion batch.
+
 New warnings appear in a macOS alert that stays until you click **OK** (in a terminal, until you press Enter), and in
 the Inbox. A warning you acknowledge stays quiet for 30 days unless its text changes. `agent-sync pending --ack`
 acknowledges the recent warnings. `notify = false` turns off desktop windows and Inbox messages.
@@ -153,7 +159,9 @@ to skip the prompt. While you have a choice waiting, upkeep keeps the notes in C
 next upkeep. A dry run shows the question without asking you to answer.
 
 If you share, upkeep copies eligible notes to `~/.agents/memory/` and adds the index to the other agents'
-instructions. Upkeep manages its own copies in that folder.
+instructions. Upkeep manages only the copies it recorded in its manifest. It skips symlinked notes and asks before
+overwriting an edited copy. If Claude Code's memory folder is removed, upkeep backs up the instruction files and
+clears the index it added.
 
 The other agents send their instructions to their own companies, so some notes stay in Claude Code:
 
@@ -273,7 +281,7 @@ and change what you need. Every key is optional:
 | `mirror_memory` | unset | ask once before sharing Claude Code's memory notes |
 | `private_memory` / `share_memory` | `[]` | memory notes to keep in Claude Code, or flagged notes to share anyway |
 | `status_line` | `true` | set up one status line in every CLI that supports it |
-| `keep_installed` | `[]` | items upkeep never removes or replaces, by key or name, e.g. `["cloudflare"]` |
+| `keep_installed` | `[]` | items upkeep never removes or replaces, by full key, final key segment, or colon-delimited prefix, e.g. `["cloudflare", "instructions"]` |
 | `keep_mcp_versions` | `[]` | MCP servers whose pinned package version stays as it is |
 | `mcp_major_updates` | `false` | let a pinned MCP package move to a new major version |
 | `update_mcp_programs` | `true` | upgrade the programs MCP servers run (Homebrew, npm, pipx, uv) |

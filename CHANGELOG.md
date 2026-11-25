@@ -15,13 +15,16 @@ your files before it changes them, and asks your approval before removing instal
 - An MCP server a tool's settings list and one of its plugins also brings is loaded twice. When the settings
   entry is an exact copy, upkeep asks you to approve removing it. Otherwise it warns. The source tool's settings
   are never changed this way, because the other tools copy from them.
-- A plugin installed twice in one tool, from two catalogs, is reported.
+- A plugin installed twice in one tool, from two catalogs, is reported. When you have a choice waiting, the skill
+  duplicates for that plugin pair appear as information.
 - Codex uses a plugin made for Codex in place of a Claude Code-format copy when the Codex one is not older and keeps
   every skill, MCP server, command, agent and hook. Otherwise both stay and the run says why.
 
 **Kept up to date**
 
 - Every installed skill is updated, whichever repository it came from, not only the packages in `skill_packages`.
+- Global skill updates back up only the skills with updates. Gemini CLI extension updates back up only eligible
+  extension folders and discard unchanged copies.
 - Antigravity plugins are reinstalled when its catalog has a newer version. A release never moves to a prerelease.
 - Programs that MCP servers run are upgraded the way they were installed: Homebrew, npm, pipx or uv
   (`update_mcp_programs`). A program with its own updater runs it only when you list it in `program_updates`.
@@ -37,14 +40,19 @@ your files before it changes them, and asks your approval before removing instal
 
 - With `mirror_instructions = true`, every agent's instruction file contributes: a line added in any of them
   reaches the others, next to the lines around it. A rewording in the source tool's file reaches the others too.
-- A line is never deleted from another tool on its own. When another tool drops or rewords a shared line (Codex and
-  Gemini do when they remember something), the others keep it and the run warns until you choose in
-  `agent-sync review`. A large deletion in the source, a missing source file, or an empty one is held for approval.
+- When another tool drops or rewords a shared line, the other tools keep it until you choose in `agent-sync review`.
+  A line moved intact into a local, private, or memory section stays local to that file and remains in the other
+  tools. Source deletions over 10% of the shared lines need approval for the exact batch. A single deletion is
+  considered individually when fewer than five lines are shared. Unrelated edits still spread while a batch waits.
+  A missing, empty, or unreadable source holds instruction mirroring.
+- Fenced code spreads as one block, including comments inside the fence. Repeated standalone lines spread too.
 - Lines between `<!-- agent-sync: local -->` and `<!-- agent-sync: end local -->` stay in their file. So do lines
   between `<!-- agent-sync: private -->` and `<!-- agent-sync: end private -->`.
 - Upkeep asks once whether to share Claude Code's memory when notes exist and another agent is enabled. You can
   answer in the terminal, a desktop window, or the Plannotator Inbox. Upkeep saves your answer as `mirror_memory`.
   If you choose to share, upkeep copies eligible notes to `~/.agents/memory/` and shares the index.
+- Upkeep manages only the notes it recorded in its manifest. It skips symlinked copies. If Claude Code's memory
+  folder goes away, upkeep backs up the instruction files and removes its index from them.
 - Notes that mention credentials, tokens, keys, legal names or similar personal details stay in Claude Code. The run
   lists them. `private_memory` and `private: true` keep a note private. `share_memory` shares a flagged note. A note
   or an instruction line that contains a secret value, such as a token or a private key, never leaves its file.
@@ -53,8 +61,9 @@ your files before it changes them, and asks your approval before removing instal
 
 **Safety**
 
-- Upkeep backs up the original files in your setup and keeps only the copies whose contents changed. Backup paths
-  resolve symlinks in your home path. Backups expire after 30 days (`backup_days`). A 500 MiB size limit
+- Upkeep backs up originals and keeps copies whose contents or permissions changed. It backs up the resolved
+  executable and its dedicated install folder when a listed standalone MCP updater runs. Backups expire after
+  30 days (`backup_days`). A 500 MiB size limit
   (`backup_max_mb`) removes older agent-sync folders first and protects the current run.
 - Cleanup runs even when upkeep is skipped, offline, or fails. It removes obsolete package checkouts and expires
   warning acknowledgements and Inbox notification records after 30 days. A dry run lists what it would clean up.
@@ -62,7 +71,8 @@ your files before it changes them, and asks your approval before removing instal
 - Nothing you or another program installed is removed until you approve it. A scheduled run asks in a macOS window
   where you pick what may go. In a terminal it asks yes or no. Your Plannotator Inbox gets buttons to approve or
   keep each removal, when Plannotator is installed. `agent-sync pending` lists what waits and takes
-  `--approve`, `--keep` and `--ack`. `keep_installed` keeps an item for good.
+  `--approve`, `--keep` and `--ack`. `keep_installed` keeps an item for good. A completed step expires approvals
+  for items it confirms are gone, even if another step failed.
 - New warnings appear in a macOS alert that stays until you click **OK**, and in the Inbox. A warning you
   acknowledge stays quiet for 30 days unless it changes. `notify = false` turns off desktop windows and Inbox
   messages.
@@ -72,6 +82,8 @@ your files before it changes them, and asks your approval before removing instal
   updates it, the run plans the change again from the new contents instead of overwriting them. New MCP settings
   files are readable only by you.
 - One failed step no longer stops the rest of the run.
+- Upkeep warns and skips MCP settings files with a non-object root or server table. Plugin MCP files and skill
+  definitions must resolve inside the plugin folder.
 
 **Status line**
 
