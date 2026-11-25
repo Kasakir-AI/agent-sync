@@ -96,9 +96,12 @@ def test_source_rewords_spread_and_gemini_rewords_are_held(tmp_path):
                'the other tools keep the old wording. Run agent-sync review to choose.')
     for i in range(2):
         messages = instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
-        assert messages[0] == warning
+        assert warning in messages
         if i:
             assert messages == [warning]
+        else:                                          # a source reword spreads, and says so once
+            assert messages[0] == ('info  .claude/CLAUDE.md rewords "Be brief." -> "Be very brief."; '
+                                   'the other tools get the new wording')
         for path in set(files.values()):
             wording = new if path == gemini else old
             assert f"Be very brief.\n{wording}\nRun the tests." in path.read_text()
@@ -223,7 +226,8 @@ def test_source_reword_reaches_unedited_copies_when_codex_also_rewords(tmp_path)
         path = files[tool]
         path.write_text(path.read_text().replace("a shared branch", wording))
     codex = files["codex"].read_text()
-    warning, update = instructions.mirror(tmp_path, "claude", baselines=baselines)
+    info, warning, update = instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert info.startswith('info  .claude/CLAUDE.md rewords "Ask before pushing to a shared branch."')
     assert warning.startswith(f'WARN  {files["codex"]} rewords 1 shared line(s)')
     assert update == f'updated {files["cursor"]}'
     assert instructions.mirror(tmp_path, "claude", baselines=baselines) == [warning]
@@ -254,8 +258,11 @@ def test_enabling_an_existing_file_does_not_delete_shared_instructions(tmp_path)
     gemini.parent.mkdir()
     gemini.write_text("Run pytest.\n")
     instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
-    assert files["codex"].read_text() == "Keep replies brief.\nRun pytest.\n"
+    assert files["codex"].read_text() == "Keep replies brief.\n"        # what Gemini CLI had stays its own
     assert gemini.read_text() == "Run pytest.\nKeep replies brief.\n"
+    stored = json.loads(baselines.read_text())[instructions.KEY]
+    assert stored["local"][".gemini/GEMINI.md"] == ["Run pytest."]
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS) == []
 
 
 def test_first_seed_keeps_private_sections_and_key_blocks_local(tmp_path):
@@ -297,3 +304,86 @@ def test_secret_additions_and_rewords_stay_in_the_edited_file(tmp_path, changed_
             text = path.read_text()
             assert secret not in text and "R4ndomFixtureValue" not in text
             assert "Run Ruff." in text
+
+
+@pytest.mark.parametrize("source_text", [None, "", "\n<!-- a comment -->\n"])
+def test_a_missing_or_empty_source_changes_nothing_and_asks_nothing(tmp_path, source_text):
+    files = setup(tmp_path, "Be brief.\nAsk first.\n", "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    if source_text is None:
+        files["claude"].unlink()
+    else:
+        files["claude"].write_text(source_text)
+    before = {path: path.read_text() for path in (files["codex"], files["cursor"], baselines)}
+    logs = []
+    with pending.during(tmp_path / "state", [], lambda *line: logs.append(line), False):
+        warning, = instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert warning.startswith(f"WARN  {files['claude']} is missing or has no shared lines")
+    assert logs == [] and {path: path.read_text() for path in before} == before
+
+
+def test_many_source_deletions_at_once_are_held_behind_one_question(tmp_path):
+    source = "".join(f"Rule {n}.\n" for n in range(1, 7))
+    files = setup(tmp_path, source, "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["claude"].write_text("Rule 1.\nRule 2.\n")
+    state = tmp_path / "state"
+    with pending.during(state, [], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert list(pending.load(state)) == ["instructions"]
+    assert "4 shared instruction lines" in pending.load(state)["instructions"]["what"]
+    assert files["codex"].read_text() == source
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert files["codex"].read_text() == "Rule 1.\nRule 2.\n"
+
+
+def test_an_edited_local_line_stays_local(tmp_path):
+    files = setup(tmp_path, "Be brief.\n", "Use the Codex workspace profile here.\n")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["codex"].write_text("Use the Codex workspace profile everywhere.\nBe brief.\n")
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+    assert "workspace profile" not in files["claude"].read_text() + files["cursor"].read_text()
+    assert json.loads(baselines.read_text())[instructions.KEY]["local"][".codex/AGENTS.md"] == [
+        "Use the Codex workspace profile everywhere."]
+
+
+def test_a_line_review_kept_as_one_tools_own_does_not_spread(tmp_path):
+    files = setup(tmp_path, "Be brief.\n", "Be brief.\n")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["codex"].write_text("Be brief.\nCodex review note.\n")
+    stored = json.loads(baselines.read_text())
+    stored[instructions.KEY]["kept"] = {str(files["codex"].resolve()): ["Codex review note."]}
+    baselines.write_text(json.dumps(stored))
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+    assert "Codex review note." not in files["claude"].read_text()
+
+
+def test_a_line_only_in_a_local_section_is_still_added_to_the_shared_part(tmp_path):
+    local = "<!-- agent-sync: local -->\nFormat with Ruff.\n<!-- agent-sync: end local -->\n"
+    files = setup(tmp_path, "Be brief.\n", "Be brief.\n" + local)
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["claude"].write_text("Be brief.\nFormat with Ruff.\n")
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert files["codex"].read_text() == "Be brief.\nFormat with Ruff.\n" + local
+
+
+def test_seeding_and_additions_keep_code_blocks_and_repeated_lines_whole(tmp_path):
+    source = "# Setup\n\n---\n\n```sh\nnpm ci\n\n```\n\n---\n\nDone.\n"
+    files = setup(tmp_path, source, "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert files["codex"].read_text() == source            # the whole document, repeats included
+
+    added = "\n## Test\n\n```sh\nnpm test\n```\n\n---\n\n- [ ] check\n"
+    files["claude"].write_text(source + added)
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    codex = files["codex"].read_text()
+    assert codex.count("```") == 4 and codex.count("---") == 3
+    assert codex.endswith("Done.\n## Test\n```sh\nnpm test\n```\n---\n- [ ] check\n")
