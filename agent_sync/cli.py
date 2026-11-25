@@ -79,7 +79,7 @@ def hours(n: float) -> str:
     return "under an hour" if n < 1 else f"{n:.0f} hour{'' if round(n) == 1 else 's'}"
 
 
-def run(force: bool, echo: bool, dry: bool = False, *, approvals: tuple[str, ...] = ()) -> int:
+def run(force: bool, echo: bool, dry: bool = False) -> int:
     cfg = load()
     echo = echo or sys.stdout.isatty()
     stamp = cfg.state_dir / "last-run"
