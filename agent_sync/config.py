@@ -38,7 +38,9 @@ class Config:
     keep_installed: list[str] = field(default_factory=list)
     keep_mcp_versions: list[str] = field(default_factory=list)  # MCP servers whose pinned package version stays
     mirror_instructions: bool = False                        # global instructions across enabled tools
-    mirror_memory: bool = False                              # Claude Code's home-project memory
+    mirror_memory: bool = True                               # Claude Code's home-project memory
+    private_memory: list[str] = field(default_factory=list)   # memory notes kept in Claude Code
+    share_memory: list[str] = field(default_factory=list)     # sensitive notes allowed to be shared
     warn_models: list[str] = field(default_factory=list)     # warn when a model name containing one of these appears
     update_clis: bool | list[str] = True                     # true, false, or a list like ["claude", "codex"]
     update_global_tools: bool | list[str] = False
@@ -75,7 +77,8 @@ class Config:
 
 KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
         "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "allow_duplicate_skills",
-        "mirror_instructions", "mirror_memory", "warn_models", "keep_mcp_versions", "keep_installed",
+        "mirror_instructions", "mirror_memory", "private_memory", "share_memory", "warn_models", "keep_mcp_versions",
+        "keep_installed",
         "update_clis", "update_global_tools", "update_plugins", "update_mcp_programs", "cli_commands",
         "install_commands", "extra_steps", "launcher", "update_self", "log_days", "backup_days")
 
@@ -124,6 +127,10 @@ def parse(text: str, path: Path, home: Path) -> Config:
         raise ValueError("backup_days must be a nonnegative whole number")
     if not isinstance(cfg.keep_installed, list) or any(not isinstance(key, str) for key in cfg.keep_installed):
         raise ValueError("keep_installed must be a list of removal keys or names")
+    for key in ("private_memory", "share_memory"):
+        names = getattr(cfg, key)
+        if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
+            raise ValueError(f"{key} must be a list of memory note names")
     for step in cfg.extra_steps:
         if not isinstance(step.get("command"), list) or not step["command"]:
             raise ValueError(f"extra step {step.get('name', '?')!r} needs command = [\"program\", \"arg\", ...]")

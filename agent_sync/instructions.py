@@ -6,6 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from . import backups, pending
+from .privacy import secret_rows, secret_values
 from .registry import DEFAULT_AGENTS, grouped_paths, paths
 from .textmerge import keys, load_baselines, meaningful, partner, save_baselines
 
@@ -14,9 +15,11 @@ BLOCK = re.compile(r"\n*<!-- agent-sync: begin.*?<!-- agent-sync: end -->\n?", r
 FRONT = re.compile(r"\A---[ \t]*\r?\n.*?^---[ \t]*(?:\r?\n|\Z)", re.M | re.S)
 LOCAL_START = "<!-- agent-sync: local -->"
 LOCAL_END = "<!-- agent-sync: end local -->"
+PRIVATE_START = "<!-- agent-sync: private -->"
+PRIVATE_END = "<!-- agent-sync: end private -->"
 MEMORY_START = "<!-- agent-sync: memory -->"
 MEMORY_END = "<!-- agent-sync: end memory -->"
-SECTION_ENDS = {LOCAL_START: LOCAL_END, MEMORY_START: MEMORY_END}
+SECTION_ENDS = {LOCAL_START: LOCAL_END, PRIVATE_START: PRIVATE_END, MEMORY_START: MEMORY_END}
 
 
 def split_front(text: str) -> tuple[str, str]:
@@ -34,8 +37,8 @@ def own_text(text: str) -> str:
 
 
 def local_rows(lines: list[str]) -> set[int]:
-    """Find the rows inside either kind of file-local section, including its markers."""
-    hidden = set()
+    """Find file-local sections and credential values."""
+    hidden = set(secret_rows(lines))
     ends = []
     for index, line in enumerate(lines):
         marker = line.strip()
@@ -146,9 +149,19 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
     visible = {path: keys(body) for path, body in public.items()}
     stored = load_baselines(baselines) if baselines else {}
     entry = stored.get(KEY) if isinstance(stored.get(KEY), dict) else {}
-    previous = entry.get("held") or {}
+    previous = {
+        name: {"missing": line_list(item.get("missing")),
+               "reworded": {old: new for old, new in item.get("reworded", {}).items()
+                            if not (secret_values(old) or secret_values(new))}}
+        for name, item in (entry.get("held") or {}).items()
+    }
     recorded = entry.get("local")
     messages = []
+    for path, text in current.items():
+        if rows := secret_rows(text.splitlines()):
+            kinds = ", ".join(sorted({kind for row in rows.values() for kind in row}))
+            messages.append(f"WARN  {path} has {len(rows)} line(s) that look like secrets ({kinds}); "
+                            "they stay in that file only.")
     drop, replacements, held = set(), {}, {}
     tracked = list(dict.fromkeys((*line_list(entry.get("lines")), *line_list(entry.get("conflicts")),
                                  *(line for item in previous.values()
@@ -237,4 +250,6 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
 
 
 def line_list(value: object) -> list[str]:
-    return value if isinstance(value, list) and all(isinstance(line, str) for line in value) else []
+    if not isinstance(value, list) or not all(isinstance(line, str) for line in value):
+        return []
+    return [line for line in value if not secret_values(line)]

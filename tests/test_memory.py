@@ -1,6 +1,6 @@
 import re
 
-from agent_sync import instructions, memory
+from agent_sync import backups, instructions, memory
 from agent_sync.registry import TOOLS
 
 INDEX = "- [Workspace preferences](workspace.md) — habits to use across projects\n"
@@ -87,20 +87,72 @@ def test_memory_is_local_when_instructions_sync_runs_after_it(tmp_path):
     assert memory.mirror(tmp_path, False, enabled=TOOLS) == []
 
 
-def test_without_enabled_claude_or_its_home_project_memory_nothing_is_shared(tmp_path):
+def test_claude_home_project_memory_is_used_when_claude_is_disabled(tmp_path):
     _, files, dest = setup(tmp_path)
-    assert memory.mirror(tmp_path, False, enabled=("codex",)) == []
-    assert not files["codex"].exists() and not dest.exists()
+    memory.mirror(tmp_path, False, enabled=("codex",))
+    assert (dest / "workspace.md").is_file()
+    assert "kept by Claude Code" in files["codex"].read_text()
+
+
+def test_without_claude_home_project_memory_nothing_is_shared(tmp_path):
     other_home = tmp_path / "another-home"
     assert memory.mirror(other_home, False, enabled=TOOLS) == []
     assert not other_home.exists()
+
+
+def test_private_notes_are_removed_from_the_copy_and_indexes(tmp_path):
+    source, files, dest = setup(tmp_path)
+    notes = {
+        "marked": "\ufeff---\nprivate: true\n---\nPersonal note.\n",
+        "nested": "---\nmetadata:\n  type: user\n  private: true # keep local\n---\nPersonal note.\n",
+        "inline": "---\nmetadata: {type: user, private: true}\n---\nPersonal note.\n",
+        "configured": '---\nname: "Display name"\n---\nPersonal note.\n',
+        "sensitive": "File the application under my legal name.\n",
+        "shared": "Instructions for finding the keychain item.\n",
+        "secret": "Ask about this account.\n",
+    }
+    for name, body in notes.items():
+        (source / f"{name}.md").write_text(body)
+    secret = "ghp_" + "A1" * 18
+    index = INDEX + "".join(f"- [{name}](./{name}.md) index detail\n" for name in notes)
+    (source / "MEMORY.md").write_text(index)
+    dest.mkdir(parents=True)
+    (dest / ".agent-sync").touch()
+    (dest / "secret.md").write_text(notes["secret"])
+    (source / "secret.md").write_text(secret + "\n")
+    settings = {"enabled": TOOLS, "private_memory": ["Display name"],
+                "share_memory": ["shared", "secret", "configured", "marked"]}
+    with backups.during(tmp_path, tmp_path / "backups", 30) as run:
+        messages = memory.mirror(tmp_path, False, **settings)
+        assert (run.folder / ".agents/memory/secret.md").read_text() == notes["secret"]
+
+    info, warning, *_ = messages
+    assert info.startswith("kept 6 memory notes private to Claude Code")
+    for detail in ("marked (marked private)", "nested (marked private)", "inline (marked private)",
+                   "Display name (listed in private_memory)", "sensitive (mentions a legal name)",
+                   "secret (contains a secret (GitHub token))"):
+        assert detail in info
+    assert warning == ("WARN  memory note secret contains what looks like a secret (GitHub token); "
+                       "it stays in Claude Code only. Consider moving the secret out of memory.")
+    assert secret not in "\n".join(messages)
+    assert set(path.name for path in dest.glob("*.md")) == {"MEMORY.md", "shared.md", "workspace.md"}
+    assert (source / "MEMORY.md").read_text() == index
+    assert (source / "secret.md").read_text() == secret + "\n"
+    for path in (dest / "MEMORY.md", files["codex"], files["cursor"], files["gemini"]):
+        text = path.read_text()
+        assert "shared.md" in text and "workspace.md" in text
+        assert all(f"{name}.md" not in text for name in notes if name != "shared")
+    assert "(~/.agents/memory/shared.md)" in files["codex"].read_text()
+    assert memory.mirror(tmp_path, False, **settings) == [info, warning]
 
 
 def test_cli_upkeep_shares_instructions_then_memory(tmp_path, monkeypatch, capsys):
     from agent_sync import cli
     from agent_sync.config import config_path
 
-    _, files, dest = setup(tmp_path)
+    source, files, dest = setup(tmp_path)
+    (source / "private.md").write_text("Personal note.\n")
+    (source / "approved.md").write_text("Find the keychain item in Settings.\n")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
@@ -108,13 +160,15 @@ def test_cli_upkeep_shares_instructions_then_memory(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(cli.tools, "skills", lambda *args: (0, "test version"))
     config = config_path(tmp_path)
     config.parent.mkdir(parents=True)
-    config.write_text("skill_packages = []\nmirror_instructions = true\nmirror_memory = true\n"
+    config.write_text("skill_packages = []\nmirror_instructions = true\n"
+                      'private_memory = ["private"]\nshare_memory = ["approved"]\n'
                       "mirror_mcp = false\nmirror_roles = false\nmirror_skills = false\n"
                       "update_plugins = false\nupdate_clis = false\nupdate_self = false\n")
     assert cli.main(["run", "--force", "--echo"]) == 0
     output = capsys.readouterr().out
     assert output.index("global instructions mirrored") < output.index("updated memory copy")
     assert (dest / "workspace.md").is_file()
+    assert (dest / "approved.md").is_file() and not (dest / "private.md").exists()
     codex = files["codex"].read_text()
     assert codex.startswith("Keep replies brief.\n\n<!-- agent-sync: memory -->\n")
     assert "[Workspace preferences](~/.agents/memory/workspace.md)" in codex
