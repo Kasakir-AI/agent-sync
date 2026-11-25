@@ -18,7 +18,7 @@ def test_save_keeps_first_bytes_links_and_outside_paths(tmp_path):
     link.symlink_to(outside)
     root = tmp_path / "state/backups"
 
-    with backups.during(home, root, 30, now=datetime(2026, 10, 1, 12)):
+    with backups.during(home, root, now=datetime(2026, 10, 1, 12)):
         created = home / "tree/new"
         backups.save(created)
         created.write_text("new")
@@ -30,27 +30,30 @@ def test_save_keeps_first_bytes_links_and_outside_paths(tmp_path):
         backups.save(home / "tree")
         neighbor.unlink()
         backups.save(outside)
+        outside.write_text("changed")
     saved, = root.iterdir()
     assert saved.name == "run-20261001-120000"
     assert (saved / "tree/file").read_text() == "first"
     assert (saved / "tree/neighbor").read_text() == "original"
-    assert (saved / "tree/link").readlink() == outside
+    assert not (saved / "tree/link").is_symlink()
     assert not (saved / "tree/new").exists()
     assert (saved / "_outside" / outside.relative_to("/")).read_text() == "outside original"
 
 
-def test_retention_uses_only_valid_run_directories_and_leaves_no_empty_run(tmp_path):
+def test_retention_uses_only_valid_backup_directories(tmp_path):
     root = tmp_path / "backups"
-    names = {"run-20250801-000000", "run-20250901-000000", "review-20250201-100000",
-             "run-20250201-100000-extra", "run-20250230-100000"}
+    expired = {"run-20250801-000000", "review-20250201-100000", "repair-20250201-100000",
+               "dedupe-20250201-100000", "pins-20250201-100000"}
+    names = expired | {"run-20250901-000000", "run-20250201-100000-extra", "run-20250230-100000"}
     for name in names:
         (root / name).mkdir(parents=True)
     (root / "run-20250201-000000").write_text("file")
-    (root / "run-20250202-000000").symlink_to(root / "review-20250201-100000", target_is_directory=True)
-    with backups.during(tmp_path, root, 30, now=datetime(2025, 10, 1)) as run:
-        assert run.folder is None
-    assert {path.name for path in root.iterdir()} == ((names - {"run-20250801-000000"})
+    (root / "run-20250202-000000").symlink_to(tmp_path, target_is_directory=True)
+    messages = []
+    backups.prune(root, 30, 500, None, False, lambda *args: messages.append(args), now=datetime(2025, 10, 1))
+    assert {path.name for path in root.iterdir()} == ((names - expired)
                                                     | {"run-20250201-000000", "run-20250202-000000"})
+    assert ("WARN", f"skipped symlink {root / 'run-20250202-000000'}") in messages
 
 
 def test_upkeep_writers_share_one_pre_run_backup(tmp_path, monkeypatch, capsys):
@@ -130,14 +133,51 @@ def test_a_folder_backup_keeps_links_and_an_empty_run_folder_goes(tmp_path):
     home, root = tmp_path / "home", tmp_path / "backups"
     plugin = write(home, "plugins/notes/1.0.0/SKILL.md", "notes").parent
     (plugin / "latest").symlink_to("SKILL.md")
-    with backups.during(home, root, 30, now=datetime(2026, 11, 1)):
+    with backups.during(home, root, now=datetime(2026, 11, 1)):
         backups.save(plugin)
-        plugin.joinpath("SKILL.md").write_text("changed")
+        plugin.joinpath("SKILL.md").write_text("other")
+        plugin.joinpath("latest").unlink()
+        plugin.joinpath("latest").symlink_to("missing")
     saved = root / "run-20261101-000000/plugins/notes/1.0.0"
     assert (saved / "SKILL.md").read_text() == "notes" and (saved / "latest").readlink().name == "SKILL.md"
 
-    empty = home / "empty"
-    empty.mkdir()
-    with backups.during(home, root, 30, now=datetime(2026, 11, 2)):
-        backups.save(empty)
+    unchanged = write(home, "unchanged/file", "same")
+    with backups.during(home, root, now=datetime(2026, 11, 2)):
+        backups.save(unchanged.parent)
     assert [folder.name for folder in root.iterdir()] == ["run-20261101-000000"]
+
+
+def test_paths_through_symlinks_use_the_real_home_relative_path(tmp_path):
+    home, home_link = tmp_path / "home", tmp_path / "home-link"
+    original = write(home, "folder/file", "old")
+    outside = write(tmp_path, "outside/file", "original")
+    home_link.symlink_to(home, target_is_directory=True)
+    (home / "alias").symlink_to(home / "folder", target_is_directory=True)
+    (home / "external").symlink_to(outside.parent, target_is_directory=True)
+
+    root = tmp_path / "backups"
+    with backups.during(home_link, root):
+        backups.save(home_link / "alias/file")
+        original.write_text("new")
+        backups.save(home_link / "external/file")
+        outside.unlink()
+
+    saved, = root.iterdir()
+    assert (saved / "folder/file").read_text() == "old"
+    assert (saved / "_outside" / outside.relative_to("/")).read_text() == "original"
+    assert sorted(path.name for path in saved.iterdir()) == ["_outside", "folder"]
+
+
+def test_size_retention_removes_oldest_folders_and_protects_current_run(tmp_path):
+    root = tmp_path / "backups"
+    oldest = root / "review-20261101-000000"
+    newer = root / "pins-20261102-000000"
+    current = root / "run-20261103-000000"
+    for folder in (oldest, newer, current):
+        write(folder, "file", "x" * (backups.MIB // 2))
+    log = lambda *_: None  # noqa: E731
+    now = datetime(2026, 11, 4)
+    backups.prune(root, 30, 1, current, False, log, now=now)
+    assert set(root.iterdir()) == {newer, current}
+    backups.prune(root, 0, 0, current, False, log, now=now)
+    assert set(root.iterdir()) == {current}

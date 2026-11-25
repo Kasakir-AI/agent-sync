@@ -41,6 +41,7 @@ from . import (
     agents,
     backups,
     checks,
+    cleanup,
     duplicates,
     instructions,
     inventory,
@@ -60,7 +61,7 @@ from . import (
 )
 from .config import Config, load, save_setting
 from .locking import run_lock
-from .log import Log, WarningAcks
+from .log import ACK_AGE, ACK_FILE, Log, WarningAcks
 from .registry import TOOLS
 from .textmerge import save_baselines
 
@@ -82,13 +83,6 @@ def hours(n: float) -> str:
 def run(force: bool, echo: bool, dry: bool = False) -> int:
     cfg = load()
     echo = echo or sys.stdout.isatty()
-    stamp = cfg.state_dir / "last-run"
-    age = time.time() - stamp.stat().st_mtime if stamp.exists() else None
-    if not (force or dry) and age is not None and age < DUE_HOURS * 3600:
-        if echo:
-            print(f"The last run was {hours(age / 3600)} ago; the next is due in "
-                  f"{hours(DUE_HOURS - age / 3600)}. Run `agent-sync run --force` to run now.")
-        return 0
     with ExitStack() as stack:
         work = cfg.state_dir
         if dry:
@@ -104,53 +98,92 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             if echo:
                 print("another agent-sync run is in progress")
             return 0
-        log = Log(cfg.log_file, echo=echo or dry, write=not dry)
-        saved = None
-        if not dry:
-            log.prune(cfg.log_days)
-            saved = stack.enter_context(backups.during(cfg.home, cfg.state_dir / "backups", cfg.backup_days))
-        guarded(log, "memory-sharing choice", lambda: ask_to_share_memory(cfg, log, dry, stack))
-        found = membership.untracked(cfg, membership.available(cfg))
-        if found:
-            names = ", ".join(TOOLS[agent].name for agent in found)
-            log("info", f"Installed outside sync: {names}. Run `agent-sync agents add {' '.join(found)}` to add them.")
-        if not online():
-            log("skip", "no network; will try again at the next scheduled check")
-            return 0
-        removals = stack.enter_context(pending.during(cfg.state_dir, cfg.keep_installed, log, dry))
-        updates = tools.UpdateState()
-        log("start", f"agent-sync {__version__}, source of truth: {cfg.source}"
-            + ("  (dry run: nothing is changed)" if dry else ""))
-        log("info", f"skills tool: {tools.skills(cfg.skills_cli, '--version')[1]}")
-        if cfg.launcher and cfg.macos:
-            log.lines(filter(None, [schedule.refresh_launcher(cfg.home, dry, tools.PATH)]))
-        steps(cfg, log, work, dry, updates, removals, stack)
-        acknowledgements = WarningAcks(cfg.state_dir)
-        warnings = acknowledgements.unseen(log.warnings)
-        questions = removals.questions()
-        if dry:
-            for warning in warnings:
-                print(f"WARN  {warning}")
-            for what in questions.values():
-                print(f"Would ask: Remove {what}? [y/N]")
-            if warnings:
-                print("Would ask: Press Enter once you have read the warnings")
-            log("done", f"dry run finished, nothing was changed. A real run: {log.summary()}")
-            return 0
-        if echo and not notify.in_terminal():
-            for warning in warnings:
-                print(f"WARN  {warning}")
-        removals.complete = not log.problems
-        approved, acknowledged = notify.deliver(cfg, log, warnings, questions)
+        return upkeep(cfg, log=Log(cfg.log_file, echo=echo or dry,
+                                   write=not dry and not cfg.log_file.is_symlink()),
+                      work=work, force=force, dry=dry, stack=stack)
+
+
+def upkeep(cfg: Config, log: Log, work: Path, force: bool, dry: bool, stack: ExitStack) -> int:
+    now = datetime.now()
+    stamp = cfg.state_dir / "last-run"
+    root = cfg.state_dir / "backups"
+    removals, saved = None, None
+    batch = ExitStack()
+    try:
+        try:
+            age = now.timestamp() - stamp.stat().st_mtime
+        except FileNotFoundError:
+            age = None
+        if not (force or dry) and age is not None and age < DUE_HOURS * 3600:
+            if log.echo:
+                print(f"The last run was {hours(age / 3600)} ago; the next is due in "
+                      f"{hours(DUE_HOURS - age / 3600)}. Run `agent-sync run --force` to run now.")
+        else:
+            if not dry:
+                saved = batch.enter_context(backups.during(cfg.home, root, now=now))
+            guarded(log, "memory-sharing choice", lambda: ask_to_share_memory(cfg, log, dry, stack))
+            found = membership.untracked(cfg, membership.available(cfg))
+            if found:
+                names = ", ".join(TOOLS[agent].name for agent in found)
+                log("info", f"Installed outside sync: {names}. "
+                    f"Run `agent-sync agents add {' '.join(found)}` to add them.")
+            if not online():
+                log("skip", "no network; will try again at the next scheduled check")
+            else:
+                removals = stack.enter_context(pending.during(cfg.state_dir, cfg.keep_installed, log, dry))
+                log("start", f"agent-sync {__version__}, source of truth: {cfg.source}"
+                    + ("  (dry run: nothing is changed)" if dry else ""))
+                log("info", f"skills tool: {tools.skills(cfg.skills_cli, '--version')[1]}")
+                steps(cfg, log, work, dry, tools.UpdateState(), removals, stack)
+    finally:
+        try:
+            guarded(log, "backup finalization", batch.close)
+        finally:
+            clean_up(cfg, log, saved.folder if saved else None, dry, now)
+
+    acknowledgements = WarningAcks(cfg.state_dir)
+    warnings = acknowledgements.unseen(log.warnings)
+    questions = removals.questions() if removals is not None else {}
+    if dry:
+        for warning in warnings:
+            print(f"WARN  {warning}")
+        for what in questions.values():
+            print(f"Would ask: Remove {what}? [y/N]")
+        if warnings:
+            print("Would ask: Press Enter once you have read the warnings")
+        log("done", f"dry run finished, nothing was changed. A real run: {log.summary()}")
+        return 0
+    if log.echo and not notify.in_terminal():
+        for warning in warnings:
+            print(f"WARN  {warning}")
+    approved, acknowledged = notify.deliver(cfg, log, warnings, questions)
+    if acknowledged:
+        acknowledgements.save(warnings)
+    if removals is not None:
         for key in approved:
             removals.seen[key]["approved"] = True
-        acknowledgements.save(warnings if acknowledged else [])
+        removals.complete = not log.problems
         stamp.touch()
-        if saved:
-            saved.finish()
         summary = f", backups: {saved.folder}" if saved and saved.folder else ""
         log("done", f"agent-sync finished: {log.summary()}{summary}")
-        return 1 if log.problems else 0
+    return 1 if log.problems else 0
+
+
+def clean_up(cfg: Config, log: Log, current: Path | None, dry: bool, now: datetime) -> None:
+    root = cfg.state_dir
+    cutoff = now.timestamp() - ACK_AGE
+    guarded(log, "backup retention",
+            lambda: backups.prune(root / "backups", cfg.backup_days, cfg.backup_max_mb, current, dry, log, now=now))
+    guarded(log, "package cache retention", lambda: cleanup.prune_packages(root / "packages", cfg.skill_packages,
+                                                                          dry, log))
+    for name in (ACK_FILE, notify.INBOX_FILE):
+        guarded(log, name, lambda name=name: cleanup.prune_records(
+            root / name, cutoff, dry, log, legacy=name == notify.INBOX_FILE))
+
+    def prune_log() -> None:
+        if count := log.prune(cfg.log_days, now, dry=dry):
+            log("info", f"{'Would delete' if dry else 'Deleted'} {count} expired log lines")
+    guarded(log, "log retention", prune_log)
 
 
 GUARDED = (OSError, ValueError, TypeError, KeyError)   # JSON and Unicode decode errors are ValueErrors
@@ -265,10 +298,15 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
 
 
 def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
+    root = work / "packages"
+    if root.is_symlink():
+        return
     taken: set[str] = set()
     packages = []
     for package in cfg.skill_packages:
-        checkout = work / "packages" / package.replace("/", "__")
+        checkout = root / cleanup.checkout_name(package)
+        if checkout.is_symlink():
+            continue
         code, out = tools.checkout(package, checkout)
         log("ok" if code == 0 else "FAIL", f"fetch {package}{': ' + out if code else ''}")
         if code:
@@ -472,7 +510,7 @@ def pending_command(approve: list[str], keep: list[str], ack: bool) -> int:
             print(f"Unknown pending removal key(s): {', '.join(unknown)}", file=sys.stderr)
             return 1
         if share or decline or keep:
-            stack.enter_context(backups.during(cfg.home, cfg.state_dir / "backups", cfg.backup_days))
+            stack.enter_context(backups.during(cfg.home, cfg.state_dir / "backups"))
         if share or decline:
             save_setting(cfg.home, "mirror_memory", share)
         if approve or keep:
@@ -513,6 +551,11 @@ def status() -> int:
     print(f"agent-sync {__version__}  source of truth: {cfg.source}  packages: {', '.join(cfg.skill_packages)}")
     print(f"last run: {time.ctime(stamp.stat().st_mtime) if stamp.exists() else 'never'}")
     print(f"log: {cfg.log_file}")
+    entries = backups.folder_entries(cfg.state_dir / "backups", lambda warning: print(f"WARN  {warning}"))
+    size = sum(size for _, _, size in entries) / backups.MIB
+    count = sum(folder for _, folder, _ in entries)
+    print(f"backups: {size:.2f} MiB in {count} {'folder' if count == 1 else 'folders'}"
+          f" (limits: {cfg.backup_max_mb} MiB and {cfg.backup_days} days)")
     print(f"schedule: {'installed' if schedule.installed(cfg.home) else 'not installed'}")
     for agent in cfg.agents:
         cmd = TOOLS[agent].command

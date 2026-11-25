@@ -16,14 +16,15 @@ STAMP = "%Y-%m-%d %H:%M:%S"
 LOG_STAMP = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"
 WARNING = re.compile(rf"^({LOG_STAMP}) WARN  ([^\n]*(?:\n\t[^\n]*)*)$", re.MULTILINE)
 ACK_AGE = 30 * 24 * 3600
+ACK_FILE = "acknowledged-warnings.json"
 
 
 class WarningAcks:
     def __init__(self, state_dir: Path):
-        self.path = state_dir / "acknowledged-warnings.json"
+        self.path = state_dir / ACK_FILE
         cutoff = time.time() - ACK_AGE
         self.entries = {
-            key: stamp for key, stamp in load_baselines(self.path).items()
+            key: stamp for key, stamp in ({} if self.path.is_symlink() else load_baselines(self.path)).items()
             if type(stamp) in (int, float) and stamp > cutoff
         }
 
@@ -36,7 +37,7 @@ class WarningAcks:
 
     def save(self, warnings: list[str]) -> None:
         self.entries.update(dict.fromkeys(map(self.key, warnings), time.time()))
-        if self.entries or self.path.exists():
+        if not self.path.is_symlink() and (self.entries or self.path.exists()):
             save_baselines(self.path, self.entries)
 
 
@@ -89,9 +90,12 @@ class Log:
         return ", ".join((count(self.kinds["sync"], "change"), count(commands, "command") + " run",
                           count(self.kinds["WARN"], "warning"), count(self.problems, "problem")))
 
-    def prune(self, days: int, now: datetime | None = None) -> int:
+    def prune(self, days: int, now: datetime | None = None, *, dry: bool = False) -> int:
         """Drop lines older than `days`. Rewrites the file in place (same inode, so a viewer keeps following)."""
-        if not self.path.exists():
+        if self.path.is_symlink():
+            self("WARN", f"skipped symlink {self.path}")
+            return 0
+        if not self.path.is_file():
             return 0
         cutoff = ((now or datetime.now()) - timedelta(days=days)).strftime(STAMP)
         lines = self.path.read_text().splitlines(keepends=True)
@@ -102,7 +106,7 @@ class Log:
                 retain = line[:19] >= cutoff
             if retain:
                 kept.append(line)
-        if len(kept) != len(lines):
+        if not dry and len(kept) != len(lines):
             with self.path.open("r+") as f:
                 f.write("".join(kept))
                 f.truncate()

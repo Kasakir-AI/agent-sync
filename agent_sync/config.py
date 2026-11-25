@@ -41,7 +41,7 @@ class Config:
     keep_mcp_versions: list[str] = field(default_factory=list)  # MCP servers whose pinned package version stays
     mcp_major_updates: bool = False                          # let a pinned MCP package move to a new major version
     mirror_instructions: bool = False                        # global instructions across enabled tools
-    mirror_memory: bool | None = None                        # ask before sharing Claude Code's memory
+    mirror_memory: bool | None = None
     private_memory: list[str] = field(default_factory=list)   # memory notes kept in Claude Code
     share_memory: list[str] = field(default_factory=list)     # sensitive notes allowed to be shared
     status_line: bool = True                                 # one status line in every CLI that supports it
@@ -59,6 +59,7 @@ class Config:
     notify: bool = True
     log_days: int = 7
     backup_days: int = 30
+    backup_max_mb: int = 500
     home: Path = field(default_factory=Path.home)
 
     def wants_cli(self, tool: str) -> bool:
@@ -88,7 +89,8 @@ KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skil
         "mirror_instructions", "mirror_memory", "private_memory", "share_memory", "warn_models", "keep_mcp_versions",
         "status_line", "keep_installed",
         "update_clis", "update_global_tools", "update_plugins", "update_mcp_programs", "cli_commands",
-        "install_commands", "extra_steps", "launcher", "update_self", "notify", "log_days", "backup_days")
+        "install_commands", "extra_steps", "launcher", "update_self", "notify", "log_days", "backup_days",
+        "backup_max_mb")
 
 
 def config_path(home: Path) -> Path:
@@ -131,8 +133,10 @@ def parse(text: str, path: Path, home: Path) -> Config:
         raise ValueError("notify must be true or false")
     if cfg.mirror_memory is not None and not isinstance(cfg.mirror_memory, bool):
         raise ValueError("mirror_memory must be true or false")
-    if type(cfg.backup_days) is not int or cfg.backup_days < 0:
-        raise ValueError("backup_days must be a nonnegative whole number")
+    for key in ("log_days", "backup_days", "backup_max_mb"):
+        value = getattr(cfg, key)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{key} must be a nonnegative whole number")
     if not isinstance(cfg.status_line, bool):
         raise ValueError("status_line must be true or false")
     if not isinstance(cfg.keep_installed, list) or any(not isinstance(key, str) for key in cfg.keep_installed):

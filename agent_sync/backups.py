@@ -5,13 +5,16 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from stat import S_ISDIR, S_ISLNK, S_ISREG
 
-RUN_NAME = re.compile(r"run-\d{8}-\d{6}")
+FOLDER_NAME = re.compile(r"(?:run|review|repair|dedupe|pins)-([0-9]{8}-[0-9]{6})")
+MIB = 1024 * 1024
 
 
 @dataclass
@@ -21,6 +24,7 @@ class Run:
     now: datetime
     folder: Path | None = None
     seen: set[Path] = field(default_factory=set)
+    originals: dict[Path, Path] = field(default_factory=dict)
 
     def save(self, path: Path) -> None:
         if path in self.seen or any(parent in self.seen for parent in path.parents):
@@ -30,14 +34,15 @@ class Run:
                 raise OSError(f"cannot back up {path} inside itself")
             if self.folder is None:
                 self.folder = new_folder(self.root, "run", self.now)
+            self.originals[self.folder / relative_path(path, self.home)] = path
             copy(path, self.home, self.folder, seen=self.seen)
         self.seen.add(path)
 
     def finish(self) -> None:
-        """Remove the run's folder when it holds no file (every save found nothing to keep)."""
-        if self.folder is not None and self.folder.is_dir() and not any(
-                p.is_file() or p.is_symlink() for p in self.folder.rglob("*")):
-            shutil.rmtree(self.folder)
+        if self.folder is None or self.root.is_symlink() or self.folder.is_symlink():
+            return
+        discard_unchanged(self.folder, None, self.originals)
+        if not self.folder.exists():
             self.folder = None
 
 
@@ -45,6 +50,8 @@ current: ContextVar[Run | None] = ContextVar("backups", default=None)
 
 
 def new_folder(root: Path, prefix: str, stamp: datetime | None = None) -> Path:
+    if root.is_symlink():
+        raise OSError(f"cannot write backups to symlink {root}")
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     stamp = stamp or datetime.now()
     while True:
@@ -57,11 +64,19 @@ def new_folder(root: Path, prefix: str, stamp: datetime | None = None) -> Path:
             return folder
 
 
+def relative_path(path: Path, home: Path) -> Path:
+    original = path.parent.resolve() / path.name if path.is_symlink() else path.resolve()
+    resolved_home = home.resolve()
+    return (original.relative_to(resolved_home) if original.is_relative_to(resolved_home)
+            else Path("_outside", *original.parts[1:]))
+
+
 def copy(path: Path, home: Path, folder: Path, *, seen: set[Path] | None = None) -> None:
-    relative = path.relative_to(home) if path.is_relative_to(home) else Path("_outside", *path.parts[1:])
-    dest = folder / relative
+    dest = folder.resolve() / relative_path(path, home)
     if not (path.exists() or path.is_symlink()):
         return
+    if folder.is_symlink() or dest.parent.resolve() != dest.parent:
+        raise OSError(f"cannot copy {path} through a symlink inside its backup")
     dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.is_dir() and not path.is_symlink():
         inside = [other for other in seen or () if other.is_relative_to(path) and other != path]
@@ -97,31 +112,106 @@ def clone(path: Path, dest: Path) -> bool:
 
 def save(path: Path, *, follow: bool = False) -> None:
     if run := current.get():
-        resolved = path.resolve() if follow else path.parent.resolve() / path.name
-        if not any(parent.is_symlink() for parent in path.parents):
-            run.save(path)
-        if resolved != path:
-            run.save(resolved)
+        original = path.parent.resolve() / path.name
+        run.save(original)
+        if follow and original.is_symlink():
+            run.save(original.resolve())
 
 
 @contextmanager
-def during(home: Path, root: Path, days: int, *, now: datetime | None = None):
-    now = now or datetime.now()
-    cutoff = now - timedelta(days=days)
-    if root.is_dir() and not root.is_symlink():
-        for folder in root.iterdir():
-            if not RUN_NAME.fullmatch(folder.name) or not folder.is_dir() or folder.is_symlink():
-                continue
-            try:
-                stamp = datetime.strptime(folder.name, "run-%Y%m%d-%H%M%S")
-            except ValueError:
-                continue
-            if stamp < cutoff:
-                shutil.rmtree(folder)
-    run = Run(home, root, now)
+def during(home: Path, root: Path, *, now: datetime | None = None):
+    run = Run(home, root, now or datetime.now())
     token = current.set(run)
     try:
         yield run
     finally:
         current.reset(token)
         run.finish()
+
+
+def discard_unchanged(saved: Path, original: Path | None, originals: dict[Path, Path]) -> None:
+    if saved in originals:
+        original = originals[saved]
+        if original.parent.resolve() != original.parent:
+            original = None
+    saved_stat = saved.lstat()
+    try:
+        live_stat = original.lstat() if original is not None else None
+    except (FileNotFoundError, NotADirectoryError):
+        live_stat = None
+    if S_ISDIR(saved_stat.st_mode):
+        live_dir = original if live_stat and S_ISDIR(live_stat.st_mode) else None
+        for child in saved.iterdir():
+            discard_unchanged(child, live_dir / child.name if live_dir is not None else None, originals)
+        if not any(saved.iterdir()):
+            saved.rmdir()
+    elif original is not None and live_stat is not None:
+        if S_ISLNK(saved_stat.st_mode) and S_ISLNK(live_stat.st_mode):
+            if saved.readlink() == original.readlink():
+                saved.unlink()
+        elif (S_ISREG(saved_stat.st_mode) and S_ISREG(live_stat.st_mode)
+              and saved_stat.st_size == live_stat.st_size and same_bytes(saved, original)):
+            saved.unlink()
+
+
+def same_bytes(saved: Path, original: Path) -> bool:
+    with saved.open("rb") as copy_file, original.open("rb") as live:
+        while chunk := copy_file.read(MIB):
+            if chunk != live.read(MIB):
+                return False
+        return not live.read(1)
+
+
+def folder_entries(root: Path, warn: Callable[[str], None] | None = None) -> list[tuple[Path, bool, int]]:
+    if root.is_symlink():
+        if warn:
+            warn(f"skipped symlink {root}")
+        return []
+    if not root.is_dir():
+        return []
+    entries = []
+    for path in root.iterdir():
+        info = path.lstat()
+        if S_ISLNK(info.st_mode):
+            if warn:
+                warn(f"skipped symlink {path}")
+            continue
+        folder = S_ISDIR(info.st_mode)
+        entries.append((path, folder, tree_size(path) if folder else info.st_size))
+    return entries
+
+
+def tree_size(folder: Path) -> int:
+    size = 0
+    for path in folder.iterdir():
+        info = path.lstat()
+        if S_ISDIR(info.st_mode):
+            size += tree_size(path)
+        elif S_ISREG(info.st_mode):
+            size += info.st_size
+    return size
+
+
+def prune(root: Path, days: int, max_mb: int, current: Path | None, dry: bool, log,
+          *, now: datetime | None = None) -> None:
+    cutoff = (now or datetime.now()) - timedelta(days=days)
+    entries = folder_entries(root, lambda message: log("WARN", message))
+    total = sum(size for _, _, size in entries)
+    candidates = []
+    for path, folder, size in entries:
+        if folder and path != current and (match := FOLDER_NAME.fullmatch(path.name)):
+            try:
+                stamp = datetime.strptime(match[1], "%Y%m%d-%H%M%S")
+            except ValueError:
+                continue
+            candidates.append((stamp, path, size))
+    for stamp, path, size in sorted(candidates):
+        if stamp >= cutoff and total <= max_mb * MIB:
+            break
+        if path.is_symlink():
+            log("WARN", f"skipped symlink {path}")
+            continue
+        if not dry:
+            shutil.rmtree(path)
+        log("info", f"{'Would delete' if dry else 'Deleted'} backup {path}")
+        total -= size

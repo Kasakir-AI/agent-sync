@@ -15,7 +15,7 @@ def test_update_writes_through_a_link_and_backs_up_its_target(tmp_path):
     repo.chmod(0o640)
     link = home / ".claude.json"
     link.symlink_to(repo)
-    with backups.during(home, tmp_path / "backups", 30, now=datetime(2026, 11, 1)):
+    with backups.during(home, tmp_path / "backups", now=datetime(2026, 11, 1)):
         assert writes.update_text(link, lambda text: text.replace("1", "2"))
     assert link.is_symlink() and repo.read_text() == '{"a": 2}\n'
     assert repo.stat().st_mode & 0o777 == 0o640

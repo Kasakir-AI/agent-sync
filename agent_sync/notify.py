@@ -21,6 +21,7 @@ from .log import Log
 
 DIALOG_TIMEOUT = 12 * 3600
 INBOX_TIMEOUT = 30
+INBOX_FILE = "inbox-notifications.json"
 REMOVAL_PROMPT = ("agent-sync wants to remove these. Select what may go; "
                   "anything not selected is kept and asked about again next run.")
 MACOS_CHOOSE = """
@@ -255,12 +256,17 @@ def _inbox(command: str, cfg: Config, log: Log, warnings: list[str], removals: d
     body = _inbox_body(warnings, removals)
     contents = json.dumps([sorted(warnings), sorted(removals.items())]).encode()
     digest = hashlib.sha256(contents).hexdigest()
-    path = cfg.state_dir / "inbox-notifications.json"
+    path = cfg.state_dir / INBOX_FILE
+    if path.is_symlink():
+        return
     seen = textmerge.load_baselines(path)
     if digest in seen:
         return
     if _post_inbox(command, cfg, log, body, digest):
-        textmerge.save_baselines(path, {**seen, digest: True})
+        try:
+            textmerge.save_baselines(path, {**seen, digest: time.time()})
+        except (OSError, ValueError) as exc:
+            log("info", f"Could not save Inbox notification history: {exc}")
 
 
 def _post_inbox(command: str, cfg: Config, log: Log, body: str, digest: str) -> bool:

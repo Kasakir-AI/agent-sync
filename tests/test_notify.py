@@ -221,6 +221,21 @@ def inbox(monkeypatch, *replies):
     return processes
 
 
+def test_inbox_history_write_failure_keeps_delivery_nonfatal(tmp_path, monkeypatch):
+    available(monkeypatch, "plannotator")
+    processes = inbox(monkeypatch, {"result": {}})
+    cfg = Config(home=tmp_path)
+    log = Log(cfg.log_file)
+
+    def read_only(*_args):
+        raise OSError("read-only notification history")
+
+    monkeypatch.setattr(notify.textmerge, "save_baselines", read_only)
+    assert notify.deliver(cfg, log, ["warning"], {}) == (set(), False)
+    assert len(processes) == 1
+    assert "Could not save Inbox notification history" in log.path.read_text()
+
+
 def test_inbox_sends_sorted_contents_once_without_acknowledging(tmp_path, monkeypatch):
     available(monkeypatch, "plannotator")
     processes = inbox(monkeypatch, {"result": {}}, {"result": {}})

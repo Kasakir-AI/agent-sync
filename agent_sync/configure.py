@@ -426,15 +426,16 @@ class Editor:
         self.explain("Advanced")
         pick = self.choose([("skills_cli", f"skills CLI version      {self.cfg.skills_cli}"),
                             ("log_days", f"Days of log to keep     {self.cfg.log_days}"),
-                            ("backup_days", f"Days of backups to keep {self.cfg.backup_days}")])
+                            ("backup_days", f"Days of backups to keep {self.cfg.backup_days}"),
+                            ("backup_max_mb", f"Backup size limit (MiB) {self.cfg.backup_max_mb}")])
         if pick == "skills_cli":
             self.say("  skills@latest always uses the newest release; pin one to hold it (example: skills@1.2.3).")
             value = self.ask("skills CLI (Enter keeps it): ")
             if value:
                 self.set("skills_cli", value)
-        elif pick in ("log_days", "backup_days"):
-            value = self.ask("Days (example: 14): ")
-            if value.isdigit() and int(value) > 0:
+        elif pick in ("log_days", "backup_days", "backup_max_mb"):
+            value = self.ask("MiB (example: 500): " if pick == "backup_max_mb" else "Days (example: 14): ")
+            if value.isdigit():
                 self.set(pick, int(value))
             elif value:
                 self.say("  Please type a whole number, like 7.")

@@ -135,16 +135,18 @@ def test_catalog_switch_commands_and_remembered_choices(tmp_path, mode, actions)
 
     config = tmp_path / ".codex/config.toml"
     before = config.read_bytes()
-    with pending.during(state, [], log, dry, now=100):
-        with backups.during(tmp_path, state / "backups", 30) as saved:
-            plugins.own_versions(tmp_path, dry, log, state_dir=state, catalog=lambda: [entry], run=run)
-    assert calls == actions
     rejections = {"loses skills": "lacks one of its skills", "loses MCP": "lacks one of its MCP servers",
                   "unverified": "could not be verified"}
+    with pending.during(state, [], log, dry, now=100):
+        with backups.during(tmp_path, state / "backups") as saved:
+            plugins.own_versions(tmp_path, dry, log, state_dir=state, catalog=lambda: [entry], run=run)
+            if mode in rejections:
+                assert (saved.folder / ".codex/config.toml").read_bytes() == before
+    assert calls == actions
     if mode in rejections:
         assert json.loads((state / "plugin-choices.json").read_text()) == {OLD: {NEW: version}}
         assert rejections[mode] in logs[-1][1]
-        assert (saved.folder / ".codex/config.toml").read_bytes() == before
+        assert config.read_bytes() == before and saved.folder is None
         plugins.own_versions(tmp_path, False, log, state_dir=state, catalog=lambda: [entry], run=run)
         assert calls == actions
         newer = plugins.CatalogEntry(NEW, "netlify", "openai-curated-remote", "2.0.0", False)

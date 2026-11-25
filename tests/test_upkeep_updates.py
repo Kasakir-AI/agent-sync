@@ -356,11 +356,12 @@ def test_claude_plugins_update_only_at_user_scope_and_back_up_their_state(tmp_pa
     commands.output[("claude", "plugin", "list", "--json")] = json.dumps([
         {"id": "notes@team", "scope": "user"}, {"id": "proj@team", "scope": "project"},
         {"id": "--help", "scope": "user"}, {"id": "a/b@team", "scope": "user"}])
-    with backups.during(tmp_path, tmp_path / "backups", 30, now=datetime(2026, 11, 1)) as run:
+    with backups.during(tmp_path, tmp_path / "backups", now=datetime(2026, 11, 1)) as run:
         tools.update_plugins(commands.log, home=tmp_path, enabled=["claude"])
+        saved = run.folder
+        assert (saved / ".claude.json").exists() and (saved / ".claude/plugins/installed_plugins.json").exists()
+        assert (saved / root.relative_to(tmp_path) / "big.bin").read_text() == "x" * 1000
+        assert not (saved / other.relative_to(tmp_path)).exists()
+        assert not (saved / ".claude/plugins/marketplaces").exists()
     assert commands.ran == [["claude", "plugin", "marketplace", "update"], ["claude", "plugin", "update", "notes@team"]]
-    saved = run.folder
-    assert (saved / ".claude.json").exists() and (saved / ".claude/plugins/installed_plugins.json").exists()
-    assert (saved / root.relative_to(tmp_path) / "big.bin").read_text() == "x" * 1000   # the plugin being updated
-    assert not (saved / other.relative_to(tmp_path)).exists()                          # not the others
-    assert not (saved / ".claude/plugins/marketplaces").exists()
+    assert run.folder is None and not saved.exists()

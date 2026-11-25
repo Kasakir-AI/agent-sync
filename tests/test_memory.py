@@ -133,7 +133,7 @@ def test_private_notes_are_removed_from_the_copy_and_indexes(tmp_path):
     (source / "secret.md").write_text(secret + "\n")
     settings = {"enabled": TOOLS, "private_memory": ["Display name"],
                 "share_memory": ["shared", "secret", "configured", "marked"]}
-    with backups.during(tmp_path, tmp_path / "backups", 30) as run:
+    with backups.during(tmp_path, tmp_path / "backups") as run:
         messages = memory.mirror(tmp_path, False, **settings)
         assert (run.folder / ".agents/memory/secret.md").read_text() == notes["secret"]
 

@@ -49,7 +49,7 @@ def test_upkeep_replaces_stale_copies_with_the_working_one_and_keeps_tool_settin
     assert (tmp_path / ".claude.json").read_text() == before
 
     root = cfg.state_dir / "backups"
-    with backups.during(tmp_path, root, cfg.backup_days) as run:
+    with backups.during(tmp_path, root) as run:
         lines = writes.repair_mcp(tmp_path, cfg)
     assert (run.folder / ".claude.json").read_text() == before
     assert list(root.iterdir()) == [run.folder]

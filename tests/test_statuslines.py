@@ -33,7 +33,7 @@ def upkeep(home, *enabled, dry=False, keep=(), now=100):
     cfg = Config(home=home, agents=list(enabled), keep_installed=list(keep))
     root = cfg.state_dir / "backups"
     logs = []
-    with (nullcontext() if dry else backups.during(home, root, cfg.backup_days)), pending.during(
+    with (nullcontext() if dry else backups.during(home, root)), pending.during(
         cfg.state_dir, cfg.keep_installed, lambda kind, line: logs.append((kind, line)), dry, now=now,
     ) as run:
         lines = statuslines.apply(home, dry, cfg, run)

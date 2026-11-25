@@ -47,12 +47,12 @@ def dedupe_runs(home, enabled, *, keep=()):
     state = home / "state"
     logs = []
     with pending.during(state, keep, lambda *line: logs.append(line), False, now=100):
-        with backups.during(home, state / "backups", 30):
+        with backups.during(home, state / "backups"):
             changes = mcp.dedupe(home, False, enabled=enabled)
     if pending.load(state):
         approve_current(state)
         with pending.during(state, keep, lambda *line: logs.append(line), False, now=101):
-            with backups.during(home, state / "backups", 30):
+            with backups.during(home, state / "backups"):
                 changes = mcp.dedupe(home, False, enabled=enabled)
     return changes, logs
 
@@ -85,7 +85,7 @@ def test_mcp_dedupe_keeps_toml_extra_tables_and_backs_up_only_exact_copies(tmp_p
     assert config.read_bytes() == before
     approve_current(state)
     with pending.during(state, [], log, False, now=101):
-        with backups.during(tmp_path, state / "backups", 30) as run:
+        with backups.during(tmp_path, state / "backups") as run:
             messages = mcp.dedupe(tmp_path, False, enabled=("codex",))
     assert messages[0].startswith("removed MCP server clean.copy") and messages[1:] == [warning]
     assert config.read_bytes() == start + extended
@@ -200,7 +200,7 @@ def test_pins_change_only_selected_toml_and_json_strings(tmp_path):
     assert codex.read_bytes() == toml_before.encode() and cursor.read_bytes() == json_before.encode()
     assert not root.exists()
     calls.clear()
-    with backups.during(tmp_path, root, 30):
+    with backups.during(tmp_path, root):
         assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest, released=released) == expected
     assert calls == ["rea-agents", "@org/pack"]
     assert codex.read_bytes() == toml_before.replace(f"'{old}'", f"'{new}'").encode()
