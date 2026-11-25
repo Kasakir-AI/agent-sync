@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.1 (2026-11-25)
+
+**Upgrades that can't surprise you with breaking changes**
+
+- MCP server programs, global tools (`update_global_tools`), git, Node and npm now get the same protection as
+  pinned MCP packages. Upkeep moves each one to the newest release in the major version you have installed, once that release
+  is at least 2 days old. Before, they jumped straight to the newest release the day it came out.
+- A new major version can include breaking changes, so upkeep asks first, the same way it asks before removing
+  something. Approve it and the next run installs it. Keep it and you stay on your major version until an even
+  newer one comes out (or keep `upgrade:<manager>:<package>` to stay for good).
+- `global_major_updates = true` installs new major versions without asking, still after 2 days.
+- Homebrew upgrades have no 2-day wait, because Homebrew reviews each release before publishing it. A new major
+  version still needs your approval.
+- pipx and uv tools are checked against PyPI and reinstalled at an exact version, in place of `pipx upgrade-all`
+  and `uv tool upgrade --all`. A pipx tool installed from a URL or a folder is left alone.
+- A dry run now looks the versions up and lists each upgrade it would install and each question it would ask.
+- When a version or release time can't be looked up, that package waits for the next run.
+
 ## 0.9.0 (2026-11-25)
 
 Every agent gets the right version of each plugin, skill and MCP server. Upkeep keeps your setup current, backs up
