@@ -11,7 +11,7 @@ from functools import cache
 from importlib import metadata
 from pathlib import Path
 
-from . import __version__, backups, mcp, upgrades
+from . import __version__, backups, mcp, pending, upgrades
 from .registry import DEFAULT_AGENTS, TOOLS, Tool, inside
 from .upgrades import UpdateState
 
@@ -192,6 +192,8 @@ def update_global_tools(log, cfg, dry: bool, *, state: UpdateState) -> None:
             refresh_brew(log, dry, state)
         for name in sorted(upgrades.installed(state, manager)):
             upgrades.upgrade(log, dry, state, manager, name, majors=cfg.global_major_updates, why="global tool")
+        if upgrades.listed(state, manager):     # a question about a package not listed is over
+            pending.complete(f"upgrade:{manager}")
 
 
 def refresh_brew(log, dry: bool, state: UpdateState, *, quiet: bool = False) -> None:

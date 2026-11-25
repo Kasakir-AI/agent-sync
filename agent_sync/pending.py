@@ -48,7 +48,7 @@ class Run:
             return self.seen
         kept = {key: item for key, item in self.previous.items()
                 if key not in self.removed
-                and not any(key == owner or key.startswith(f"{owner}:") for owner in self.completed)}
+                and not any(key == owner or key.startswith((f"{owner}:", f"{owner}@")) for owner in self.completed)}
         return {**kept, **self.seen}
 
     def keeps(self, key: str) -> bool:
@@ -96,6 +96,14 @@ def incomplete() -> None:
 def complete(owner: str) -> None:
     if (run := current.get()) is not None and run.completed is not None:
         run.completed.add(owner)
+
+
+def hold(key: str) -> None:
+    """Keep an earlier question about `key` (or `key@...`) as it was, though this run does not ask it."""
+    if (run := current.get()) is not None:
+        for name, item in run.previous.items():
+            if (name == key or name.startswith(f"{key}@")) and name not in run.seen:
+                run.seen[name] = item
 
 
 def retry(*namespaces: str) -> None:

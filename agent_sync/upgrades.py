@@ -49,34 +49,40 @@ class UpdateState:
         return self.found[key]
 
 
-NUMBERS = re.compile(r"v?(\d+(?:\.\d+)*)")
 FINAL = re.compile(r"\d+(?:\.\d+)*")          # a PyPI release that is not a pre-, post- or dev release
 
 
-def numbers(version: str) -> tuple[int, ...]:
-    match = NUMBERS.match(version)
-    return tuple(map(int, match[1].split("."))) if match else ()
-
-
 def major(version: str) -> int | None:
-    return found[0] if (found := numbers(version)) else None
+    return found[0] if (found := mcp.numbers(version)) else None
+
+
+def suffix(version: str) -> tuple:
+    """What follows the numbers, in release order: a pre-release (`-rc.4`, `b2`) < none < a post release or
+    Homebrew revision (`.post1`, `_1`)."""
+    rest = version[mcp.NUMBERS.match(version).end():]
+    if not rest:
+        return (1,)
+    order = 2 if rest.startswith("_") or "post" in rest else 0
+    return (order, re.sub(r"[^a-z]", "", rest.lower()), tuple(map(int, re.findall(r"\d+", rest))))
 
 
 def forward(installed: str, target: str) -> bool:
-    """`target` is a move up from `installed` (never down); versions that don't parse only need to differ."""
-    old, new = numbers(installed), numbers(target)
-    if old and new:
-        width = max(len(old), len(new))
-        old, new = (part + (0,) * (width - len(part)) for part in (old, new))
-        if old != new:
-            return new > old
-    return target != installed
+    """`target` is a move up from `installed` (never down, never the same release spelled `1.0` and `1.0.0`);
+    versions that don't parse only need to differ."""
+    old, new = mcp.numbers(installed), mcp.numbers(target)
+    if not (old and new):
+        return target != installed
+    width = max(len(old), len(new))
+    old, new = (part + (0,) * (width - len(part)) for part in (old, new))
+    return new > old if old != new else suffix(target) > suffix(installed)
 
 
 # ---------- npm ----------
 
-def npm_listing() -> dict[str, Package]:
-    report = tools.json_object(tools.raw(["npm", "outdated", "-g", "--json"], ok_codes=(0, 1)))
+def npm_listing() -> dict[str, Package] | None:
+    if not (text := tools.raw(["npm", "outdated", "-g", "--json"], ok_codes=(0, 1))).strip():
+        return None
+    report = tools.json_object(text)
     return {name: Package("npm", name, entry["current"], entry["latest"]) for name, entry in report.items()
             if isinstance(entry, dict) and isinstance(entry.get("current"), str)
             and isinstance(entry.get("latest"), str)}
@@ -95,9 +101,11 @@ def npm_released(state: UpdateState, package: Package, version: str) -> str | No
 PYPI_SPEC = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\s*(?P<extras>\[[^\]]*\])?\s*(?:[=<>!~].*)?")
 
 
-def pipx_listing() -> dict[str, Package]:
+def pipx_listing() -> dict[str, Package] | None:
     """Tools pipx installed from PyPI (not from a URL or a folder)."""
-    venvs = tools.json_object(tools.raw(["pipx", "list", "--json"])).get("venvs")
+    if not (text := tools.raw(["pipx", "list", "--json"])).strip():
+        return None
+    venvs = tools.json_object(text).get("venvs")
     found = {}
     for name, venv in venvs.items() if isinstance(venvs, dict) else ():
         try:
@@ -110,10 +118,12 @@ def pipx_listing() -> dict[str, Package]:
     return found
 
 
-def uv_listing() -> dict[str, Package]:
+def uv_listing() -> dict[str, Package] | None:
     """`uv tool list` names each tool as `name vX.Y.Z`, followed by the commands it installed."""
+    if not (text := tools.raw(["uv", "tool", "list"])).strip():
+        return None
     return {match[1]: Package("uv", match[1], match[2])
-            for match in re.finditer(r"^([^\s-]\S*) v(\d\S*)", tools.raw(["uv", "tool", "list"]), re.MULTILINE)}
+            for match in re.finditer(r"^([^\s-]\S*) v(\d\S*)", text, re.MULTILINE)}
 
 
 def pypi_releases(name: str) -> dict[str, str | None]:
@@ -141,7 +151,7 @@ def pypi(state: UpdateState, package: Package) -> dict[str, str | None]:
 
 def pypi_newest(state: UpdateState, package: Package, in_major: int | None) -> str:
     versions = [version for version in pypi(state, package) if in_major is None or major(version) == in_major]
-    return max(versions, key=numbers, default="")
+    return max(versions, key=mcp.numbers, default="")
 
 
 def pypi_released(state: UpdateState, package: Package, version: str) -> str | None:
@@ -150,9 +160,11 @@ def pypi_released(state: UpdateState, package: Package, version: str) -> str | N
 
 # ---------- Homebrew ----------
 
-def brew_listing() -> dict[str, Package]:
+def brew_listing() -> dict[str, Package] | None:
     """Outdated formulae and casks that are not pinned, by short name."""
-    report = tools.json_object(tools.raw(["brew", "outdated", "--json=v2"], timeout=300))
+    if not (text := tools.raw(["brew", "outdated", "--json=v2"], timeout=300)).strip():
+        return None
+    report = tools.json_object(text)
     found = {}
     for kind, section in (("formula", "formulae"), ("cask", "casks")):
         for entry in report.get(section) or ():
@@ -173,7 +185,7 @@ def brew_newest(state: UpdateState, package: Package, in_major: int | None) -> s
 @dataclass(frozen=True)
 class Manager:
     label: str
-    listing: Callable[[], dict[str, Package]]                       # installed packages it may upgrade, by name
+    listing: Callable[[], dict[str, Package] | None]                # packages it may upgrade, by name; None: failed
     newest: Callable[[UpdateState, Package, int | None], str]       # newest release (in a major version), "" unknown
     released: Callable[[UpdateState, Package, str], str | None] | None   # when a release came out; None: no wait
     install: Callable[[Package, str], list[str]]
@@ -193,7 +205,13 @@ MANAGERS = {
 
 
 def installed(state: UpdateState, manager: str) -> dict[str, Package]:
-    return state.once(("listing", manager), MANAGERS[manager].listing)
+    return state.once(("listing", manager), MANAGERS[manager].listing) or {}
+
+
+def listed(state: UpdateState, manager: str) -> bool:
+    """This run read the manager's listing: a package missing from it is current or gone."""
+    installed(state, manager)
+    return state.found[("listing", manager)] is not None
 
 
 def upgrade(log, dry: bool, state: UpdateState, manager: str, name: str, *, majors: bool, why: str = "") -> None:
@@ -204,12 +222,17 @@ def upgrade(log, dry: bool, state: UpdateState, manager: str, name: str, *, majo
     state.handled.add((manager, name))
     resolver = MANAGERS[manager]
     package = installed(state, manager).get(name)
+    owner = f"upgrade:{manager}:{name}"
     if package is None:
+        if listed(state, manager):      # current or gone: an earlier question about it is over
+            pending.complete(owner)
         return
     latest = resolver.newest(state, package, None)
     if not latest:
         log("info", f"{name} ({resolver.label}) is skipped this run: its releases could not be looked up")
+        pending.hold(owner)
         return
+    pending.complete(owner)             # a question this run doesn't ask again is over
     now = time.time()
 
     def waits(version: str) -> bool:
@@ -230,8 +253,10 @@ def upgrade(log, dry: bool, state: UpdateState, manager: str, name: str, *, majo
 
     old, new = major(package.installed), major(latest)
     if old is not None and new is not None and new > old:
-        if not waits(latest):
-            key = f"upgrade:{manager}:{name}@{new}"
+        key = f"{owner}@{new}"
+        if waits(latest):
+            pending.hold(key)
+        else:
             what = (f"upgrade {name} {package.installed} -> {latest} "
                     "(a new major version, which can include breaking changes)")
             if majors or pending.due(key, what, by_key=True):
@@ -239,6 +264,6 @@ def upgrade(log, dry: bool, state: UpdateState, manager: str, name: str, *, majo
                 return
         same = resolver.newest(state, package, old)
     else:
-        same = (resolver.newest(state, package, old) if old is not None else "") or latest
+        same = latest
     if same and forward(package.installed, same) and not waits(same):
         install(same)

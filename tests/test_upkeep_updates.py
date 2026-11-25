@@ -24,7 +24,8 @@ def npm_releases(output, packages):
     """Fake npm's answers: {package: (installed, {release: when, ...})}; the last release is the latest."""
     report = {}
     for name, (installed, releases) in packages.items():
-        report[name] = {"current": installed, "latest": list(releases)[-1]}
+        if installed != list(releases)[-1]:         # npm lists only outdated packages
+            report[name] = {"current": installed, "latest": list(releases)[-1]}
         output[("npm", "view", name, "time", "--json")] = json.dumps(releases)
         for major in {version.split(".")[0] for version in [installed, *releases]}:
             output[("npm", "view", f"{name}@^{major}", "version", "--json")] = json.dumps(
@@ -620,12 +621,12 @@ WRANGLER_5 = "upgrade:npm:wrangler@5"
 ASK_5 = "upgrade wrangler 4.1.0 -> 5.0.0 (a new major version, which can include breaking changes)"
 
 
-def global_npm(tmp_path, commands, releases, *, keep=(), majors=False, dry=False):
+def global_npm(tmp_path, commands, releases, *, keep=(), majors=False, dry=False, scoped=False):
     """One global npm tool, wrangler 4.1.0, with these releases; returns the questions the run asks."""
     program(tmp_path, "npm")
     npm_releases(commands.output, {"wrangler": ("4.1.0", releases)})
     cfg = Config(home=tmp_path, update_global_tools=["npm"], global_major_updates=majors)
-    with pending.during(cfg.state_dir, list(keep), commands.log, dry) as run:
+    with pending.during(cfg.state_dir, list(keep), commands.log, dry, scoped=scoped) as run:
         tools.update_global_tools(commands.log, cfg, dry, state=tools.UpdateState())
     return run.questions()
 
@@ -681,6 +682,45 @@ def test_a_later_major_is_a_new_question_after_keeping_one(tmp_path, commands):
     assert list(global_npm(tmp_path, commands, releases, keep=[WRANGLER_5])) == ["upgrade:npm:wrangler@6"]
 
 
+def test_the_newest_release_in_the_major_wins_over_a_later_published_backport(tmp_path, commands):
+    global_npm(tmp_path, commands, {"4.1.0": SETTLED, "4.3.0": SETTLED, "4.1.2": SETTLED, "5.0.0": SETTLED})
+    assert commands.ran == [["npm", "install", "-g", "wrangler@4.3.0"]]
+
+
+@pytest.mark.parametrize(("releases", "left"), [
+    ({"4.1.0": SETTLED}, {}),                                                   # current now
+    ({"4.1.0": SETTLED, "6.0.0": SETTLED}, {"upgrade:npm:wrangler@6"}),        # a newer major replaces it
+])
+def test_an_earlier_major_question_ends_when_it_no_longer_applies(tmp_path, commands, releases, left):
+    state = Config(home=tmp_path).state_dir
+    state.mkdir(parents=True)
+    (state / pending.FILENAME).write_text(json.dumps({WRANGLER_5: {"first": 1, "what": ASK_5, "approved": False}}))
+    global_npm(tmp_path, commands, releases, scoped=True)
+    assert set(json.loads((state / pending.FILENAME).read_text())) == set(left)
+
+
+def test_an_approved_major_stays_approved_while_its_newest_release_settles(tmp_path, commands):
+    state = Config(home=tmp_path).state_dir
+    state.mkdir(parents=True)
+    saved = {WRANGLER_5: {"first": 1, "what": ASK_5, "approved": True}}
+    (state / pending.FILENAME).write_text(json.dumps(saved))
+    global_npm(tmp_path, commands, {"4.1.0": SETTLED, "5.0.0": SETTLED, "5.0.1": FRESH}, scoped=True)
+    assert commands.ran == []
+    assert json.loads((state / pending.FILENAME).read_text()) == saved
+
+
+def test_a_failed_listing_ends_no_question(tmp_path, commands):
+    state = Config(home=tmp_path).state_dir
+    state.mkdir(parents=True)
+    saved = {WRANGLER_5: {"first": 1, "what": ASK_5, "approved": True}}
+    (state / pending.FILENAME).write_text(json.dumps(saved))
+    program(tmp_path, "npm")
+    cfg = Config(home=tmp_path, update_global_tools=["npm"])
+    with pending.during(cfg.state_dir, [], commands.log, False, scoped=True):
+        tools.update_global_tools(commands.log, cfg, False, state=tools.UpdateState())
+    assert json.loads((state / pending.FILENAME).read_text()) == saved
+
+
 def test_global_major_updates_installs_a_new_major_without_asking(tmp_path, commands):
     assert global_npm(tmp_path, commands, {"4.1.0": SETTLED, "5.0.0": SETTLED}, majors=True) == {}
     assert commands.ran == [["npm", "install", "-g", "wrangler@5.0.0"]]
@@ -723,7 +763,7 @@ def test_one_run_shares_one_npm_cache_for_mcp_pins_and_tools(tmp_path, monkeypat
     program(tmp_path, "npm")
     write(tmp_path, ".claude.json", json.dumps({"mcpServers": {"pin": {"command": "npx",
                                                                         "args": ["-y", "pinned@1.0.0"]}}}))
-    npm_releases(commands.output, {"wrangler": ("4.1.0", {"4.1.0": SETTLED, "4.3.0": SETTLED})})
+    npm_releases(commands.output, {"wrangler": ("4.1.0", {"4.1.0": SETTLED, "4.3.0": SETTLED, "5.0.0": SETTLED})})
     caches = []
     fake = tools.raw
 
@@ -753,6 +793,20 @@ def test_pipx_keeps_extras_and_leaves_tools_from_a_url_alone(tmp_path, commands,
     tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["pipx"]), False,
                               state=tools.UpdateState())
     assert commands.ran == [["pipx", "install", "--force", "black[d]==24.2.0"]]
+
+
+@pytest.mark.parametrize(("installed", "releases", "target"), [
+    ("1.2.0.post1", {"1.2.0": SETTLED}, None),          # a post release is newer than its base release
+    ("1.0", {"1.0.0": SETTLED}, None),                  # the same release, spelled two ways
+    ("1.0.0rc1", {"1.0.0": SETTLED}, "1.0.0"),          # a final release is newer than its release candidate
+])
+def test_pipx_never_reinstalls_the_same_or_an_older_release(tmp_path, commands, pypi, installed, releases, target):
+    program(tmp_path, "pipx")
+    commands.output[PIPX_LIST] = pipx_list(tool=installed)
+    pypi["tool"] = releases
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["pipx"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == ([["pipx", "install", "--force", f"tool=={target}"]] if target else [])
 
 
 def test_a_failed_pypi_lookup_skips_the_tool_with_information_only(tmp_path, commands):

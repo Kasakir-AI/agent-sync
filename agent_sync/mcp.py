@@ -360,14 +360,23 @@ def npm_released(package: str) -> dict[str, str]:
     return {key: value for key, value in times.items() if isinstance(value, str)} if isinstance(times, dict) else {}
 
 
+NUMBERS = re.compile(r"v?(\d+(?:\.\d+)*)")
+
+
+def numbers(version: str) -> tuple[int, ...]:
+    """The leading dotted numbers of a version (`v1.2.3-rc.1` -> (1, 2, 3)); () when there are none."""
+    match = NUMBERS.match(version)
+    return tuple(map(int, match[1].split("."))) if match else ()
+
+
 def npm_newest(package: str, major: int) -> str:
     """The newest release of `package` in one major version ("" when unknown)."""
     try:
         found = json.loads(tools.raw(["npm", "view", f"{package}@^{major}", "version", "--json"]) or "null")
     except ValueError:
         return ""
-    found = found[-1] if isinstance(found, list) and found else found
-    return found if isinstance(found, str) else ""
+    found = [found] if isinstance(found, str) else found if isinstance(found, list) else []
+    return max((version for version in found if isinstance(version, str)), key=numbers, default="")
 
 
 RUNNERS = {"npx": (), "bunx": (), "pnpm": ("dlx",), "npm": ("exec", "x")}
