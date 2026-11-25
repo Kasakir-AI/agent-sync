@@ -232,3 +232,20 @@ def test_twice_says_once_that_a_pending_removal_waits_for_approval(tmp_path):
         assert not pending.due(f"plugin:codex:{OLD}", f"Codex plugin {OLD}")
         assert plugins.twice(tmp_path) == [
             f"info  Codex loads plugin netlify twice until you approve removing {OLD}: waiting for your approval"]
+
+
+def test_a_hook_file_named_in_the_manifest_and_at_the_default_path_counts_once(tmp_path):
+    root = old_plugin(tmp_path)
+    new = own_plugin(tmp_path)
+    hooks = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "audit"}]}]}}
+    write(root, "hooks/hooks.json", hooks)
+    claude = ".claude-plugin/plugin.json"
+    write(root, claude, {**json.loads((root / claude).read_text()), "hooks": "./hooks/hooks.json"})
+    codex = ".codex-plugin/plugin.json"
+    write(new, codex, {**json.loads((new / codex).read_text()), "hooks": ["./hooks/hooks.json"]})
+    write(new, "hooks/hooks.json", hooks)
+    logs = []
+    with pending.during(tmp_path / "state", [], lambda *line: logs.append(line), False) as run:
+        plugins.own_versions(tmp_path, False, lambda *line: logs.append(line), state_dir=tmp_path / "state",
+                             run=lambda _: pytest.fail("would remove a plugin"))
+        assert list(run.questions()) == [f"plugin:codex:{OLD}"]

@@ -52,11 +52,13 @@ def hook_parts(root: Path, manifest: dict, made_for: str | None) -> Iterator[str
         default = root / "hooks/hooks.json"
         if default.is_file():
             sources.append("hooks/hooks.json")
+    read: set[Path] = set()
     for source in sources:
         if isinstance(source, str):
             path = root / source
-            if not inside(root, path):
+            if not inside(root, path) or path.resolve() in read:
                 continue
+            read.add(path.resolve())
             events = settings(path).get("hooks")
         else:
             events = source
