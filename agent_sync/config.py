@@ -35,8 +35,9 @@ class Config:
     skip_skills: list[str] = field(default_factory=list)     # skill names never mirrored
     plugin_skills: list[str] = field(default_factory=list)   # no longer used; a run warns while it is set
     allow_duplicate_skills: list[str] = field(default_factory=list)  # skill names a tool may load more than once
-    keep_mcp_versions: list[str] = field(default_factory=list)
-    mirror_instructions: bool = False                        # CLAUDE.md <-> AGENTS.md <-> a Cursor rule
+    keep_mcp_versions: list[str] = field(default_factory=list)  # MCP servers whose pinned package version stays
+    mirror_instructions: bool = False                        # global instructions across enabled tools
+    mirror_memory: bool = False                              # Claude Code's home-project memory
     warn_models: list[str] = field(default_factory=list)     # warn when a model name containing one of these appears
     update_clis: bool | list[str] = True                     # true, false, or a list like ["claude", "codex"]
     update_plugins: bool = True                              # plugins and extensions for enabled agents
@@ -70,7 +71,7 @@ class Config:
 
 KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
         "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "allow_duplicate_skills",
-        "mirror_instructions", "warn_models", "keep_mcp_versions",
+        "mirror_instructions", "mirror_memory", "warn_models", "keep_mcp_versions",
         "update_clis", "update_plugins", "cli_commands", "install_commands", "extra_steps", "launcher",
         "update_self", "log_days")
 

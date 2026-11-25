@@ -170,10 +170,10 @@ def scan_instructions(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[s
     for path, readers in grouped_paths(instructions.files(home, cfg.agents)).items():
         if path.is_file():
             _, body = instructions.split_front(read_text(path))
+            body = instructions.shared_body(instructions.own_text(body))
             origin = Origin.COPY if "cursor" in readers else Origin.YOURS
             note = "mirrored global instructions" if origin == Origin.COPY else ""
-            yield name, make_version("instructions", name, readers, path, instructions.BLOCK.sub("\n", body),
-                                     origin, note)
+            yield name, make_version("instructions", name, readers, path, body, origin, note)
 
 
 def rule_location(home: Path, name: str, tool: str) -> Path | None:
@@ -616,7 +616,10 @@ def remember(path: Path, scan: Scan, choices: dict[str, str | dict]) -> None:
             continue
         kept = {str(file): sorted({line for line, _ in lines}) for version in group.versions
                 if version.id != winner.id for file, lines in leftovers(group, version, winner).items()}
+        entry = stored.get(key)
         stored[key] = {**baseline(group.kind, winner), "kept": kept}
+        if group.kind == "instructions" and isinstance(entry, dict) and isinstance(local := entry.get("local"), dict):
+            stored[key]["local"] = local
     save_baselines(path, stored)
 
 

@@ -43,6 +43,7 @@ from . import (
     inventory,
     mcp,
     membership,
+    memory,
     plugins,
     review,
     roles,
@@ -177,6 +178,11 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 log("ok", "global instructions mirrored")
             except OSError as e:
                 log("FAIL", f"global instructions: {e}")
+        if cfg.mirror_memory:
+            try:
+                log.lines(memory.mirror(cfg.home, dry, enabled=cfg.agents))
+            except OSError as e:
+                log("FAIL", f"shared memory: {e}")
         log_review(cfg, log)
         if cfg.update_plugins:
             tools.update_plugins(log, dry, cfg.home, enabled=cfg.agents)

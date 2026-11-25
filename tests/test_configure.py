@@ -132,3 +132,12 @@ def test_keep_mcp_versions_can_be_edited_and_reloaded(tmp_path):
     ed.menu()
     assert ed.cfg.keep_mcp_versions == ["rea"]
     assert tomllib.loads(path.read_text())["keep_mcp_versions"] == ["rea"]
+
+
+def test_shared_memory_is_off_by_default_and_can_be_enabled(tmp_path):
+    ed, path, said = editor(tmp_path, ["3", "5", "", "s", "q"])
+    assert ed.cfg.mirror_memory is False
+    ed.menu()
+    assert any("Share Claude Code's home-project memory" in line for line in said)
+    assert ed.cfg.mirror_memory is True
+    assert tomllib.loads(path.read_text())["mirror_memory"] is True

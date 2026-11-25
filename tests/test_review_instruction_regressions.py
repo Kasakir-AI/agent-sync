@@ -34,3 +34,30 @@ def test_review_removes_superseded_mirrored_instructions(tmp_path, already_copie
     assert target.read_text() == expected
     assert (backup / target.relative_to(tmp_path)).read_text() == before
     assert writes.apply(tmp_path, steps, backup) == []
+
+
+def test_applying_a_review_choice_keeps_each_files_local_sections(tmp_path):
+    paths = instructions.files(tmp_path)
+    source, target = paths["claude"], paths["codex"]
+    source.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    local = "<!-- agent-sync: local -->\nClaude-only instruction.\n<!-- agent-sync: end local -->\n"
+    memory = "<!-- agent-sync: memory -->\nMemory index.\n<!-- agent-sync: end memory -->\n"
+    source.write_text("Run the tests.\n" + local)
+    target.write_text("Use the Codex workspace profile.\n" + memory)
+    cfg = Config(home=tmp_path)
+    baselines = review.baseline_file(cfg)
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+
+    source.write_text("Run tests using pytest.\n" + local)
+    scan = review.scan(tmp_path, cfg)
+    group, = scan.groups
+    winner = next(version for version in group.versions if version.path == source)
+    choices = {group.key: winner.id}
+    steps = writes.plan(tmp_path, scan, choices, "claude")
+    writes.apply(tmp_path, steps, tmp_path / "backup")
+    review.remember(baselines, review.scan(tmp_path, cfg), choices)
+    assert target.read_text() == "Use the Codex workspace profile.\n" + memory + "Run tests using pytest.\n"
+    assert source.read_text() == "Run tests using pytest.\n" + local
+    assert "Claude-only instruction." not in paths["cursor"].read_text()
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []

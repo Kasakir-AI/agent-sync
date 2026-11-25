@@ -151,12 +151,11 @@ def write_text(rewrite: Callable[[Step, str], str], merged: bool = True) -> Call
 
 def instruction_text(step: Step, text: str) -> str:
     body, drop = step.winner.body, step.drop.get(step.path, frozenset())
-    if "cursor" in step.tools:
-        front, rest = instructions.split_front(text)
-        if not front:
-            return instructions.rendered("cursor", "", merge(rest, body, drop).rstrip("\n"), step.winner.path)
-        return front + merge(rest, body, drop)
-    return merge(instructions.BLOCK.sub("\n", text), body, drop)
+    tool = step.tools[0]
+    rest = instructions.split_front(text)[1] if tool == "cursor" else text
+    rest = instructions.own_text(rest)
+    merged = merge(rest, body, drop, protected=instructions.local_rows(rest.splitlines()))
+    return instructions.rendered(tool, text, merged, step.winner.path)
 
 
 def rule_text(step: Step, text: str) -> str:
