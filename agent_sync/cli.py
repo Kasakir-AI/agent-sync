@@ -276,8 +276,10 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
             log("ok", "MCP servers mirrored")
     if cfg.mirror_instructions:
         def mirror_instructions() -> None:
-            log.lines(instructions.mirror(home, cfg.source, dry, review.baseline_file(cfg), enabled=enabled))
-            log("ok", "global instructions mirrored")
+            changes = instructions.mirror(home, cfg.source, dry, review.baseline_file(cfg), enabled=enabled)
+            log.lines(changes)
+            if not any(line.startswith("WARN  ") for line in changes):
+                log("ok", "global instructions mirrored")
         guarded(log, "global instructions", mirror_instructions, "instructions", "instruction")
     if cfg.mirror_memory:
         guarded(log, "shared memory", lambda: log.lines(memory.mirror(

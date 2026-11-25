@@ -55,15 +55,15 @@ def test_a_source_deletion_waits_and_preserves_tool_local_notes(tmp_path):
     instructions.mirror(tmp_path, "claude", baselines=baselines)
     assert json.loads(baselines.read_text())[instructions.KEY]["lines"] == ["Be brief.", "Ask before pushing."]
     files["claude"].write_text("Be brief.\n")
-    logs = []
+    warnings = []
     for now in (100, 10_000_000):
-        with pending.during(baselines.parent, [], lambda *line: logs.append(line), False, now=now):
-            instructions.mirror(tmp_path, "claude", baselines=baselines)
+        with pending.during(baselines.parent, [], lambda *_: None, False, now=now):
+            warnings.extend(instructions.mirror(tmp_path, "claude", baselines=baselines))
         assert "Ask before pushing." in files["codex"].read_text()
     approve_current(baselines.parent)
-    with pending.during(baselines.parent, [], lambda *line: logs.append(line), False, now=10_000_001):
+    with pending.during(baselines.parent, [], lambda *_: None, False, now=10_000_001):
         instructions.mirror(tmp_path, "claude", baselines=baselines)
-    assert len(logs) == 1 and logs[0][0] == "WARN" and 'instruction "Ask before pushing."' in logs[0][1]
+    assert len(warnings) == 2 and all("deletion of 1 line(s)" in line for line in warnings)
     assert files["codex"].read_text() == "Codex-only note.\nBe brief.\n"
 
 
@@ -294,8 +294,14 @@ def test_secret_additions_and_rewords_stay_in_the_edited_file(tmp_path, changed_
     replacement = f"Use the service account when running the tests with token {secret}."
     changed = files[changed_tool]
     changed.write_text(f"{replacement}\npassword=R4ndomFixtureValue\nRun Ruff.\n")
+    if changed_tool == "claude":
+        with pending.during(baselines.parent, [], lambda *_: None, False):
+            warning, = instructions.mirror(tmp_path, "claude", baselines=baselines)
+        assert "on hold" in warning and secret not in warning
+        approve_current(baselines.parent)
     for _ in range(2):
-        messages = instructions.mirror(tmp_path, "claude", baselines=baselines)
+        with pending.during(baselines.parent, [], lambda *_: None, False):
+            messages = instructions.mirror(tmp_path, "claude", baselines=baselines)
         warning = (f"WARN  {changed} has 2 line(s) that look like secrets (GitHub token, password assignment); "
                    "they stay in that file only.")
         assert messages.count(warning) == 1
@@ -308,15 +314,11 @@ def test_secret_additions_and_rewords_stay_in_the_edited_file(tmp_path, changed_
             assert "Run Ruff." in text
 
 
-@pytest.mark.parametrize("source_text", [None, "", "\n<!-- a comment -->\n"])
-def test_a_missing_or_empty_source_changes_nothing_and_asks_nothing(tmp_path, source_text):
+def test_a_missing_source_changes_nothing_and_asks_nothing(tmp_path):
     files = setup(tmp_path, "Be brief.\nAsk first.\n", "")
     baselines = tmp_path / "state/baselines.json"
     instructions.mirror(tmp_path, "claude", baselines=baselines)
-    if source_text is None:
-        files["claude"].unlink()
-    else:
-        files["claude"].write_text(source_text)
+    files["claude"].unlink()
     before = {path: path.read_text() for path in (files["codex"], files["cursor"], baselines)}
     logs = []
     with pending.during(tmp_path / "state", [], lambda *line: logs.append(line), False):
@@ -392,7 +394,7 @@ def test_seeding_and_additions_keep_code_blocks_and_repeated_lines_whole(tmp_pat
 
 
 @pytest.mark.parametrize("extra", ["", "Prepare release notes.\nInspect plugin metadata.\nWatch CI.\nRecord notes.\n"])
-def test_batch_wait_only_holds_changes_touching_the_deleted_line(tmp_path, extra):
+def test_batch_wait_holds_changes_at_any_share_of_the_source(tmp_path, extra):
     shared = "Keep replies brief.\nCheck backup retention.\nCount loaded skills.\nVerify repository URLs.\n"
     shared += extra
     removed = "Enable auto-formatting.\n"
@@ -410,8 +412,8 @@ def test_batch_wait_only_holds_changes_touching_the_deleted_line(tmp_path, extra
     item, = pending.load(state).values()
     assert "1 shared instruction line" in item["what"]
     assert files["claude"].read_text() == updated
-    assert files["codex"].read_text() == updated + removed * 2
-    assert files["cursor"].read_text().endswith(updated + removed)
+    assert files["codex"].read_text() == source + removed
+    assert files["cursor"].read_text().endswith(source)
 
     approve_current(state)
     with pending.during(state, [], lambda *_: None, False):
@@ -505,3 +507,103 @@ def test_instruction_retry_replans_after_file_changes_during_staging(tmp_path, m
         assert files["cursor"].read_text().endswith(first)
     else:
         assert files["cursor"].read_text().endswith(concurrent)
+
+
+@pytest.mark.parametrize("decision", ["approve", "keep"])
+def test_single_source_deletion_holds_all_instruction_changes_until_decided(tmp_path, decision):
+    source = "Stay concise.\nAlways archive artifacts.\n"
+    files = setup(tmp_path, source, "")
+    state = tmp_path / "state"
+    baselines = state / "baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["claude"].write_text("Stay very concise.\n")
+    files["codex"].write_text(source + "Run pytest.\n")
+    before = {path: path.read_bytes() for path in [*files.values(), baselines]}
+    logs = []
+    with pending.during(state, [], lambda *line: logs.append(line), False):
+        assert instructions.mirror(tmp_path, "claude", baselines=baselines) == [
+            "WARN  instructions are on hold until you approve or keep the deletion of 1 line(s): "
+            "run agent-sync pending"]
+    key, = pending.load(state)
+    assert key == "instructions:37e978b9ce9c"
+    assert logs == []
+    assert {path: path.read_bytes() for path in before} == before
+
+    if decision == "approve":
+        approve_current(state)
+    with pending.during(state, [key] if decision == "keep" else [], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
+    for path in files.values():
+        shared = instructions.shared_body(path.read_text())
+        assert "Stay very concise." in shared and "Stay concise." not in shared
+        assert "Run pytest." in shared
+        assert ("Always archive artifacts." in shared) == (decision == "keep")
+    assert pending.load(state) == {}
+    with pending.during(state, [key] if decision == "keep" else [], lambda *_: None, False):
+        assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+
+
+@pytest.mark.parametrize("tool", ["claude", "codex"])
+@pytest.mark.parametrize("section", ["local", "private", "memory"])
+def test_existing_hidden_copy_does_not_mask_shared_deletion(tmp_path, tool, section):
+    line = "Use the cf CLI."
+    shared = f"Be brief.\n{line}\n"
+    hidden = f"<!-- agent-sync: {section} -->\n{line}\n<!-- agent-sync: end {section} -->\n"
+    files = setup(tmp_path, shared + (hidden if tool == "claude" else ""),
+                  hidden if tool == "codex" else "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files[tool].write_text("Be brief.\n" + hidden)
+    for _ in range(2):
+        with pending.during(baselines.parent, [], lambda *_: None, False):
+            warning, = instructions.mirror(tmp_path, "claude", baselines=baselines)
+        assert warning.startswith("WARN  ")
+        expected = "no longer has 1 shared line(s)" if tool == "codex" else "on hold"
+        assert expected in warning
+        assert bool(pending.load(baselines.parent)) == (tool == "claude")
+        assert files[tool].read_text() == "Be brief.\n" + hidden
+
+
+def test_removing_one_repeated_source_line_holds_one_occurrence_across_runs(tmp_path):
+    shared = "Be brief.\nRun pytest.\nRun pytest.\n"
+    changed = "Be brief.\nRun pytest.\n"
+    files = setup(tmp_path, shared, "")
+    state = tmp_path / "state"
+    baselines = state / "baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["claude"].write_text(changed)
+    for _ in range(2):
+        with pending.during(state, [], lambda *_: None, False):
+            warning, = instructions.mirror(tmp_path, "claude", baselines=baselines)
+        assert "deletion of 1 line(s)" in warning
+        key, = pending.load(state)
+        assert key.startswith("instructions:")
+        assert files["claude"].read_text() == changed
+        assert files["codex"].read_text() == shared
+        assert json.loads(baselines.read_text())[instructions.KEY]["lines"].count("Run pytest.") == 2
+
+    approve_current(state)
+    for _ in range(2):
+        with pending.during(state, [], lambda *_: None, False):
+            instructions.mirror(tmp_path, "claude", baselines=baselines)
+        assert all(path.read_text().endswith(changed) for path in files.values())
+    assert pending.load(state) == {}
+
+
+def test_clearing_an_existing_source_requires_approval_for_its_last_shared_line(tmp_path):
+    files = setup(tmp_path, "Stay concise.\n", "")
+    state = tmp_path / "state"
+    baselines = state / "baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["claude"].write_text("")
+    with pending.during(state, [], lambda *_: None, False):
+        warning, = instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert "deletion of 1 line(s)" in warning
+    assert files["codex"].read_text() == "Stay concise.\n"
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert files["codex"].read_text() == ""
+    files["codex"].write_text("Run pytest.\n")
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert files["claude"].read_text() == "Run pytest.\n"

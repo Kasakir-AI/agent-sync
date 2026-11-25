@@ -56,13 +56,13 @@ class Run:
                 or any(prefix and key.startswith(prefix if prefix.endswith(":") else f"{prefix}:")
                        for prefix in self.keep))
 
-    def due(self, key: str, what: str) -> bool:
+    def due(self, key: str, what: str, *, warn: bool = True) -> bool:
         if self.keeps(key) or key in self.removed:
             return False
         item = self.seen.get(key) or self.previous.get(key)
         if item is None or item["what"] != what:
             item = Removal(first=self.now, what=what, approved=False)
-            if not self.dry:
+            if warn and not self.dry:
                 self.log("WARN", f"approval required to remove {what}")
         self.seen[key] = item.copy()
         if self.dry and item["approved"]:
@@ -109,9 +109,9 @@ def asked(key: str) -> bool:
     return run is not None and key in run.seen and not run.seen[key]["approved"]
 
 
-def due(key: str, what: str) -> bool:
+def due(key: str, what: str, *, warn: bool = True) -> bool:
     run = current.get()
-    return run is not None and run.due(key, what)
+    return run is not None and run.due(key, what, warn=warn)
 
 
 def removed(key: str) -> None:
