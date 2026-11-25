@@ -93,11 +93,14 @@ def stage(target: Path, data: bytes, mode: int) -> Path:
     return Path(name)
 
 
-def update(path: Path, plan: Callable[[bytes | None], bytes | None], *, new_mode: int = 0o644) -> bool:
+def update(path: Path, plan: Callable[[bytes | None], bytes | None], *, new_mode: int = 0o644,
+           check: Callable[[], None] | None = None, follow_symlinks: bool = True) -> bool:
     """Write plan(current bytes) to `path` (through a link, to its target). Returns whether it wrote. When the file
     changes between reading and renaming, plans once more from the new bytes; when it changes again, raises Raced."""
-    target = Path(os.path.realpath(path))
     for _ in range(2):
+        target = Path(os.path.realpath(path))
+        if not follow_symlinks and (path.is_symlink() or target != path.parent.resolve() / path.name):
+            raise Raced(path)
         before = read_bytes(target)
         after = plan(before)
         if after is None or after == before:
@@ -105,8 +108,10 @@ def update(path: Path, plan: Callable[[bytes | None], bytes | None], *, new_mode
         mode = S_IMODE(target.stat().st_mode) if before is not None else new_mode
         temp = stage(target, after, mode)
         try:
-            backups.save(path, follow=True)
-            if read_bytes(target) == before:
+            backups.save(target)
+            if check is not None:
+                check()
+            if read_bytes(target) == before and Path(os.path.realpath(path)) == target:
                 temp.replace(target)
                 return True
         finally:
@@ -350,19 +355,25 @@ def mcp_text(step: Step, text: str) -> str:
 def edits(steps: list[Step]) -> list[Edit]:
     """Every file the steps change, with its content before and after; steps on one settings file chain."""
     pending: dict[Path, tuple[Step, Content, str]] = {}
+    originals: dict[Path, Content | None] = {}
 
     def read(path: Path) -> Content | None:
-        return pending[path][1] if path in pending else current(path)
+        if path in pending:
+            return pending[path][1]
+        if path not in originals:
+            originals[path] = current(path)
+        return originals[path]
 
     for step in steps:
         kind = step.key.split(":", 1)[0]
         for path, (after, winner) in WRITERS[kind](step, read).items():
             if path in pending and pending[path][0].key != step.key and kind != "mcp":
                 raise ValueError(f"more than one selection would write {path}")
+            read(path)
             pending[path] = (step, after, winner)
     changes = []
     for path, (step, after, winner) in pending.items():
-        before = current(path)
+        before = originals[path]
         if after != before:
             left = set(keys(as_text(after) or ""))
             removed = tuple(line for line in dict.fromkeys(keys(as_text(before) or ""))
