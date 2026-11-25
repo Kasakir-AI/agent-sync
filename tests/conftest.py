@@ -20,10 +20,23 @@ def offline_package_managers(monkeypatch):
 
     blocked = {"npm", "npx", "brew"}
     run = subprocess.run
+    popen = subprocess.Popen
+
+    def executable(args):
+        if isinstance(args, list | tuple):
+            return Path(str(args[0])).name if args else ""
+        return Path(str(args)).name
+
+    def no_live_dialogs(args, *rest, **kwargs):
+        for candidate in (args, kwargs.get("executable")):
+            if executable(candidate) in {"osascript", "zenity", "plannotator"}:
+                pytest.fail(f"test tried to launch {executable(candidate)}")
+        return popen(args, *rest, **kwargs)
 
     def offline_run(args, *rest, **kwargs):
-        if isinstance(args, list | tuple) and args and Path(str(args[0])).name in blocked:
+        if executable(args) in blocked:
             return subprocess.CompletedProcess(args, 1, "", "offline in tests")
         return run(args, *rest, **kwargs)
 
+    monkeypatch.setattr(subprocess, "Popen", no_live_dialogs)
     monkeypatch.setattr(subprocess, "run", offline_run)

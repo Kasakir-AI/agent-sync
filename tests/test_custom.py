@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from agent_sync import agents, mcp, roles, tools
 from agent_sync.config import AgentModels, load
 from tests.test_agents import package
@@ -12,6 +14,22 @@ def test_config_customization(tmp_path):
     cfg = load(cfg_file, home=tmp_path)
     assert cfg.wants_cli("codex") and not cfg.wants_cli("claude")
     assert cfg.cli_commands["codex"] == ["echo", "hi"] and cfg.extra_steps[0]["name"] == "hello"
+
+
+@pytest.mark.parametrize("text, error", [
+    ('[[extra_steps]]\ncommand = ["true"]\nnotify = false\n', "extra_steps entry 1 key(s): notify"),
+    ('[cli_commands]\ncdex = ["true"]\n', "cli_commands key(s): cdex"),
+    ('[install_commands]\nnodejs = ["true"]\n', "install_commands key(s): nodejs"),
+    ('[agent_models]\nnotify = false\n', "agent_models key(s): notify"),
+    ('[agent_notes]\nnotify = false\n', "agent_notes values"),
+    ('[program_updates]\nnotify = false\n', "program_updates values"),
+])
+def test_config_rejects_settings_in_the_wrong_table(tmp_path, text, error):
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    with pytest.raises(ValueError) as exc:
+        load(path, home=tmp_path)
+    assert error in str(exc.value)
 
 
 def test_extra_steps_run_and_dry_run_only_prints(tmp_path):

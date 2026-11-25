@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import instructions, membership, roles, skills, tomledit, tools
-from .config import AgentModels, config_path, parse
+from .config import INSTALL_ITEMS, AgentModels, config_path, parse
 from .registry import TOOLS
 
 PARTS = [  # (setting, what it does) for the on/off switches
@@ -33,7 +33,6 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("launcher", "Keep the double-click \"Agent Upkeep\" launcher on the Desktop (macOS)"),
     ("notify", "Show desktop notifications and post to Plannotator Inbox"),
 ]
-INSTALL_ITEMS = ("homebrew", "git", "node", *TOOLS)
 
 
 class Quit(Exception):

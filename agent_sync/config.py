@@ -9,6 +9,8 @@ from pathlib import Path
 
 from . import registry
 
+INSTALL_ITEMS = ("homebrew", "git", "node", *registry.TOOLS)
+
 
 @dataclass
 class AgentModels:
@@ -143,16 +145,38 @@ def parse(text: str, path: Path, home: Path) -> Config:
             raise ValueError(f"{key} must be a list of memory note names")
     if not isinstance(cfg.mcp_major_updates, bool):
         raise ValueError("mcp_major_updates must be true or false")
-    if not isinstance(cfg.program_updates, dict) or any(
-            not isinstance(command, list) or not command or not all(isinstance(arg, str) for arg in command)
-            for command in cfg.program_updates.values()):
-        raise ValueError('program_updates must map a program name to its update command, like '
-                         'plannotator = ["plannotator", "update"]')
-    for step in cfg.extra_steps:
-        if not isinstance(step.get("command"), list) or not step["command"]:
-            raise ValueError(f"extra step {step.get('name', '?')!r} needs command = [\"program\", \"arg\", ...]")
-    for key, value in (data.get("agent_models") or {}).items():
-        if not hasattr(cfg.agent_models, key):
-            raise ValueError(f"unknown agent_models key {key!r}; use claude, cursor, codex, codex_effort or gemini")
+    for section, allowed in (("cli_commands", registry.TOOLS), ("install_commands", INSTALL_ITEMS),
+                             ("program_updates", None), ("agent_notes", None)):
+        entries = table(getattr(cfg, section), section, allowed)
+        valid = (lambda value: isinstance(value, str)) if section == "agent_notes" else command
+        if not all(valid(value) for value in entries.values()):
+            expected = "text" if section == "agent_notes" else 'a command like ["program", "arg"]'
+            raise ValueError(f"{section} values must be {expected}")
+    if not isinstance(cfg.extra_steps, list):
+        raise ValueError("extra_steps must be an array of tables")
+    for index, step in enumerate(cfg.extra_steps, 1):
+        label = f"extra_steps entry {index}"
+        table(step, label, ("name", "command", "timeout"))
+        if not command(step.get("command")):
+            raise ValueError(f'{label} needs command = ["program", "arg", ...]')
+        if "name" in step and not isinstance(step["name"], str):
+            raise ValueError(f"{label} name must be text")
+        if "timeout" in step and (type(step["timeout"]) is not int or step["timeout"] < 0):
+            raise ValueError(f"{label} timeout must be a nonnegative whole number")
+    for key, value in table(data.get("agent_models", {}), "agent_models", vars(cfg.agent_models)).items():
+        if not isinstance(value, str):
+            raise ValueError(f"agent_models.{key} must be text")
         setattr(cfg.agent_models, key, value)
     return cfg
+
+
+def table(value, label: str, allowed=None) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a table")
+    if allowed is not None and (unknown := value.keys() - allowed):
+        raise ValueError(f"unknown {label} key(s): {', '.join(sorted(unknown))}")
+    return value
+
+
+def command(value) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(arg, str) for arg in value)
