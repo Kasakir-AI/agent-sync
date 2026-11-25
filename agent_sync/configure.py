@@ -24,7 +24,7 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("mirror_roles", "Copy pstack's model roles from the source tool to the others"),
     ("mirror_mcp", "Add the source tool's MCP servers to the other tools (never deletes any)"),
     ("mirror_instructions", "Share global instructions across enabled tools"),
-    ("mirror_memory", "Share Claude Code's home-project memory with the other tools (on by default)"),
+    ("mirror_memory", "Share Claude Code's home-project memory with the other tools"),
     ("status_line", "Set up one status line in every CLI that supports it (on by default)"),
     ("update_plugins", "Update plugins and extensions for enabled agents"),
     ("update_mcp_programs", "Update programs used by enabled agents' MCP servers"),
@@ -239,12 +239,20 @@ class Editor:
         }
         while True:
             options = [(k, f"[{'x' if getattr(self.cfg, k) else ' '}] {label}") for k, label in PARTS]
-            position = next(i for i, (key, _) in enumerate(options) if key == "mirror_memory") + 1
+            position = next(i for i, (key, _) in enumerate(options) if key == "mirror_memory")
+            memory_state = {None: "not asked yet", True: "on", False: "off"}[self.cfg.mirror_memory]
+            options[position] = ("mirror_memory", f"{PARTS[position][1]} ({memory_state})")
+            position += 1
             options[position:position] = [(key, f"{label} ({len(getattr(self.cfg, key))})")
                                           for key, label in memory_lists.items()]
             pick = self.choose(options)
             if pick is None:
                 return
+            if pick == "mirror_memory":
+                sharing = self.choose([("on", "Share"), ("off", "Don't share")])
+                if sharing is not None:
+                    self.set(pick, sharing == "on")
+                continue
             if pick in memory_lists:
                 self.say("  Use the note's name or filename stem. "
                          "Notes marked private or containing secrets stay in Claude Code.")

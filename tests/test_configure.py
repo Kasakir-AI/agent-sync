@@ -143,11 +143,12 @@ def test_keep_mcp_versions_can_be_edited_and_reloaded(tmp_path):
     assert tomllib.loads(path.read_text())["keep_mcp_versions"] == ["rea"]
 
 
-def test_shared_memory_is_on_by_default_and_can_be_disabled(tmp_path):
-    ed, path, said = editor(tmp_path, ["3", "5", "", "s", "q"])
-    assert ed.cfg.mirror_memory is True
+def test_shared_memory_shows_three_states(tmp_path):
+    ed, path, said = editor(tmp_path, ["3", "5", "1", "5", "2", "", "s", "q"])
+    assert ed.cfg.mirror_memory is None
     ed.menu()
-    assert any("Share Claude Code's home-project memory with the other tools (on by default)" in line for line in said)
+    for state in ("not asked yet", "on", "off"):
+        assert any(f"Share Claude Code's home-project memory with the other tools ({state})" in line for line in said)
     assert ed.cfg.mirror_memory is False
     assert tomllib.loads(path.read_text())["mirror_memory"] is False
 

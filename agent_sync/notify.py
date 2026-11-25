@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import Callable
 from queue import Empty, Queue
 from threading import Thread
@@ -45,6 +46,18 @@ on run argv
             default button "OK" giving up after 43200
     end timeout
     return answer
+end run
+"""
+SHARE = "Share"
+DECLINE = "Don't share"
+MACOS_MEMORY = """
+on run argv
+    with timeout of 43200 seconds
+        set answer to display dialog (item 1 of argv) with title "agent-sync" ¬
+            buttons {"Don't share", "Share"} default button "Don't share" giving up after 43200
+    end timeout
+    if gave up of answer then return ""
+    return button returned of answer
 end run
 """
 
@@ -127,6 +140,32 @@ CHANNELS: tuple[Channel, ...] = (
     (lambda: sys.platform.startswith("linux") and bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY"))
      and bool(find_command("zenity")), _linux),
 )
+
+
+def memory_choice(cfg: Config, log: Log, question: str) -> bool | None:
+    try:
+        if in_terminal():
+            answer = input(f"{question} [y/N] ").strip().lower()
+            return {"y": True, "yes": True, "n": False, "no": False, "": False}.get(answer)
+        if not cfg.notify:
+            return None
+        if CHANNELS[1][0]():
+            result = _dialog(log, ["osascript", "-e", MACOS_MEMORY, "--", question])
+        elif CHANNELS[2][0]():
+            result = _dialog(log, ["zenity", "--list", "--title=agent-sync", f"--text={question}",
+                                   "--column=Choice", f"--timeout={DIALOG_TIMEOUT}", "--", SHARE, DECLINE])
+        else:
+            return None
+        return {SHARE: True, DECLINE: False}.get((result or "").strip())
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def memory_inbox(cfg: Config, log: Log, question: str, key: str) -> None:
+    if cfg.notify and (command := find_command("plannotator")):
+        buttons = [f":::run\n{label}\n\n```\n{_inbox_command(action, key)}\n```\n:::"
+                   for action, label in (("approve", SHARE), ("keep", DECLINE))]
+        _post_inbox(command, cfg, log, "\n\n".join([question, *buttons]), uuid.uuid4().hex)
 
 
 def _inbox_command(action: str, key: str) -> str:
@@ -220,13 +259,19 @@ def _inbox(command: str, cfg: Config, log: Log, warnings: list[str], removals: d
     seen = textmerge.load_baselines(path)
     if digest in seen:
         return
+    if _post_inbox(command, cfg, log, body, digest):
+        textmerge.save_baselines(path, {**seen, digest: True})
+
+
+def _post_inbox(command: str, cfg: Config, log: Log, body: str, digest: str) -> bool:
     try:
         _send_inbox(command, cfg, {"body": body, "thread": "agent-sync upkeep", "subject": "agent-sync upkeep",
                                    "agent_name": "agent-sync", "agent_host": "agent-sync",
                                    "project_path": str(cfg.home), "idempotency_key": digest})
-        textmerge.save_baselines(path, {**seen, digest: True})
     except (OSError, ValueError) as exc:
         log("info", f"Plannotator Inbox notification failed: {exc}")
+        return False
+    return True
 
 
 def deliver(cfg: Config, log: Log, warnings: list[str], removals: dict[str, str]) -> tuple[set[str], bool]:

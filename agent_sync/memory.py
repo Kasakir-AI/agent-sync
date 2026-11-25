@@ -8,11 +8,13 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from . import backups, pending, writes
+from .config import Config
 from .instructions import MEMORY_END, MEMORY_START, files, rendered, split_front
 from .privacy import secret_rows, secret_values, sensitive
-from .registry import grouped_paths
+from .registry import TOOLS, grouped_paths
 
 MARKER = ".agent-sync"
+CHOICE = "memory-sharing"
 SECTION = re.compile(rf"(?ms)^[ \t]*{MEMORY_START}[ \t]*\r?\n.*?^[ \t]*{MEMORY_END}[ \t]*(?:\r?\n|\Z)")
 FILENAME = r"([^/<>()[\]#\r\n]+\.md)(?=>?[\s)#])"
 LINK = re.compile(rf"(?m)^([ \t]*-[ \t]+\[[^\n]*?\]\(<?)(?:\./)?{FILENAME}")
@@ -75,13 +77,29 @@ def note_privacy(filename: str, text: str, private_memory=(), share_memory=()) -
     return name, reasons, kinds
 
 
+def notes(home: Path) -> Path:
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(home))
+    return home / ".claude/projects" / slug / "memory"
+
+
+def question(cfg: Config) -> str | None:
+    others = [TOOLS[tool].name for tool in cfg.agents if tool != "claude"]
+    if cfg.mirror_memory is not None or not others:
+        return None
+    if not any(path.is_file() and not path.is_symlink() for path in notes(cfg.home).glob("*.md")):
+        return None
+    names = others[0] if len(others) == 1 else " and ".join(others) if len(others) == 2 else (
+        ", ".join(others[:-1]) + ", and " + others[-1])
+    return (f"Share Claude Code's memory notes with {names}? "
+            "Notes about credentials, keys and personal details stay in Claude Code.")
+
+
 def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()) -> list[str]:
     locations = files(home, enabled)
     claude = files(home, ("claude",))["claude"]
-    if not locations:
+    source = notes(home)
+    if not locations or not any(tool != "claude" for tool in locations):
         return []
-    slug = re.sub(r"[^A-Za-z0-9]", "-", str(home))       # how Claude Code names a project's folder
-    source = home / ".claude/projects" / slug / "memory"
     if not source.is_dir():
         return []
 

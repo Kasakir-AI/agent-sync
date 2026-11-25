@@ -1,7 +1,11 @@
 import re
 
+import pytest
+
 from agent_sync import backups, instructions, memory, pending
+from agent_sync.config import config_path, load
 from agent_sync.registry import TOOLS
+from tests.test_notify import available, dialogs, inbox, tty
 from tests.test_pending import approve_current
 
 INDEX = "- [Workspace preferences](workspace.md) — habits to use across projects\n"
@@ -167,7 +171,7 @@ def test_cli_upkeep_shares_instructions_then_memory(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(cli.tools, "skills", lambda *args: (0, "test version"))
     config = config_path(tmp_path)
     config.parent.mkdir(parents=True)
-    config.write_text("skill_packages = []\nmirror_instructions = true\n"
+    config.write_text("skill_packages = []\nmirror_instructions = true\nmirror_memory = true\n"
                       'private_memory = ["private"]\nshare_memory = ["approved"]\n'
                       "mirror_mcp = false\nmirror_roles = false\nmirror_skills = false\n"
                       "update_plugins = false\nupdate_clis = false\nupdate_self = false\n")
@@ -229,3 +233,91 @@ def test_the_project_folder_name_replaces_every_non_ascii_character(tmp_path):
     (source / "workspace.md").write_text("Prefer local worktrees.\n")
     memory.mirror(home, False, enabled=("claude", "codex"))
     assert (home / ".agents/memory/workspace.md").exists()
+
+
+@pytest.fixture
+def memory_upkeep(tmp_path, monkeypatch):
+    from agent_sync import cli
+
+    _, _, dest = setup(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setattr(cli, "online", lambda: True)
+    monkeypatch.setattr(cli.tools, "skills", lambda *args: (0, "test"))
+    monkeypatch.setattr(cli.membership, "available", lambda _: {})
+    config = config_path(tmp_path)
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        'agents = ["claude", "codex"]\nskill_packages = []\nmirror_roles = false\n'
+        "mirror_skills = false\nmirror_mcp = false\nstatus_line = false\nupdate_plugins = false\n"
+        "update_clis = false\nupdate_mcp_programs = false\nupdate_self = false\n"
+    )
+    return cli.main, config, dest
+
+
+@pytest.mark.parametrize(("reply", "shared"), [("y", True), ("", False)])
+def test_terminal_memory_choice_is_saved_once(memory_upkeep, monkeypatch, reply, shared):
+    main, config, dest = memory_upkeep
+    before = config.read_bytes()
+    prompts = tty(monkeypatch, [reply])
+    assert main(["run", "--force"]) == 0
+    assert load().mirror_memory is shared
+    assert dest.exists() is shared
+    assert main(["run", "--force"]) == 0
+    assert prompts == ["Share Claude Code's memory notes with Codex? "
+                       "Notes about credentials, keys and personal details stay in Claude Code. [y/N] "]
+    root = load().state_dir / "backups"
+    assert [path.read_bytes() for path in root.glob("*/.config/agent-sync/config.toml")] == [before]
+
+
+def test_dry_run_does_not_ask_and_eof_asks_again(memory_upkeep, monkeypatch, capsys):
+    main, _, dest = memory_upkeep
+    prompts = tty(monkeypatch, [EOFError(), "no"])
+    assert main(["run", "--dry-run"]) == 0
+    assert "Would ask: Share Claude Code's memory notes with Codex?" in capsys.readouterr().out
+    assert not prompts and load().mirror_memory is None
+    assert main(["run", "--force", "--echo"]) == 0
+    assert load().mirror_memory is None and not dest.exists()
+    assert capsys.readouterr().out.count("Memory sharing is waiting for your choice.") == 1
+    assert main(["run", "--force"]) == 0
+    assert len(prompts) == 2 and load().mirror_memory is False
+
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_inbox_buttons_save_memory_choice(memory_upkeep, monkeypatch, shared):
+    from agent_sync import notify
+
+    main, _, dest = memory_upkeep
+    monkeypatch.setattr(notify, "in_terminal", lambda: False)
+    available(monkeypatch, "plannotator")
+    processes = inbox(monkeypatch, {"result": {}}, {"result": {}})
+    assert main(["run", "--force"]) == 0
+    assert main(["run", "--force"]) == 0
+    assert load().mirror_memory is None and not dest.exists()
+    assert len(processes) == 2
+    body = processes[0].messages[-1]["params"]["arguments"]["body"]
+    assert ":::run\nShare" in body and ":::run\nDon't share" in body
+    verb = "--approve" if shared else "--keep"
+    command = next(line.split() for line in body.splitlines() if line.startswith(f"agent-sync pending {verb}"))
+    assert main(command[1:]) == 0
+    assert load().mirror_memory is shared and not dest.exists()
+    assert main(["run", "--force"]) == 0
+    assert dest.exists() is shared and len(processes) == 2
+
+
+def test_macos_memory_window_retries_after_dismissal(memory_upkeep, monkeypatch):
+    from agent_sync import notify
+
+    main, _, dest = memory_upkeep
+    monkeypatch.setattr(notify, "in_terminal", lambda: False)
+    monkeypatch.setattr(notify.sys, "platform", "darwin")
+    available(monkeypatch, "osascript")
+    calls = dialogs(monkeypatch, (1, ""), (0, "Don't share\n"))
+    assert main(["run", "--force"]) == 0
+    assert load().mirror_memory is None and not dest.exists()
+    assert main(["run", "--force"]) == 0
+    assert load().mirror_memory is False and not dest.exists()
+    assert main(["run", "--force"]) == 0
+    assert len(calls) == 2
+    assert all('buttons {"Don\'t share", "Share"}' in args[2] for args, _ in calls)

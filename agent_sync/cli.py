@@ -15,7 +15,7 @@
     agent-sync agents add <id>...       choose agents to keep in step
     agent-sync agents remove <id>...    stop keeping agents in step and leave their files in place
     agent-sync inventory                show loaded plugins, MCP servers, skills, and upkeep findings
-    agent-sync pending                  list pending removals and unacknowledged warnings
+    agent-sync pending                  list pending choices and unacknowledged warnings
     agent-sync status                   last run, log location, enabled CLI versions
     agent-sync review [--no-open]        compare settings and choose which versions to keep in a local page
     agent-sync review --list             print the comparison and recommendations in the terminal
@@ -109,6 +109,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         if not dry:
             log.prune(cfg.log_days)
             saved = stack.enter_context(backups.during(cfg.home, cfg.state_dir / "backups", cfg.backup_days))
+        guarded(log, "memory-sharing choice", lambda: ask_to_share_memory(cfg, log, dry, stack))
         found = membership.untracked(cfg, membership.available(cfg))
         if found:
             names = ", ".join(TOOLS[agent].name for agent in found)
@@ -153,6 +154,21 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
 
 
 GUARDED = (OSError, ValueError, TypeError, KeyError)   # JSON and Unicode decode errors are ValueErrors
+
+
+def ask_to_share_memory(cfg: Config, log: Log, dry: bool, stack: ExitStack) -> None:
+    if (question := memory.question(cfg)) is None:
+        return
+    if dry:
+        log("info", f"Would ask: {question} [y/N]")
+        return
+    answer = notify.memory_choice(cfg, log, question)
+    if answer is None:
+        log("info", "Memory sharing is waiting for your choice. No memory was shared this run.")
+        stack.callback(notify.memory_inbox, cfg, log, question, memory.CHOICE)
+        return
+    save_setting(cfg.home, "mirror_memory", answer)
+    cfg.mirror_memory = answer
 
 
 def guarded(log: Log, label: str, action: Callable[[], object]) -> None:
@@ -433,14 +449,32 @@ def show_inventory() -> int:
 def pending_command(approve: list[str], keep: list[str], ack: bool) -> int:
     cfg = load()
     with ExitStack() as stack:
-        if (approve or keep or ack) and not stack.enter_context(run_lock(cfg.state_dir / "lock")):
-            print("another agent-sync run is in progress. Try again when it finishes.", file=sys.stderr)
+        editing = bool(approve or keep or ack)
+        if editing:
+            if not stack.enter_context(run_lock(cfg.state_dir / "lock")):
+                print("another agent-sync run is in progress. Try again when it finishes.", file=sys.stderr)
+                return 1
+            cfg = load()
+        memory_prompt = memory.question(cfg)
+        share, decline = memory.CHOICE in approve, memory.CHOICE in keep
+        if share and decline:
+            print("Choose either Share or Don't share for memory sharing.", file=sys.stderr)
             return 1
+        if share or decline:
+            if memory_prompt is None:
+                print("There is no pending memory-sharing choice.", file=sys.stderr)
+                return 1
+            approve = [key for key in approve if key != memory.CHOICE]
+            keep = [key for key in keep if key != memory.CHOICE]
         entries = pending.load(cfg.state_dir)
         unknown = sorted((set(approve) | set(keep)) - entries.keys())
         if unknown:
             print(f"Unknown pending removal key(s): {', '.join(unknown)}", file=sys.stderr)
             return 1
+        if share or decline or keep:
+            stack.enter_context(backups.during(cfg.home, cfg.state_dir / "backups", cfg.backup_days))
+        if share or decline:
+            save_setting(cfg.home, "mirror_memory", share)
         if approve or keep:
             for key in approve:
                 entries[key]["approved"] = True
@@ -449,7 +483,7 @@ def pending_command(approve: list[str], keep: list[str], ack: bool) -> int:
                 for key in set(keep):
                     del entries[key]
             save_baselines(cfg.state_dir / pending.FILENAME, entries)
-        if ack or not (approve or keep):
+        if ack or not editing:
             acknowledgements = WarningAcks(cfg.state_dir)
             log = Log(cfg.log_file, write=False)
             warnings = acknowledgements.unseen(log.recent_warnings(cfg.log_days))
@@ -463,6 +497,10 @@ def pending_command(approve: list[str], keep: list[str], ack: bool) -> int:
                     print(f"  {key} | {item['what']} | since {since} | approved {approved}")
                 if not entries:
                     print("  None")
+                if memory_prompt:
+                    print(f"Pending memory sharing\n  {memory_prompt}\n"
+                          "  agent-sync pending --approve memory-sharing\n"
+                          "  agent-sync pending --keep memory-sharing")
                 print("Unacknowledged recent warnings")
                 for warning in warnings or ["None"]:
                     print(f"  {warning}")
@@ -504,7 +542,7 @@ def main(argv: list[str] | None = None) -> int:
         command = membership_commands.add_parser(action, help=f"{action} agents")
         command.add_argument("ids", metavar="id", nargs="+")
     sub.add_parser("inventory", help="show loaded plugins, MCP servers, skills, and upkeep findings")
-    p = sub.add_parser("pending", help="list or act on pending removals and warnings")
+    p = sub.add_parser("pending", help="list or act on pending removals, memory sharing and warnings")
     p.add_argument("--approve", metavar="KEY", nargs="+", default=[], action="extend")
     p.add_argument("--keep", metavar="KEY", nargs="+", default=[], action="extend")
     p.add_argument("--ack", action="store_true", help="acknowledge all recent warnings")

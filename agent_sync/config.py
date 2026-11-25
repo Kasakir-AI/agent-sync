@@ -41,7 +41,7 @@ class Config:
     keep_mcp_versions: list[str] = field(default_factory=list)  # MCP servers whose pinned package version stays
     mcp_major_updates: bool = False                          # let a pinned MCP package move to a new major version
     mirror_instructions: bool = False                        # global instructions across enabled tools
-    mirror_memory: bool = True                               # Claude Code's home-project memory
+    mirror_memory: bool | None = None                        # ask before sharing Claude Code's memory
     private_memory: list[str] = field(default_factory=list)   # memory notes kept in Claude Code
     share_memory: list[str] = field(default_factory=list)     # sensitive notes allowed to be shared
     status_line: bool = True                                 # one status line in every CLI that supports it
@@ -104,13 +104,9 @@ def load(path: Path | None = None, home: Path | None = None) -> Config:
 
 def save_setting(home: Path, key: str, value) -> None:
     """Write one top-level setting into the config file, keeping everything else in it."""
-    from .tomledit import set_value
-    path = config_path(home)
-    text = path.read_text() if path.exists() else ""
-    new = set_value(text, None, key, value)
-    if new != text:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(new)
+    from . import tomledit, writes
+
+    writes.update_text(config_path(home), lambda text: tomledit.set_value(text, None, key, value))
 
 
 def parse(text: str, path: Path, home: Path) -> Config:
@@ -133,6 +129,8 @@ def parse(text: str, path: Path, home: Path) -> Config:
         raise ValueError(f"source {cfg.source!r} must be enabled in agents")
     if not isinstance(cfg.notify, bool):
         raise ValueError("notify must be true or false")
+    if cfg.mirror_memory is not None and not isinstance(cfg.mirror_memory, bool):
+        raise ValueError("mirror_memory must be true or false")
     if type(cfg.backup_days) is not int or cfg.backup_days < 0:
         raise ValueError("backup_days must be a nonnegative whole number")
     if not isinstance(cfg.status_line, bool):
