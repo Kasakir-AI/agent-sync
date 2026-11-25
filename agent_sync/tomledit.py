@@ -56,7 +56,7 @@ def value_text(value) -> str:
     raise TypeError(f"can't write {type(value).__name__} to TOML")
 
 
-def value_end(text: str, i: int) -> int:
+def value_end(text: str, i: int, delimiters: str = "") -> int:
     """Index just past the value starting at text[i], before any comment after it on its last line."""
     depth, last = 0, i
     while i < len(text):
@@ -73,6 +73,8 @@ def value_end(text: str, i: int) -> int:
             last = i
             continue
         c = text[i]
+        if depth == 0 and c in delimiters:
+            return last
         if c == "#" or (c == "\n" and depth <= 0):
             if depth <= 0:
                 return last
@@ -104,7 +106,7 @@ def sections(text: str) -> list[Section]:
     while i < len(text):
         eol = text.find("\n", i)
         eol = len(text) if eol < 0 else eol
-        line = text[i:eol]
+        line = text[i:eol].removesuffix("\r")
         m = HEADER.match(line)
         k = KEY.match(text, i)
         if m:
@@ -178,6 +180,29 @@ def remove_value(text: str, table: Table | None, key: str) -> str:
         return text
     eol = text.find("\n", hit[3])
     return text[:hit[1]] + (text[eol + 1:] if eol >= 0 else "")
+
+
+def remove_inline_entry(text: str, table: Table | None, key: str, name: str) -> str:
+    """Remove one member of an inline table without changing its other values."""
+    s = section(text, table)
+    hit = next((k for k in s.keys if k[0] == key), None) if s else None
+    if not hit or text[hit[2]] != "{":
+        return text
+    at, comma = hit[2] + 1, None
+    while entry := KEY.match(text, at):
+        end = value_end(text, entry.end(), ",}")
+        sep = end
+        while text[sep] in " \t":
+            sep += 1
+        more = text[sep] == ","
+        if key_name(entry[1]) == name:
+            if more:
+                return text[:at] + text[sep + 1:]
+            return text[:comma if comma is not None else at] + text[end:]
+        if not more:
+            break
+        comma, at = sep, sep + 1
+    return text
 
 
 def set_table(text: str, table: Table, values: dict) -> str:

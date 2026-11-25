@@ -78,9 +78,34 @@ def test_cursor_reads_one_folder_per_path_and_claude_code_plugins(tmp_path):
         "~/.agents/skills (package backnotprop/pstack)"]
 
 
-def test_a_codex_plugin_from_its_online_catalog_does_not_count(tmp_path):
+def test_a_codex_plugin_from_its_online_catalog_counts(tmp_path):
     package(tmp_path, "obra/superpowers", ["brainstorming"])
     codex_plugin(tmp_path, "superpowers@openai-curated-remote", ["brainstorming"])
     (tmp_path / ".codex/plugins/cache/openai-curated-remote/superpowers/.codex-remote-plugin-install.json").write_text(
         '{"schema_version": 1}')
-    assert duplicates.report(tmp_path) == []          # Codex loads none of their skills
+    assert duplicates.report(tmp_path) == [
+        "Codex loads brainstorming more than once, from Codex plugin superpowers@openai-curated-remote; "
+        "~/.agents/skills (package obra/superpowers)"]
+
+
+def test_antigravity_and_gemini_plugin_skills_count_in_duplicate_checks(tmp_path):
+    from tests.test_inventory import write
+
+    native = tmp_path / ".gemini/config/skills"
+    shared = tmp_path / ".agents/skills"
+    agy = tmp_path / ".gemini/config/plugins/pack"
+    gemini = tmp_path / ".gemini/extensions/pack"
+    write(tmp_path, ".gemini/config/config.json", {"plugins": {
+        "pack": {"installedFrom": {"marketplace": "agy", "version": "2.0.0"}}}})
+    write(agy, "plugin.json", {"version": "2.0.0"})
+    write(gemini, "gemini-extension.json", {"version": "2.0.0"})
+    for root in (native, shared, agy / "skills", gemini / "skills"):
+        make_skill(root, "notes")
+    enabled = ("gemini", "antigravity")
+    assert duplicates.report(tmp_path, enabled=enabled) == [
+        "Gemini CLI loads notes more than once, from Gemini CLI plugin pack@extensions; ~/.agents/skills",
+        "Antigravity loads notes more than once, from Antigravity plugin pack@agy; ~/.gemini/config/skills"]
+    views = duplicates.views(tmp_path, enabled=enabled)
+    assert duplicates.doubled(tmp_path, views, native, "notes", native / "notes", readers=("antigravity",)) == [
+        "antigravity"]
+    assert duplicates.doubled(tmp_path, views, shared, "notes", shared / "notes", readers=("gemini",)) == ["gemini"]

@@ -63,23 +63,34 @@ def own(home: Path, source: str, skip: list[str]) -> dict[str, Path]:
     return out
 
 
-def plugins(home: Path) -> dict[str, Path]:
-    """plugin@marketplace -> folder of every Claude Code plugin installed for your user and not switched off."""
+def plugin_installs(home: Path) -> dict[str, tuple[Path, str, bool]]:
+    """The path, version and enabled state of each installed Claude Code user plugin."""
     try:
         installed = json.loads((home / ".claude/plugins/installed_plugins.json").read_text()).get("plugins") or {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         return {}
     try:
         enabled = json.loads((home / ".claude/settings.json").read_text()).get("enabledPlugins") or {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         enabled = {}
     out = {}
-    for pid, installs in sorted(installed.items()):
-        for meta in installs if isinstance(installs, list) else []:
-            root = Path(meta.get("installPath") or "")
-            if meta.get("scope") == "user" and enabled.get(pid) is not False and root.is_dir():
-                out[pid] = root
+    for pid, installs in sorted(installed.items()) if isinstance(installed, dict) else ():
+        for meta in installs if isinstance(installs, list) else ():
+            if not isinstance(meta, dict) or meta.get("scope") != "user":
+                continue
+            install_path = meta.get("installPath")
+            if not isinstance(install_path, str) or not install_path:
+                continue
+            root = Path(install_path)
+            if root.is_dir():
+                loads = not isinstance(enabled, dict) or enabled.get(pid) is not False
+                out[pid] = root, str(meta.get("version") or ""), loads
     return out
+
+
+def plugins(home: Path) -> dict[str, Path]:
+    """The loaded Claude Code user plugins and their paths."""
+    return {pid: root for pid, (root, _, loads) in plugin_installs(home).items() if loads}
 
 
 def plugin_skill_dirs(root: Path) -> dict[str, Path]:
@@ -89,7 +100,10 @@ def plugin_skill_dirs(root: Path) -> dict[str, Path]:
         extra = json.loads((root / ".claude-plugin/plugin.json").read_text()).get("skills") or []
     except (OSError, ValueError):
         extra = []
-    paths += [root / x for x in ([extra] if isinstance(extra, str) else extra) if isinstance(x, str)]
+    if isinstance(extra, str):
+        extra = [extra]
+    if isinstance(extra, list):
+        paths += [root / x for x in extra if isinstance(x, str)]
     out = {}
     for path in paths:
         if (path / "SKILL.md").is_file():

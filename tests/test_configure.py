@@ -124,3 +124,11 @@ def test_agents_menu_only_offers_enabled_sources(tmp_path, monkeypatch):
     assert any("Gemini CLI (installed)" in line for line in said)
     first = said.index(next(line for line in said if "Now: Claude Code" in line))
     assert "Codex" not in "\n".join(said[first:first + 4])
+
+
+def test_keep_mcp_versions_can_be_edited_and_reloaded(tmp_path):
+    ed, path, _ = editor(tmp_path, ["15", "1", "rea", "", "s", "q"])
+    assert ed.cfg.keep_mcp_versions == []
+    ed.menu()
+    assert ed.cfg.keep_mcp_versions == ["rea"]
+    assert tomllib.loads(path.read_text())["keep_mcp_versions"] == ["rea"]

@@ -14,6 +14,7 @@
     agent-sync agents                   list supported agents and offer to enable installed agents
     agent-sync agents add <id>...       choose agents to keep in step
     agent-sync agents remove <id>...    stop keeping agents in step and leave their files in place
+    agent-sync inventory                show loaded plugins, MCP servers, skills, and upkeep findings
     agent-sync status                   last run, log location, enabled CLI versions
     agent-sync review [--no-open]        compare settings and choose which versions to keep in a local page
     agent-sync review --list             print the comparison and recommendations in the terminal
@@ -39,8 +40,10 @@ from . import (
     checks,
     duplicates,
     instructions,
+    inventory,
     mcp,
     membership,
+    plugins,
     review,
     roles,
     schedule,
@@ -152,13 +155,18 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 log("ok", "no tool loads a skill twice")
         except OSError as e:
             log("FAIL", f"duplicate skills check: {e}")
+        log.lines(plugins.twice(cfg.home, enabled=cfg.agents), "WARN")
         if cfg.mirror_roles:
             log.lines(roles.mirror(cfg.home, cfg.source, dry, enabled=cfg.agents))
             log("ok", "model roles mirrored")
         if cfg.mirror_mcp:
             try:
                 log.lines(writes.repair_mcp(cfg.home, cfg, dry))
+                backups = cfg.state_dir / "backups"
+                log.lines(mcp.dedupe(cfg.home, dry, backups, enabled=cfg.agents))
+                log.lines(mcp.pins(cfg.home, dry, enabled=cfg.agents, keep=cfg.keep_mcp_versions))
                 log.lines(mcp.mirror(cfg.home, cfg.source, dry, enabled=cfg.agents))
+                log.lines(mcp.same_server_twice(cfg.home, enabled=cfg.agents), "WARN")
                 log("ok", "MCP servers mirrored")
             except (ValueError, OSError) as e:
                 log("FAIL", f"MCP servers: {e}")
@@ -172,6 +180,9 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         log_review(cfg, log)
         if cfg.update_plugins:
             tools.update_plugins(log, dry, cfg.home, enabled=cfg.agents)
+            if ("codex" in cfg.agents and shutil.which("codex", path=tools.PATH)
+                    and (not dry or tools.started("codex", cfg.home))):
+                plugins.own_versions(cfg.home, dry, log, enabled=cfg.agents, state_dir=cfg.state_dir)
         if cfg.update_clis:
             tools.update_clis(log, cfg, dry)
             tools.update_prerequisites(log, dry)
@@ -279,6 +290,49 @@ def put_launcher() -> int:
     return 0
 
 
+def show_inventory() -> int:
+    cfg = load()
+    home, enabled = cfg.home, cfg.agents
+    latest = mcp.pin_lookup()
+    seen = duplicates.views(home, enabled=enabled)
+    settings = {tool: entries for _, readers, _, _, entries in mcp.settings_files(home, enabled)
+                for tool in readers}
+    for tool, found in inventory.plugins(home, enabled, include_disabled=True).items():
+        print(TOOLS[tool].name)
+        print(f"  Skills loaded: {len(seen[tool])}")
+        for plugin in found:
+            fmt = ""
+            if plugin.made_for == "claude" and tool != "claude":
+                fmt = " (Claude Code format)"
+            elif plugin.made_for:
+                fmt = f" (made for {TOOLS[plugin.made_for].name})"
+            off = "" if plugin.loads else " (not loaded)"
+            print(f"  Plugin {plugins.label(plugin)}{fmt}{off}")
+
+        servers = [(name, server, "settings") for name, server in settings.get(tool, {}).items()]
+        servers += [(name, server, f"plugin {plugin.id}") for plugin in found if plugin.loads
+                    for name, server in plugin.servers]
+        for name, server, origin in servers:
+            details = []
+            for _, package, version in mcp.npm_pins(server):
+                available = latest(package)
+                newer = f", {available} is out" if mcp.pin_update(version, available) else ""
+                details.append(f"{package} {version}{newer}")
+            pins = f" ({'; '.join(details)})" if details else ""
+            print(f"  MCP server {name} from {origin}{pins}")
+        print()
+
+    print("Problems found")
+    problems = (duplicates.report(home, cfg.allow_duplicate_skills, enabled=enabled)
+                + plugins.twice(home, enabled=enabled)
+                + mcp.dedupe(home, True, cfg.state_dir / "backups", enabled=enabled)
+                + mcp.same_server_twice(home, enabled=enabled)
+                + mcp.pins(home, True, enabled=enabled, keep=cfg.keep_mcp_versions, latest=latest))
+    for line in problems or ["None"]:
+        print(f"  {line}")
+    return 0
+
+
 def status() -> int:
     cfg = load()
     stamp = cfg.state_dir / "last-run"
@@ -313,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     for action in ("add", "remove"):
         command = membership_commands.add_parser(action, help=f"{action} agents")
         command.add_argument("ids", metavar="id", nargs="+")
+    sub.add_parser("inventory", help="show loaded plugins, MCP servers, skills, and upkeep findings")
     sub.add_parser("status", help="show the last run and versions")
     review_parser = sub.add_parser("review", help="compare settings and choose which versions to keep")
     review_parser.add_argument("--list", action="store_true", help="print the comparison and recommendations")
@@ -332,4 +387,5 @@ def main(argv: list[str] | None = None) -> int:
         return configure.run(Path.home(), dry_run=lambda: run(force=False, echo=False, dry=True))
     if a.cmd == "install":
         return install(a.launcher)
-    return {"uninstall": uninstall, "launcher": put_launcher, "status": status}[a.cmd]()
+    return {"uninstall": uninstall, "launcher": put_launcher, "status": status,
+            "inventory": show_inventory}[a.cmd]()

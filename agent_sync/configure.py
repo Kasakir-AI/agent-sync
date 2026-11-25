@@ -309,6 +309,13 @@ class Editor:
         if new is not None:
             self.set("allow_duplicate_skills", new)
 
+    def mcp_versions(self) -> None:
+        self.explain("MCP versions to keep", "The upkeep updates pinned npm packages used by MCP servers.",
+                     "Name the servers whose pins should stay as they are.")
+        new = self.edit_list("Keep pinned versions for", self.cfg.keep_mcp_versions, "MCP server name", ["rea"])
+        if new is not None:
+            self.set("keep_mcp_versions", new)
+
     def cli_updates(self) -> None:
         now = self.cfg.update_clis
         self.explain("CLI updates", "Update the enabled agent CLIs during upkeep.",
@@ -474,6 +481,7 @@ class Editor:
             ("12", "Advanced", "skills CLI version, days of log", self.advanced),
             ("13", "Skills allowed twice", few(c.allow_duplicate_skills), self.duplicates),
             ("14", "Agents", few([TOOLS[agent].name for agent in c.agents]), self.agents),
+            ("15", "MCP versions to keep", few(c.keep_mcp_versions), self.mcp_versions),
             ("r", "pstack model roles", self.roles_path.name if self.roles_text is not None else "none yet",
              self.model_roles),
             ("i", "Global instructions", "opens your editor", self.instructions_file),

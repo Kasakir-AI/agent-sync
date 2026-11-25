@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import re
-import tomllib
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -15,7 +14,7 @@ from difflib import SequenceMatcher
 from enum import StrEnum
 from pathlib import Path
 
-from . import instructions, mcp, roles, skills
+from . import duplicates, instructions, inventory, mcp, roles, skills
 from .config import Config
 from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
 from .textmerge import (
@@ -308,23 +307,6 @@ def portable(server: dict) -> dict | None:
     return None
 
 
-def plugin_servers(root: Path) -> Iterator[tuple[Path, str, dict]]:
-    """(file, name, server) for the MCP servers a Claude Code plugin brings: its .mcp.json and plugin.json."""
-    manifest = root / ".claude-plugin/plugin.json"
-    sources = [root / ".mcp.json", manifest]
-    for path in sources:
-        try:
-            data = json.loads(read_text(path))
-        except (OSError, ValueError):
-            continue
-        servers = data.get("mcpServers", data if path != manifest else None) if isinstance(data, dict) else None
-        if isinstance(servers, str) and path == manifest:
-            sources.append(root / servers)
-        elif isinstance(servers, dict):
-            for name, server in sorted(servers.items()):
-                yield path, name, server
-
-
 ABSOLUTE = re.compile(r"(?<![\w/.~-])/(?!/)[^\s:\"',;{}()\[\]]+")
 
 
@@ -393,13 +375,13 @@ def scan_mcp(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Versi
                 body = json.dumps(value, indent=2, sort_keys=True)
                 yield name, make_version("mcp", name, readers, path, body, Origin.SETTINGS, key=name,
                                          missing=missing_paths(value))
-    for pid, root in (skills.plugins(home) if "claude" in cfg.agents else {}).items():
-        for path, name, server in plugin_servers(root):
-            if (value := portable(server)) is not None:
-                body = json.dumps(value, indent=2, sort_keys=True)
-                body = body.replace("${CLAUDE_PLUGIN_ROOT}", json.dumps(str(root))[1:-1])
-                yield name, make_version("mcp", name, ("claude",), path, body, Origin.PLUGIN,
-                                         f"from plugin {pid}", key=name)
+    for tool, plugins in inventory.plugins(home, cfg.agents).items():
+        for plugin in plugins:
+            for path, (name, server) in zip(plugin.server_files, plugin.servers, strict=True):
+                if (value := portable(server)) is not None:
+                    body = json.dumps(value, indent=2, sort_keys=True)
+                    yield name, make_version("mcp", name, (tool,), path, body, Origin.PLUGIN,
+                                             f"from plugin {plugin.id}", key=name)
 
 
 def shown(home: Path, path: Path) -> str:
@@ -411,7 +393,7 @@ def shown(home: Path, path: Path) -> str:
 
 
 def fixed(version: Version) -> bool:
-    """An MCP server a Claude Code plugin provides: it counts as present, but is never copied or changed."""
+    """An MCP server a plugin provides: it counts as present, but is never copied or changed."""
     return version.origin == Origin.PLUGIN and bool(version.key)
 
 
@@ -694,20 +676,17 @@ def scan_plugins(home: Path, cfg: Config) -> dict[str, dict[str, list[Plugin]]]:
         name = plugin.id.split("@", 1)[0]
         plugins.setdefault(name, {}).setdefault(tool, []).append(plugin)
 
-    for pid, root in (skills.plugins(home) if "claude" in cfg.agents else {}).items():
-        add("claude", Plugin(pid, skills=len(skills.plugin_skill_dirs(root))))
-    config = home / TOOLS["codex"].mcp
-    if "codex" in cfg.agents and config.is_file():
-        for pid, entry in sorted(tomllib.loads(read_text(config)).get("plugins", {}).items()):
-            enabled = entry.get("enabled", True) if isinstance(entry, dict) else bool(entry)
-            add("codex", Plugin(pid, enabled=enabled))
-    cursor = home / ".cursor/plugins"
-    for path in sorted((cursor / "cache").glob("*/*")) if "cursor" in cfg.agents else ():
-        if path.is_dir():
-            add("cursor", Plugin(f"{path.name}@{path.parent.name}"))
-    for path in sorted((cursor / "local").glob("*")) if "cursor" in cfg.agents else ():
-        if path.is_dir():
-            add("cursor", Plugin(path.name))
+    loaded = inventory.plugins(home, cfg.agents, include_disabled=True)
+    for tool, found in loaded.items():
+        for plugin in found:
+            pid = plugin.id.removesuffix("@local") if tool == "cursor" else plugin.id
+            add(tool, Plugin(pid, enabled=plugin.loads, skills=plugin.skills))
+    if "codex" in cfg.agents:
+        seen = {plugin.id for plugin in loaded["codex"]}
+        for pid, entry in sorted((duplicates.codex_config(home).get("plugins") or {}).items()):
+            if pid not in seen:
+                enabled = entry.get("enabled", True) if isinstance(entry, dict) else bool(entry)
+                add("codex", Plugin(pid, enabled=enabled))
     return dict(sorted(plugins.items()))
 
 
@@ -729,6 +708,11 @@ def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
         group.confirmed = {name: frozenset(lines) for name, lines in (kept or {}).items()
                            if isinstance(lines, list) and all(isinstance(line, str) for line in lines)}
     managed = Counter(meta.get("source") or "Unknown package" for meta in locked.values())
+    plugin_endpoints: dict[str, set[str]] = {}
+    for group in groups:
+        for version in group.versions:
+            if fixed(version) and (identity := inventory.endpoint(json.loads(version.body))):
+                plugin_endpoints.setdefault(identity, set()).update(version.tools)
     for group in [group for group in groups if all(fixed(version) for version in group.versions)]:
         groups.remove(group)
         managed.update(version.note.removeprefix("from plugin ") + " plugin MCP servers" for version in group.versions)
@@ -742,6 +726,8 @@ def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
         have = group_tools(group)
         if group.kind == "mcp":
             have.update(tool for tool, servers in configured_mcp.items() if group.name in servers)
+            for version in group.versions:
+                have.update(plugin_endpoints.get(inventory.endpoint(json.loads(version.body)), ()))
         location = KINDS[group.kind].location
         if not group.scoped_rule:
             group.missing = tuple(tool for tool in cfg.agents if tool not in have and location(home, group.name, tool))

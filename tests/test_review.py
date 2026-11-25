@@ -662,3 +662,27 @@ def test_lines_only_one_tool_has_are_checked_once_and_a_new_one_asks_again(tmp_p
     group, = review_home(tmp_path).groups
     assert group.status == "check"
     assert group.note == "Codex has 1 line Claude Code doesn't that you haven't checked yet"
+
+
+def test_review_recognizes_plugin_servers_from_all_enabled_tools(tmp_path):
+    from tests.test_inventory import codex_plugin
+    from tests.test_inventory import write as plugin_file
+
+    endpoint = "https://example.com/mcp"
+    plug = codex_plugin(tmp_path, "pack@remote", "1.0.0", remote=True)
+    plugin_file(plug, ".mcp.json", {"alias": {"url": endpoint + "/"}})
+    plugin_file(tmp_path, ".claude.json", {"mcpServers": {"pack": {"url": endpoint}}})
+    plugin_file(tmp_path, ".cursor/plugins/local/pack/mcp.json", {"pack": {"url": endpoint}})
+    plugin_file(tmp_path, ".gemini/extensions/pack/gemini-extension.json",
+                {"mcpServers": {"pack": {"httpUrl": endpoint}}})
+    plugin_file(tmp_path, ".gemini/config/config.json",
+                {"plugins": {"pack": {"installedFrom": {"marketplace": "agy", "version": "1.0.0"}}}})
+    plugin_file(tmp_path, ".gemini/config/plugins/pack/mcp_config.json", {"pack": {"serverUrl": endpoint}})
+    cfg = Config(home=tmp_path, agents=["claude", "codex", "cursor", "gemini", "antigravity"])
+    scanned = review.scan(tmp_path, cfg, ["mcp"])
+    group, = scanned.groups
+    assert group.missing == ()
+    assert {v.tools for v in group.versions if review.fixed(v)} == {("cursor",), ("gemini",), ("antigravity",)}
+    assert scanned.managed["pack@remote plugin MCP servers"] == 1
+    setting = next(v for v in group.versions if v.origin == review.Origin.SETTINGS)
+    assert writes.plan(tmp_path, scanned, {group.key: setting.id}, "claude") == []

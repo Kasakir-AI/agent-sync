@@ -3,11 +3,12 @@
 What each tool loads (only what is switched on):
 - Claude Code: ~/.claude/skills and the skills of its enabled plugins.
 - Codex: ~/.agents/skills, ~/.codex/skills (its built-in ones in .system) and the skills of the enabled plugins
-  in its config.toml,
+  including its online catalog,
   minus the SKILL.md paths switched off in [[skills.config]] in ~/.codex/config.toml.
 - Cursor: ~/.agents/skills, ~/.cursor/skills, its built-in ~/.cursor/skills-cursor and its plugins, and with its
   third-party setting (on unless you switched it off) also ~/.claude/skills, ~/.codex/skills and the skills of
   Claude Code's enabled plugins. Of folders at the same path under these skills folders, Cursor reads the first.
+- Gemini CLI and Antigravity also load the skills of their extensions and plugins.
 Tools show a plugin's skill as plugin:name, so names are compared after the last colon, ignoring case.
 Two paths to one folder (a link) are one skill.
 """
@@ -19,7 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import skills
+from . import inventory, skills
 from .registry import DEFAULT_AGENTS, TOOLS
 
 SHOWN = 8                # names listed in a report line
@@ -118,34 +119,25 @@ def views(home: Path, *, enabled=DEFAULT_AGENTS) -> dict[str, list[Seen]]:
     """tool -> every skill it loads."""
     shared = [Seen(skill_name(d), shared_where(home, d), d) for d in walk(home / ".agents/skills")]
 
-    claude = [Seen(skill_name(d), claude_where(home, d), d) for d in walk(home / ".claude/skills")]
-    for pid, root in skills.plugins(home).items():
-        claude += [Seen(skill_name(d), f"Claude Code plugin {pid}", d) for d in skills.plugin_skill_dirs(root).values()]
+    enabled = tuple(enabled)
+    loaded = inventory.plugins(home, (*enabled, "claude") if "cursor" in enabled else enabled)
 
-    config = codex_config(home)
-    off = codex_off(config)
+    def plugin_skills(tool: str) -> list[Seen]:
+        return [Seen(skill_name(d), f"{TOOLS[tool].name} plugin {p.id.removesuffix('@local')}", d)
+                for p in loaded.get(tool, []) for d in p.skill_dirs]
+
+    claude = [Seen(skill_name(d), claude_where(home, d), d) for d in walk(home / ".claude/skills")]
+    claude += plugin_skills("claude")
+
+    off = codex_off(codex_config(home))
     codex = shared + [Seen(skill_name(d), "~/.codex/skills", d) for d in walk(home / ".codex/skills")]
     codex += [Seen(skill_name(d), "Codex built-in", d) for d in walk(home / ".codex/skills/.system")]
-    # Plugins from Codex's online catalog (a .codex-remote-plugin-install.json in the cache, no [plugins] entry)
-    # are left out: Codex 0.171 lists them as enabled but loads none of their skills.
-    for pid, entry in (config.get("plugins") or {}).items():
-        plugin_enabled = entry.get("enabled", True) if isinstance(entry, dict) else bool(entry)
-        name, _, market = pid.partition("@")
-        version = newest(home / ".codex/plugins/cache" / market / name) if plugin_enabled and market else None
-        if version:
-            codex += [Seen(skill_name(d), f"Codex plugin {pid}", d) for d in walk(version / "skills")]
+    codex += plugin_skills("codex")
     codex = [s for s in codex if os.path.realpath(s.path) not in off]
 
     cursor = shared + [Seen(skill_name(d), "~/.cursor/skills", d) for d in walk(home / ".cursor/skills")]
     cursor += [Seen(skill_name(d), "Cursor built-in", d) for d in walk(home / ".cursor/skills-cursor")]
-    plugins = home / ".cursor/plugins"
-    for folder in sorted((plugins / "cache").glob("*/*")):
-        version = newest(folder)
-        if version:
-            where = f"Cursor plugin {folder.name}@{folder.parent.name}"
-            cursor += [Seen(skill_name(d), where, d) for d in walk(version / "skills")]
-    for folder in sorted((plugins / "local").glob("*")):
-        cursor += [Seen(skill_name(d), f"Cursor plugin {folder.name}", d) for d in walk(folder / "skills")]
+    cursor += plugin_skills("cursor")
     third_party = [s for s in claude + codex
                    if s.where.startswith(("~/.claude/skills", "~/.codex/skills", "Claude Code plugin"))]
     cursor = unique(cursor + third_party)
@@ -163,10 +155,12 @@ def views(home: Path, *, enabled=DEFAULT_AGENTS) -> dict[str, list[Seen]]:
         alias_names = {skill.name for skill in shared}
         native = skills.EXTRA_ROOTS["gemini"]
         found["gemini"] = unique(shared + [Seen(skill_name(d), f"~/{native}", d)
-                                           for d in walk(home / native) if skill_name(d) not in alias_names])
+                                           for d in walk(home / native) if skill_name(d) not in alias_names]
+                                 + plugin_skills("gemini"))
     if "antigravity" in enabled:
         root = TOOLS["antigravity"].skills_dir
-        found["antigravity"] = unique([Seen(skill_name(d), f"~/{root}", d) for d in walk(home / root)])
+        found["antigravity"] = unique([Seen(skill_name(d), f"~/{root}", d) for d in walk(home / root)]
+                                      + plugin_skills("antigravity"))
     return {tool: found[tool] for tool in TOOLS if tool in enabled}
 
 

@@ -210,8 +210,24 @@ def write_skill(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
 MCP_KEYS = ("command", "args", "env", "url")
 
 
-def codex_mcp_text(text: str, name: str, winner: dict) -> str:
+def codex_mcp_text(text: str, name: str, winner: dict | None) -> str:
     current = tomllib.loads(text).get("mcp_servers", {})
+    if winner is None:
+        table = ("mcp_servers", name)
+        updated = text
+        for section in reversed(tomledit.sections(text)):
+            if section.parts[:2] == table:
+                end = section.body
+                if section.keys:
+                    eol = text.find("\n", section.keys[-1][3])
+                    end = len(text) if eol < 0 else eol + 1
+                updated = updated[:section.start] + updated[end:]
+        updated = tomledit.remove_value(updated, ("mcp_servers",), name)
+        updated = tomledit.remove_inline_entry(updated, None, "mcp_servers", name)
+        expected = {key: value for key, value in current.items() if key != name}
+        if tomllib.loads(updated).get("mcp_servers", {}) != expected:
+            raise ValueError(f"could not remove MCP server {name!r} from its TOML table")
+        return updated
     server = current.get(name, {})
     settings = {key: value for key, value in server.items() if key not in MCP_KEYS}
     if tomledit.has_value(text, None, "mcp_servers"):
@@ -237,16 +253,19 @@ def codex_mcp_text(text: str, name: str, winner: dict) -> str:
     return updated
 
 
-def json_mcp_text(text: str, name: str, winner: dict, *, aliases: tuple[str, ...] = (),
+def json_mcp_text(text: str, name: str, winner: dict | None, *, aliases: tuple[str, ...] = (),
                   typed: bool = True) -> str:
     data = json.loads(text) if text.strip() else {}
     servers = data.get("mcpServers") or {}
-    entry = {key: value for key, value in (servers.get(name) or {}).items()
-             if key not in (*MCP_KEYS, *aliases) or key in winner}
-    entry.update(winner)
-    if typed:
-        entry["type"] = "stdio" if "command" in winner else "http"
-    servers[name] = entry
+    if winner is None:
+        servers.pop(name, None)
+    else:
+        entry = {key: value for key, value in (servers.get(name) or {}).items()
+                 if key not in (*MCP_KEYS, *aliases) or key in winner}
+        entry.update(winner)
+        if typed:
+            entry["type"] = "stdio" if "command" in winner else "http"
+        servers[name] = entry
     data["mcpServers"] = servers
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
@@ -306,7 +325,10 @@ def edits(steps: list[Step]) -> list[Edit]:
 def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
     """Write only what changes: stage each file beside its target, back up the originals, then rename into place.
     (`remember` then records the result for the next review.)"""
-    changes = edits(steps)
+    return apply_edits(home, edits(steps), backup_dir)
+
+
+def apply_edits(home: Path, changes: list[Edit], backup_dir: Path) -> list[str]:
     staged: list[tuple[Edit, Path]] = []
     try:
         for edit in changes:
