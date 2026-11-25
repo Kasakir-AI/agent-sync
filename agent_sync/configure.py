@@ -23,7 +23,8 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("mirror_skills", "Copy your own skills (not from a package) from the source tool to the others"),
     ("mirror_roles", "Copy pstack's model roles from the source tool to the others"),
     ("mirror_mcp", "Add the source tool's MCP servers to the other tools (never deletes any)"),
-    ("mirror_instructions", "Copy the global instructions (CLAUDE.md / AGENTS.md) to the other tools"),
+    ("mirror_instructions", "Share global instructions across enabled tools"),
+    ("mirror_memory", "Share Claude Code's home-project memory with the other tools"),
     ("update_plugins", "Update plugins and extensions for enabled agents"),
     ("remove_dropped_skills", "Uninstall skills a skill package stops shipping"),
     ("update_self", "Update agent-sync itself when a new version is out"),
@@ -238,7 +239,7 @@ class Editor:
             if pick == "launcher" and not self.cfg.launcher:
                 self.say("  The next upkeep puts it on the Desktop (or run: agent-sync launcher).")
             if pick == "mirror_instructions" and not self.cfg.mirror_instructions:
-                self.say("  This writes a marked block into the other tools' instruction files; their own text stays.")
+                self.say("  The first run shares the source tool's instructions and keeps existing notes in place.")
             self.set(pick, not getattr(self.cfg, pick))
 
     def skip(self) -> None:
@@ -410,11 +411,10 @@ class Editor:
 
     def instructions_file(self) -> None:
         paths = instructions.files(self.home, self.cfg.agents)
-        src = "claude" if self.cfg.source == "cursor" and "claude" in paths else self.cfg.source
-        path = paths[src]
+        path = paths[self.cfg.source]
         state = "on" if self.cfg.mirror_instructions else "off (switch it on under 'What to keep in step')"
         self.explain("Global instructions", f"{self.short(path)} opens in your editor.",
-                     f"Copying it to the other tools is {state}.")
+                     f"Sharing instructions across enabled tools is {state}.")
         if self.yes("Open it now?", True):
             open_in_editor(path, self.say)
 

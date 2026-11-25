@@ -52,10 +52,10 @@ def rows(target: str, winner: str) -> list[tuple[str, str]]:
     return [(tag, line) for tag, line, _ in marked_rows(target, winner)]
 
 
-def marked_rows(target: str, winner: str) -> list[tuple[str, str, int | None]]:
+def marked_rows(target: str, winner: str, *, protected: set[int] | None = None) -> list[tuple[str, str, int | None]]:
     """`rows`, with the position in `winner` of the line that replaces each "-" line (None on the other rows)."""
     old, new = target.splitlines(), winner.splitlines()
-    if extends(target, winner):
+    if not protected and extends(target, winner):
         wanted, found, out = keys(winner), 0, []
         for line in old:
             matched = meaningful(line) and found < len(wanted) and wanted[found] == line.rstrip()
@@ -63,14 +63,18 @@ def marked_rows(target: str, winner: str) -> list[tuple[str, str, int | None]]:
             out.append((" " if matched or not meaningful(line) else "=", line, None))
         return out
     out = []
-    match = SequenceMatcher(None, [line.rstrip() for line in old], [line.rstrip() for line in new], autojunk=False)
+    old_keys = [None if protected and index in protected else line.rstrip() for index, line in enumerate(old)]
+    match = SequenceMatcher(None, old_keys, [line.rstrip() for line in new], autojunk=False)
     for tag, i1, i2, j1, j2 in match.get_opcodes():
         if tag == "equal":
             out += [(" ", line, None) for line in old[i1:i2]]
             continue
         added = [(at, line) for at, line in enumerate(new[j1:j2], j1) if not comment(line)]
         start = 0
-        for line in old[i1:i2]:
+        for at, line in enumerate(old[i1:i2], i1):
+            if protected and at in protected:
+                out.append((" ", line, None))
+                continue
             index = partner(line, [other for _, other in added[start:]])
             if index is None:
                 out.append(("=", line, None))
@@ -82,11 +86,11 @@ def marked_rows(target: str, winner: str) -> list[tuple[str, str, int | None]]:
     return out
 
 
-def merge(target: str, winner: str, drop: frozenset[str] = frozenset()) -> str:
+def merge(target: str, winner: str, drop: frozenset[str] = frozenset(), *, protected: set[int] | None = None) -> str:
     """Write the winner's lines into `target` and keep the lines only `target` has, except those in `drop`."""
-    marked = rows(target, winner)
-    lines = [line for tag, line in marked if tag != "-" and not (tag == "=" and line.rstrip() in drop)]
-    if len(lines) == len(marked) and extends(target, winner):
+    marked = marked_rows(target, winner, protected=protected)
+    lines = [line for tag, line, _ in marked if tag != "-" and not (tag == "=" and line.rstrip() in drop)]
+    if lines == target.splitlines():
         return target
     return "\n".join(lines) + "\n" if lines else ""
 

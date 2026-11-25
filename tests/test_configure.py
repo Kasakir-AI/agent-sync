@@ -124,3 +124,12 @@ def test_agents_menu_only_offers_enabled_sources(tmp_path, monkeypatch):
     assert any("Gemini CLI (installed)" in line for line in said)
     first = said.index(next(line for line in said if "Now: Claude Code" in line))
     assert "Codex" not in "\n".join(said[first:first + 4])
+
+
+def test_shared_memory_is_off_by_default_and_can_be_enabled(tmp_path):
+    ed, path, said = editor(tmp_path, ["3", "5", "", "s", "q"])
+    assert ed.cfg.mirror_memory is False
+    ed.menu()
+    assert any("Share Claude Code's home-project memory" in line for line in said)
+    assert ed.cfg.mirror_memory is True
+    assert tomllib.loads(path.read_text())["mirror_memory"] is True
