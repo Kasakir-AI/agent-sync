@@ -41,6 +41,7 @@ class Config:
     warn_models: list[str] = field(default_factory=list)     # warn when a model name containing one of these appears
     update_clis: bool | list[str] = True                     # true, false, or a list like ["claude", "codex"]
     update_plugins: bool = True                              # plugins and extensions for enabled agents
+    update_mcp_programs: bool = True                          # executables used by enabled agents' MCP servers
     cli_commands: dict[str, list[str]] = field(default_factory=dict)   # your own update command per CLI
     install_commands: dict[str, list[str]] = field(default_factory=dict)  # your own install command for setup
     extra_steps: list[dict] = field(default_factory=list)    # [{name = "...", command = ["..."]}] run at the end
@@ -72,8 +73,8 @@ class Config:
 KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
         "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "allow_duplicate_skills",
         "mirror_instructions", "mirror_memory", "warn_models", "keep_mcp_versions",
-        "update_clis", "update_plugins", "cli_commands", "install_commands", "extra_steps", "launcher",
-        "update_self", "log_days")
+        "update_clis", "update_plugins", "update_mcp_programs", "cli_commands", "install_commands", "extra_steps",
+        "launcher", "update_self", "log_days")
 
 
 def config_path(home: Path) -> Path:

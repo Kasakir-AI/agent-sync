@@ -26,6 +26,7 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("mirror_instructions", "Share global instructions across enabled tools"),
     ("mirror_memory", "Share Claude Code's home-project memory with the other tools"),
     ("update_plugins", "Update plugins and extensions for enabled agents"),
+    ("update_mcp_programs", "Update programs used by enabled agents' MCP servers"),
     ("remove_dropped_skills", "Uninstall skills a skill package stops shipping"),
     ("update_self", "Update agent-sync itself when a new version is out"),
     ("launcher", "Keep the double-click \"Agent Upkeep\" launcher on the Desktop (macOS)"),
