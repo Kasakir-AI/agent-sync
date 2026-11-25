@@ -1,6 +1,6 @@
 import json
 
-from agent_sync import review, writes
+from agent_sync import backups, review, writes
 from agent_sync.config import Config
 
 
@@ -48,9 +48,12 @@ def test_upkeep_replaces_stale_copies_with_the_working_one_and_keeps_tool_settin
     assert [line.split(" (")[0] for line in dry] == ["would update ~/.claude.json", "would update ~/.cursor/mcp.json"]
     assert (tmp_path / ".claude.json").read_text() == before
 
-    lines = writes.repair_mcp(tmp_path, cfg)
+    root = cfg.state_dir / "backups"
+    with backups.during(tmp_path, root, cfg.backup_days) as run:
+        lines = writes.repair_mcp(tmp_path, cfg)
+    assert (run.folder / ".claude.json").read_text() == before
+    assert list(root.iterdir()) == [run.folder]
     assert "Claude Code and Cursor pointed at files that no longer exist; now Codex's version" in lines[0]
-    assert lines[-1].startswith("originals backed up in ~/")
     for name in (".claude.json", ".cursor/mcp.json"):
         assert json.loads((tmp_path / name).read_text())["mcpServers"]["repl"]["args"] == [f"{new}/service.mjs"]
     assert 'enabled_tools = ["run"]' in (tmp_path / ".codex/config.toml").read_text()

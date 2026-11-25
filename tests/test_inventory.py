@@ -94,7 +94,7 @@ def test_inventory_command_is_read_only(tmp_path, monkeypatch, capsys):
     write(plugin, ".mcp.json", {"cloudflare": {"url": "https://cf.example/mcp"}})
     codex_plugin(tmp_path, "off@remote", "1.0.0", remote=True)
     write(tmp_path, ".codex/config.toml", '[plugins."off@remote"]\nenabled = false\n'
-          '[mcp_servers.cf]\nurl = "https://cf.example/mcp/"\n'
+          '[mcp_servers.cf]\nurl = "https://cf.example/mcp"\n'
           '[mcp_servers.rea]\ncommand = "npx"\nargs = ["-y", "rea-agents@6.8.0", "mcp"]\n')
 
     def snapshot():
@@ -109,5 +109,5 @@ def test_inventory_command_is_read_only(tmp_path, monkeypatch, capsys):
     assert "Skills loaded: 1" in output
     assert "MCP server cloudflare from plugin cloudflare@remote" in output
     assert "MCP server rea from settings (rea-agents 6.8.0, 6.10.1 is out)" in output
-    assert "would remove MCP server cf from Codex settings" in output
+    assert "would announce removal of MCP server cf from Codex settings" in output
     assert "would update MCP server rea in Codex settings" in output

@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from . import __version__
+from . import __version__, backups
 
 LABEL = "io.github.agent-sync"
 LAUNCHER_MARK = "# made by agent-sync install --launcher"
@@ -133,6 +133,7 @@ def refresh_launcher(home: Path, dry: bool = False, path: str | None = None) -> 
     verb = ("would update" if p.exists() else "would add") if dry else ("updated" if p.exists() else "added")
     if not dry:
         p.parent.mkdir(parents=True, exist_ok=True)
+        backups.save(p, follow=True)
         p.write_text(text)
         p.chmod(0o755)
     return f"{verb} the Desktop launcher {p}"

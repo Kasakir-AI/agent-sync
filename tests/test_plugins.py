@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from agent_sync import plugins
+from agent_sync import backups, pending, plugins
 from tests.test_inventory import codex_plugin, write
 from tests.test_skills import make_skill
 
@@ -22,6 +22,7 @@ def own_plugin(home, pid=NEW, version="1.9.0", *, same_skills=True):
         "interface": {"displayName": "Netlify"}, "version": version})
     if same_skills:
         make_skill(root / "skills", "netlify-functions")
+    return root
 
 
 def test_codex_catalog_parses_two_marketplaces():
@@ -57,10 +58,25 @@ def test_switches_to_an_installed_codex_app_that_keeps_skills(tmp_path):
         calls.append(args)
         return 0, ""
 
-    plugins.own_versions(tmp_path, False, lambda *line: logs.append(line), state_dir=tmp_path / "state",
-                         catalog=lambda: pytest.fail("already installed"), run=run)
+    state = tmp_path / "state"
+    log = logs.append
+
+    def switch(now, keep=()):
+        with pending.during(state, keep, lambda *line: log(line), False, now=now):
+            plugins.own_versions(tmp_path, False, lambda *line: log(line), state_dir=state,
+                                 catalog=lambda: pytest.fail("already installed"), run=run)
+
+    switch(100, [OLD])
+    assert not calls and not logs
+    switch(100)
+    assert not calls
+    assert logs[0][0] == "WARN" and f'add "plugin:codex:{OLD}"' in logs[0][1]
+    assert "both" in logs[1][1]
+    switch(100 + pending.WAIT - 1)
+    assert not calls
+    switch(100 + pending.WAIT)
     assert calls == [["codex", "plugin", "remove", OLD]]
-    assert logs == [("ok", f"switched Codex from {OLD} 1.7.0 to its own {pid} 1.7.0")]
+    assert logs[-1] == ("ok", f"switched Codex from {OLD} 1.7.0 to its own {pid} 1.7.0")
 
 
 @pytest.mark.parametrize(("version", "same_skills", "reason"), [
@@ -79,7 +95,9 @@ def test_keeps_old_next_to_installed_app_when_replacement_would_regress(tmp_path
 
 
 @pytest.mark.parametrize(("mode", "actions"), [
-    ("success", [("add", NEW), ("remove", OLD)]),
+    ("success", [("add", NEW)]),
+    ("unverified", [("add", NEW), ("remove", NEW)]),
+    ("loses MCP", [("add", NEW), ("remove", NEW)]),
     ("loses skills", [("add", NEW), ("remove", NEW)]),
     ("add fails", [("add", NEW)]),
     ("dry", []),
@@ -87,7 +105,9 @@ def test_keeps_old_next_to_installed_app_when_replacement_would_regress(tmp_path
     ("unknown", []),
 ])
 def test_catalog_switch_commands_and_remembered_choices(tmp_path, mode, actions):
-    old_plugin(tmp_path)
+    root = old_plugin(tmp_path)
+    if mode == "loses MCP":
+        write(root, ".mcp.json", {"netlify": {"url": "https://api.example/mcp"}})
     state = tmp_path / "state"
     version = {"older": "1.6.0", "unknown": ""}.get(mode, "1.9.0")
     entry = plugins.CatalogEntry(NEW, "netlify", "openai-curated-remote", version, False)
@@ -100,28 +120,37 @@ def test_catalog_switch_commands_and_remembered_choices(tmp_path, mode, actions)
         if action == "add":
             if mode == "add fails":
                 return 1, "download failed"
-            own_plugin(tmp_path, pid, version, same_skills=mode != "loses skills")
+            if mode != "unverified":
+                own_plugin(tmp_path, pid, version, same_skills=mode != "loses skills")
         elif pid == NEW:
             root = tmp_path / ".codex/plugins/cache/openai-curated-remote/netlify"
-            (root / ".codex-remote-plugin-install.json").unlink()
+            (root / ".codex-remote-plugin-install.json").unlink(missing_ok=True)
         return 0, ""
 
-    plugins.own_versions(tmp_path, mode == "dry", lambda *line: logs.append(line), state_dir=state,
-                         catalog=lambda: [entry], run=run)
+    dry = mode == "dry"
+    def log(*line):
+        logs.append(line)
+
+    config = tmp_path / ".codex/config.toml"
+    before = config.read_bytes()
+    with pending.during(state, [], log, dry, now=100):
+        with backups.during(tmp_path, state / "backups", 30) as saved:
+            plugins.own_versions(tmp_path, dry, log, state_dir=state, catalog=lambda: [entry], run=run)
     assert calls == actions
-    if mode == "loses skills":
+    rejections = {"loses skills": "lacks one of its skills", "loses MCP": "lacks one of its MCP servers",
+                  "unverified": "could not be verified"}
+    if mode in rejections:
         assert json.loads((state / "plugin-choices.json").read_text()) == {OLD: {NEW: version}}
-        assert "lacks one" in logs[-1][1]
-        plugins.own_versions(tmp_path, False, lambda *line: logs.append(line), state_dir=state,
-                             catalog=lambda: [entry], run=run)
+        assert rejections[mode] in logs[-1][1]
+        assert (saved.folder / ".codex/config.toml").read_bytes() == before
+        plugins.own_versions(tmp_path, False, log, state_dir=state, catalog=lambda: [entry], run=run)
         assert calls == actions
         newer = plugins.CatalogEntry(NEW, "netlify", "openai-curated-remote", "2.0.0", False)
-        plugins.own_versions(tmp_path, True, lambda *line: logs.append(line), state_dir=state,
-                             catalog=lambda: [newer], run=run)
+        plugins.own_versions(tmp_path, True, log, state_dir=state, catalog=lambda: [newer], run=run)
         assert "would try" in logs[-1][1] and "2.0.0" in logs[-1][1]
     else:
-        assert not state.exists()
-        expected = {"success": "switched", "add fails": "download failed", "dry": "would try",
+        assert (state / "pending-removals.json").exists() == (mode == "success")
+        expected = {"success": "both", "add fails": "download failed", "dry": "would try",
                     "older": "older", "unknown": "could not be compared"}
         assert expected[mode] in logs[-1][1]
 

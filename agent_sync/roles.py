@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import backups
 from .registry import DEFAULT_AGENTS, grouped_paths, paths
 
 ROLE = re.compile(r"^[a-z][a-z ,&-]*:\s*\S")
@@ -59,6 +60,7 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
         new = "\n".join(header + roles) + ("\n" + rest if rest else "") + "\n"
         if not dry:
             path.parent.mkdir(parents=True, exist_ok=True)
+            backups.save(path, follow=True)
             path.write_text(new.replace("\n\n\n", "\n\n"))
         changes.append(f"{'would update' if dry else 'updated'} {path}")
     return changes

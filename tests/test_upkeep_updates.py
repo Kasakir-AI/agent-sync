@@ -1,4 +1,5 @@
 import json
+from stat import S_ISUID
 from types import SimpleNamespace
 
 import pytest
@@ -62,6 +63,7 @@ def servers(home, path=".claude.json", **entries):
 
 @pytest.mark.parametrize("dry", [False, True])
 def test_run_updates_global_skills_once_after_packages(tmp_path, monkeypatch, commands, capsys, dry):
+    write(tmp_path, ".agents/.skill-lock.json", '{"skills":{"example":{}}}')
     cfg = Config(home=tmp_path, skill_packages=["team/one", "team/two"], update_clis=False,
                  update_plugins=False, update_self=False)
     monkeypatch.setattr(cli, "load", lambda: cfg)
@@ -153,7 +155,7 @@ def test_mcp_resolves_npm_pipx_uv_and_own_updaters(tmp_path, monkeypatch, comman
     program(tmp_path, "current", "global/current/bin/current")
     program(tmp_path, "pix", f"{pipx}/venvs/pix-package/bin/pix")
     program(tmp_path, "tool-uv", ".local/share/uv/tools/tool-uv-package/bin/tool-uv")
-    own = program(tmp_path, "plannotator", ".local/bin/plannotator")
+    own = program(tmp_path, "plannotator", ".local/bin/plannotator").resolve()
     standalone = program(tmp_path, "standalone")
     unowned = program(tmp_path, "unowned")
     (tmp_path / "bin/alias").symlink_to(own)
@@ -254,4 +256,79 @@ def test_run_can_disable_mcp_program_updates(tmp_path, monkeypatch, commands):
     monkeypatch.setattr(cli, "online", lambda: True)
     assert cli.run(force=True, echo=False) == 0
     assert (str(own), "--help") not in commands.read
-    assert SKILLS_UPDATE in commands.ran
+    assert SKILLS_UPDATE not in commands.ran
+
+
+@pytest.mark.parametrize(("setting", "dry", "expected"), [
+    (False, False, []),
+    (True, False, [["npm", "install", "-g", "one@latest"], ["pipx", "upgrade-all"],
+                   ["uv", "tool", "upgrade", "--all"]]),
+    (["homebrew"], False, [BREW_UPDATE, ["brew", "upgrade"]]),
+    (["homebrew", "npm", "pipx", "uv"], True, []),
+])
+def test_global_tools_update_only_selected_managers(tmp_path, commands, setting, dry, expected):
+    for manager in ("npm", "pipx", "uv", "brew"):
+        program(tmp_path, manager)
+    commands.output[NPM_OUTDATED] = '{"one": {}, "already-updated": {}}'
+    state = tools.UpdateState(npm_upgraded={"already-updated"})
+    cfg = Config(home=tmp_path, update_global_tools=setting)
+    tools.update_global_tools(commands.log, cfg, dry, state=state)
+    assert commands.ran == expected
+    assert commands.read == ([NPM_OUTDATED] if setting is True else [])
+    if dry:
+        assert [message for kind, message in commands.lines if kind == "dry"] == [
+            "would run: npm outdated -g --json  (global npm tools)",
+            "would run: pipx upgrade-all  (global pipx tools)",
+            "would run: uv tool upgrade --all  (global uv tools)",
+            "would run: brew upgrade  (global homebrew tools)",
+        ]
+
+
+def test_global_tools_run_between_mcp_and_clis_and_reuse_manager_state(tmp_path, monkeypatch, commands):
+    program(tmp_path, "npm")
+    program(tmp_path, "brew", "brew/bin/brew")
+    program(tmp_path, "mcp-npm", "global/mcp-npm/bin/mcp-npm")
+    program(tmp_path, "mcp-brew", "brew/Cellar/mcp-brew/1/bin/mcp-brew")
+    program(tmp_path, "claude")
+    servers(tmp_path, npm="mcp-npm", brew="mcp-brew")
+    commands.output.update({NPM_ROOT: str(tmp_path / "global"),
+                            NPM_OUTDATED: '{"mcp-npm": {}, "npm": {}}',
+                            BREW_FORMULAE: "mcp-brew\n"})
+    cfg = Config(home=tmp_path, agents=["claude"], skill_packages=[], update_plugins=False, update_self=False,
+                 update_global_tools=["npm", "homebrew"])
+    monkeypatch.setattr(cli, "load", lambda: cfg)
+    monkeypatch.setattr(cli, "online", lambda: True)
+    assert cli.run(force=True, echo=False) == 0
+    assert commands.ran.count(BREW_UPDATE) == commands.read.count(NPM_OUTDATED) == 1
+    assert [args for args in commands.ran if args[:2] in (
+        ["npm", "install"], ["brew", "upgrade"], ["claude", "update"]
+    )] == [
+        ["npm", "install", "-g", "mcp-npm@latest"], ["brew", "upgrade", "--formula", "mcp-brew"],
+        ["npm", "install", "-g", "npm@latest"], ["brew", "upgrade"], ["claude", "update"],
+    ]
+
+
+def test_mcp_own_updater_validates_resolved_path_mode_and_owner_before_probing(tmp_path, monkeypatch, commands):
+    home = tmp_path / "home"
+    allowed = program(home, "allowed")
+    setuid = program(home, "setuid")
+    other_owner = program(home, "other-owner")
+    outside = program(tmp_path / "outside", "outside")
+    (home / "bin/escaped").symlink_to(outside)
+    servers(home, allowed=str(allowed), setuid=str(setuid), other_owner=str(other_owner),
+            escaped=str(home / "bin/escaped"))
+    original_stat = type(other_owner).stat
+
+    def stat(path, *args, **kwargs):
+        real = original_stat(path, *args, **kwargs)
+        if path == other_owner:
+            return SimpleNamespace(st_mode=real.st_mode, st_uid=100_000)
+        if path == setuid:
+            return SimpleNamespace(st_mode=real.st_mode | S_ISUID, st_uid=real.st_uid)
+        return real
+
+    monkeypatch.setattr(type(other_owner), "stat", stat)
+    commands.output[(str(allowed), "--help")] = "  allowed update"
+    tools.update_mcp_programs(commands.log, Config(home=home), False)
+    assert commands.read == [(str(allowed), "--help")]
+    assert commands.ran == [[str(allowed), "update"]]

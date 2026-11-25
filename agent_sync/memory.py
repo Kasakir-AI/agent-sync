@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from . import backups
 from .instructions import MEMORY_END, MEMORY_START, files, rendered, split_front
 from .registry import grouped_paths
 
@@ -16,6 +17,7 @@ GUIDANCE = ("Read the matching file in ~/.agents/memory/ when an entry applies. 
 
 
 def replace_file(path: Path, data: bytes) -> None:
+    backups.save(path)
     with NamedTemporaryFile(dir=path.parent, prefix=".agent-sync-", delete=False) as temp:
         staged = Path(temp.name)
         try:
@@ -61,6 +63,7 @@ def mirror(home: Path, dry: bool, *, enabled) -> list[str]:
         if path.name not in source_files and (path.is_symlink() or path.is_file()):
             copied = True
             if not dry:
+                backups.save(path)
                 path.unlink()
     if copied or not exists:
         messages.append(f"{action} memory copy ({len(source_files)} files)")
@@ -84,6 +87,7 @@ def mirror(home: Path, dry: bool, *, enabled) -> list[str]:
         if updated != current:
             if not dry:
                 path.parent.mkdir(parents=True, exist_ok=True)
+                backups.save(path, follow=True)
                 path.write_text(updated)
             messages.append(f"{action} memory index in {path}")
     return messages

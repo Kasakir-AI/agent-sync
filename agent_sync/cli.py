@@ -37,6 +37,7 @@ from pathlib import Path
 from . import (
     __version__,
     agents,
+    backups,
     checks,
     duplicates,
     instructions,
@@ -44,6 +45,7 @@ from . import (
     mcp,
     membership,
     memory,
+    pending,
     plugins,
     review,
     roles,
@@ -98,8 +100,10 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 print("another agent-sync run is in progress")
             return 0
         log = Log(cfg.log_file, echo=echo or dry, write=not dry)
+        saved = None
         if not dry:
             log.prune(cfg.log_days)
+            saved = stack.enter_context(backups.during(cfg.home, cfg.state_dir / "backups", cfg.backup_days))
         found = membership.untracked(cfg, membership.available(cfg))
         if found:
             names = ", ".join(TOOLS[agent].name for agent in found)
@@ -107,40 +111,15 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         if not online():
             log("skip", "no network; will try again at the next scheduled check")
             return 0
+        stack.enter_context(pending.during(cfg.state_dir, cfg.keep_installed, log, dry))
         updates = tools.UpdateState()
         log("start", f"agent-sync {__version__}, source of truth: {cfg.source}"
             + ("  (dry run: nothing is changed)" if dry else ""))
         log("info", f"skills tool: {tools.skills(cfg.skills_cli, '--version')[1]}")
         if cfg.launcher and cfg.macos:
             log.lines(filter(None, [schedule.refresh_launcher(cfg.home, dry, tools.PATH)]))
-        taken: set[str] = set()          # skill names a package listed earlier ships: that package's version wins
-        for package in cfg.skill_packages:
-            dest = work / "packages" / package.replace("/", "__")
-            code, out = tools.checkout(package, dest)
-            log("ok" if code == 0 else "FAIL", f"fetch {package}{': ' + out if code else ''}")
-            names, gone = skills.package_choice(cfg.home, package, dest, taken) if code == 0 else (None, [])
-            for name in gone:
-                tools.act(log, dry, f"remove {name} ({package} ships it, but an earlier package has that name)",
-                          tools.remove_args(cfg.skills_cli, name, enabled=cfg.agents))
-            if names != []:
-                tools.act(log, dry, f"skills from {package} for {', '.join(tools.skill_agents(cfg.agents))}",
-                          tools.skill_args(cfg.skills_cli, package, names, enabled=cfg.agents))
-            if code == 0 and cfg.remove_dropped_skills:
-                for name in skills.dropped(cfg.home, package, dest):
-                    tools.act(log, dry, f"remove {name} (no longer in {package})",
-                              tools.remove_args(cfg.skills_cli, name, enabled=cfg.agents))
-            if (dest / "agents").is_dir():
-                version = "0"
-                manifest = dest / ".cursor-plugin/plugin.json"
-                if manifest.exists():
-                    version = json.loads(manifest.read_text()).get("version", "0")
-                try:
-                    log.lines(agents.mirror(dest, package, cfg.home, cfg.agent_models, version, dry,
-                                            cfg.agent_notes, enabled=cfg.agents))
-                    log("ok", f"agents from {package} mirrored")
-                except (ValueError, OSError) as e:
-                    log("FAIL", f"agents from {package}: {e}")
-        tools.update_skills(log, dry, cfg.skills_cli, enabled=cfg.agents)
+        sync_packages(cfg, log, work, dry)
+        tools.update_skills(log, dry, cfg.skills_cli, home=cfg.home, enabled=cfg.agents)
         if cfg.plugin_skills:
             log("WARN", "plugin_skills is no longer used: Cursor loads Claude Code plugins' skills itself, so copies "
                 "made it load them twice. To give Codex a plugin's skills, install the plugin in Codex "
@@ -165,8 +144,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         if cfg.mirror_mcp:
             try:
                 log.lines(writes.repair_mcp(cfg.home, cfg, dry))
-                backups = cfg.state_dir / "backups"
-                log.lines(mcp.dedupe(cfg.home, dry, backups, enabled=cfg.agents))
+                log.lines(mcp.dedupe(cfg.home, dry, enabled=cfg.agents))
                 log.lines(mcp.pins(cfg.home, dry, enabled=cfg.agents, keep=cfg.keep_mcp_versions))
                 log.lines(mcp.mirror(cfg.home, cfg.source, dry, enabled=cfg.agents))
                 log.lines(mcp.same_server_twice(cfg.home, enabled=cfg.agents), "WARN")
@@ -193,6 +171,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 plugins.own_versions(cfg.home, dry, log, enabled=cfg.agents, state_dir=cfg.state_dir)
         if cfg.update_mcp_programs:
             tools.update_mcp_programs(log, cfg, dry, state=updates)
+        tools.update_global_tools(log, cfg, dry, state=updates)
         if cfg.update_clis:
             tools.update_clis(log, cfg, dry, state=updates)
             tools.update_prerequisites(log, dry, state=updates)
@@ -201,14 +180,60 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             # the new version writes its own launcher now, not at the next run
             exe = shutil.which("agent-sync", path=tools.PATH)
             if exe:
+                backups.save(schedule.launcher_path(cfg.home), follow=True)
                 tools.act(log, dry, "Desktop launcher from the new version", [exe, "launcher"])
         log.lines(checks.unwanted_models(cfg.home, cfg.warn_models, enabled=cfg.agents), "WARN")
         if dry:
             log("done", f"dry run finished, nothing was changed. A real run: {log.summary()}")
             return 0
         stamp.touch()
-        log("done", f"agent-sync finished: {log.summary()}")
+        summary = f", backups: {saved.folder}" if saved and saved.folder else ""
+        log("done", f"agent-sync finished: {log.summary()}{summary}")
         return 1 if log.problems else 0
+
+
+def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
+    taken: set[str] = set()
+    packages = []
+    for package in cfg.skill_packages:
+        checkout = work / "packages" / package.replace("/", "__")
+        code, out = tools.checkout(package, checkout)
+        log("ok" if code == 0 else "FAIL", f"fetch {package}{': ' + out if code else ''}")
+        if code:
+            continue
+        names, gone = skills.package_choice(cfg.home, package, checkout, taken)
+        packages.append((package, checkout, names))
+        removals = {name: f"{package} ships it, but an earlier package has that name" for name in gone}
+        if cfg.remove_dropped_skills:
+            for name in skills.dropped(cfg.home, package, checkout):
+                removals.setdefault(name, f"no longer in {package}")
+        for name, reason in removals.items():
+            what = f"skill {name} ({reason})"
+            if pending.due(f"skill:{name}", what) and not dry:
+                skills.backup_installs(cfg.home, cfg.agents, [name])
+                tools.act(log, dry, f"remove {what}", tools.remove_args(cfg.skills_cli, name, enabled=cfg.agents))
+
+    installed = skills.locked(cfg.home)
+    for package, checkout, names in packages:
+        shipped = skills.shipped(checkout) if names is None else names
+        blocked = {skills.installed_name(name, meta) for name, meta in installed.items()
+                   if meta.get("source") in cfg.skill_packages and meta.get("source") != package}
+        if blocked.intersection(shipped):
+            names = [name for name in shipped if name not in blocked]
+        if names != []:
+            if not dry:
+                skills.backup_installs(cfg.home, cfg.agents, shipped if names is None else names)
+            tools.act(log, dry, f"skills from {package} for {', '.join(tools.skill_agents(cfg.agents))}",
+                      tools.skill_args(cfg.skills_cli, package, names, enabled=cfg.agents))
+        if (checkout / "agents").is_dir():
+            manifest = checkout / ".cursor-plugin/plugin.json"
+            version = json.loads(manifest.read_text()).get("version", "0") if manifest.exists() else "0"
+            try:
+                log.lines(agents.mirror(checkout, package, cfg.home, cfg.agent_models, version, dry,
+                                        cfg.agent_notes, enabled=cfg.agents))
+                log("ok", f"agents from {package} mirrored")
+            except (ValueError, OSError) as e:
+                log("FAIL", f"agents from {package}: {e}")
 
 
 def log_review(cfg: Config, log: Log) -> None:
@@ -335,9 +360,10 @@ def show_inventory() -> int:
     print("Problems found")
     problems = (duplicates.report(home, cfg.allow_duplicate_skills, enabled=enabled)
                 + plugins.twice(home, enabled=enabled)
-                + mcp.dedupe(home, True, cfg.state_dir / "backups", enabled=enabled)
                 + mcp.same_server_twice(home, enabled=enabled)
                 + mcp.pins(home, True, enabled=enabled, keep=cfg.keep_mcp_versions, latest=latest))
+    with pending.during(cfg.state_dir, cfg.keep_installed, lambda _, text: problems.append(text), True):
+        problems.extend(mcp.dedupe(home, True, enabled=enabled))
     for line in problems or ["None"]:
         print(f"  {line}")
     return 0

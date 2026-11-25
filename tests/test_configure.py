@@ -141,3 +141,17 @@ def test_shared_memory_is_off_by_default_and_can_be_enabled(tmp_path):
     assert any("Share Claude Code's home-project memory" in line for line in said)
     assert ed.cfg.mirror_memory is True
     assert tomllib.loads(path.read_text())["mirror_memory"] is True
+
+
+def test_upkeep_safety_and_global_tools_settings_can_be_saved(tmp_path):
+    answers = ["12", "3", "45", "16", "1", "mcp:codex:extract", "",
+               "17", "3", "4", "", "s", "q"]
+    ed, path, _ = editor(tmp_path, answers)
+    assert ed.cfg.backup_days == 30
+    assert ed.cfg.keep_installed == []
+    assert ed.cfg.update_global_tools is False
+    ed.menu()
+    data = tomllib.loads(path.read_text())
+    assert data["backup_days"] == 45
+    assert data["keep_installed"] == ["mcp:codex:extract"]
+    assert data["update_global_tools"] == ["homebrew"]

@@ -35,11 +35,13 @@ class Config:
     skip_skills: list[str] = field(default_factory=list)     # skill names never mirrored
     plugin_skills: list[str] = field(default_factory=list)   # no longer used; a run warns while it is set
     allow_duplicate_skills: list[str] = field(default_factory=list)  # skill names a tool may load more than once
+    keep_installed: list[str] = field(default_factory=list)
     keep_mcp_versions: list[str] = field(default_factory=list)  # MCP servers whose pinned package version stays
     mirror_instructions: bool = False                        # global instructions across enabled tools
     mirror_memory: bool = False                              # Claude Code's home-project memory
     warn_models: list[str] = field(default_factory=list)     # warn when a model name containing one of these appears
     update_clis: bool | list[str] = True                     # true, false, or a list like ["claude", "codex"]
+    update_global_tools: bool | list[str] = False
     update_plugins: bool = True                              # plugins and extensions for enabled agents
     update_mcp_programs: bool = True                          # executables used by enabled agents' MCP servers
     cli_commands: dict[str, list[str]] = field(default_factory=dict)   # your own update command per CLI
@@ -48,6 +50,7 @@ class Config:
     launcher: bool = False                                   # keep "Agent Upkeep" on the Desktop (macOS)
     update_self: bool = True                                 # update agent-sync itself (Homebrew, pipx, git)
     log_days: int = 7
+    backup_days: int = 30
     home: Path = field(default_factory=Path.home)
 
     def wants_cli(self, tool: str) -> bool:
@@ -72,9 +75,9 @@ class Config:
 
 KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
         "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "allow_duplicate_skills",
-        "mirror_instructions", "mirror_memory", "warn_models", "keep_mcp_versions",
-        "update_clis", "update_plugins", "update_mcp_programs", "cli_commands", "install_commands", "extra_steps",
-        "launcher", "update_self", "log_days")
+        "mirror_instructions", "mirror_memory", "warn_models", "keep_mcp_versions", "keep_installed",
+        "update_clis", "update_global_tools", "update_plugins", "update_mcp_programs", "cli_commands",
+        "install_commands", "extra_steps", "launcher", "update_self", "log_days", "backup_days")
 
 
 def config_path(home: Path) -> Path:
@@ -117,6 +120,10 @@ def parse(text: str, path: Path, home: Path) -> Config:
         raise ValueError(f"source must be one of {', '.join(registry.TOOLS)}, not {cfg.source!r}")
     if cfg.source not in cfg.agents:
         raise ValueError(f"source {cfg.source!r} must be enabled in agents")
+    if type(cfg.backup_days) is not int or cfg.backup_days < 0:
+        raise ValueError("backup_days must be a nonnegative whole number")
+    if not isinstance(cfg.keep_installed, list) or any(not isinstance(key, str) for key in cfg.keep_installed):
+        raise ValueError("keep_installed must be a list of removal keys or names")
     for step in cfg.extra_steps:
         if not isinstance(step.get("command"), list) or not step["command"]:
             raise ValueError(f"extra step {step.get('name', '?')!r} needs command = [\"program\", \"arg\", ...]")

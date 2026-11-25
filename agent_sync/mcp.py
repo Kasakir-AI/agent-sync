@@ -14,7 +14,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-from . import inventory, tools
+from . import backups, inventory, pending, tools
 from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
 from .tomledit import PART, basic_string, key_text
 
@@ -143,6 +143,7 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
             current = path.read_text() if path.exists() else ""
             updated = ADDERS[TOOLS[tool].mcp_format](current, missing)
             path.parent.mkdir(parents=True, exist_ok=True)
+            backups.save(path, follow=True)
             path.write_text(updated)
         verb = "would add" if dry else "added"
         changes += [f"{verb} MCP server {name} to {tool}" for name in missing]
@@ -168,14 +169,10 @@ def settings_files(home: Path, enabled):
                 yield path, readers, codex, text, {k: v for k, v in entries.items() if isinstance(v, dict)}
 
 
-def apply_settings(home: Path, edits, backup_dir: Path, prefix: str) -> None:
-    from . import writes
-
-    if edits:
-        writes.apply_edits(home, edits, writes.backup_folder(backup_dir, prefix))
+COPY_KEYS = {"command", "args", "env", "url", "httpUrl", "serverUrl", "type", "enabled"}
 
 
-def dedupe(home: Path, dry: bool, backup_dir: Path, *, enabled=DEFAULT_AGENTS) -> list[str]:
+def dedupe(home: Path, dry: bool, backup_dir: Path | None = None, *, enabled=DEFAULT_AGENTS) -> list[str]:
     from . import writes
 
     enabled = tuple(enabled)
@@ -184,22 +181,37 @@ def dedupe(home: Path, dry: bool, backup_dir: Path, *, enabled=DEFAULT_AGENTS) -
     for path, readers, codex, text, entries in settings_files(home, enabled):
         providers = {}
         for plugin in reader_plugins(loaded, readers):
-            for _, server in plugin.servers:
+            for server_name, server in plugin.servers:
                 if identity := inventory.endpoint(server):
-                    providers.setdefault(identity, plugin.id)
+                    providers.setdefault(identity, []).append((plugin.id, server))
+                providers.setdefault(("name", server_name), []).append((plugin.id, server))
         updated = text
         for name, server in entries.items():
-            if provider := providers.get(inventory.endpoint(server)):
-                verb = "would remove" if dry else "removed"
-                lines.append(f"{verb} MCP server {name} from {tool_names(readers)} settings: "
-                             f"plugin {provider} brings the same server")
-                if not dry:
-                    rewrite = writes.codex_mcp_text if codex else writes.json_mcp_text
-                    updated = rewrite(updated, name, None)
+            key = f"mcp:{readers[0]}:{name}"
+            if pending.keeps(key):
+                continue
+            matches = [*providers.get(inventory.endpoint(server), ()), *providers.get(("name", name), ())]
+            if not matches:
+                continue
+            own = portable(server)
+            exact = next((pid for pid, other in matches if own is not None and own == portable(other)), None)
+            if (not exact or set(server) - COPY_KEYS or server.get("enabled", True) is not True
+                    or (server.get("env") and "env" not in (own or {}))):
+                provider = matches[0][0]
+                lines.append(f'WARN  {tool_names(readers)} load MCP server {name} twice '
+                             f'(settings and plugin {provider}); remove one, or add "{key}" '
+                             'to keep_installed to stop this warning')
+                continue
+            what = f"MCP server {name} from {tool_names(readers)} settings: plugin {exact} brings the same server"
+            if not pending.due(key, what) or dry:
+                continue
+            rewrite = writes.codex_mcp_text if codex else writes.json_mcp_text
+            updated = rewrite(updated, name, None)
+            lines.append(f"removed {what}")
         if updated != text:
             target = writes.checked_path(home, path)
             edits.append(writes.Edit("mcp", readers, target, "replace", target, text.encode(), updated.encode()))
-    apply_settings(home, edits, backup_dir, "dedupe")
+    writes.apply_edits(home, edits, backup_dir)
     return lines
 
 
@@ -277,7 +289,6 @@ def pin_text(text: str, codex: bool, name: str, index: int, old: str, new: str) 
 def pins(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, keep: list[str], latest=npm_latest,
          backup_dir: Path | None = None) -> list[str]:
     from . import writes
-    from .config import Config
 
     lines, edits, versions = [], [], {}
     for path, readers, codex, text, entries in settings_files(home, enabled):
@@ -299,7 +310,7 @@ def pins(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, keep: list[str], late
         if updated != text:
             target = writes.checked_path(home, path)
             edits.append(writes.Edit("mcp", readers, target, "replace", target, text.encode(), updated.encode()))
-    apply_settings(home, edits, backup_dir or Config(home=home).state_dir / "backups", "pins")
+    writes.apply_edits(home, edits, backup_dir)
     return lines
 
 

@@ -7,12 +7,13 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from importlib import metadata
 from pathlib import Path
+from stat import S_ISREG, S_ISUID
 
-from . import __version__, mcp, registry
+from . import __version__, backups, mcp, registry
 from .registry import DEFAULT_AGENTS, TOOLS, Tool
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[─-◿]")
@@ -117,17 +118,24 @@ def brew_writable(prefix: Path) -> bool:
     return all(os.access(prefix / d, os.W_OK) for d in ("Caskroom", "Cellar", "bin") if (prefix / d).exists())
 
 
-def act(log, dry: bool, label: str, args: list[str], timeout: int = 900) -> None:
+def act(log, dry: bool, label: str, args: list[str], timeout: int = 900, *, run=None) -> bool:
     """Run a command that changes something, or with dry=True only say what would run."""
     if dry:
         log("dry", f"would run: {' '.join(args)}  ({label})")
-        return
-    code, out = sh(args, timeout)
+        return False
+    code, out = sh(args, timeout) if run is None else run(args)
     log("ran" if code == 0 else "FAIL", f"{label}{': ' + out if code else ''}")
+    return code == 0
 
 
-def update_skills(log, dry: bool, cli: str, *, enabled=DEFAULT_AGENTS) -> None:
-    """Update all globally installed skills."""
+def update_skills(log, dry: bool, cli: str, *, home: Path, enabled=DEFAULT_AGENTS) -> None:
+    """Update globally installed skills when the lock lists any."""
+    from . import skills as installed_skills
+
+    if not (locked := installed_skills.locked(home)):
+        return
+    if not dry:
+        installed_skills.backup_installs(home, enabled, locked)
     act(log, dry, "skills from every source (skills update)",
         ["npx", "-y", "--prefer-online", cli, "update", "-g", "-y"])
 
@@ -136,6 +144,36 @@ def update_skills(log, dry: bool, cli: str, *, enabled=DEFAULT_AGENTS) -> None:
 class UpdateState:
     brew_updated: bool = False
     npm_outdated: set[str] | None = None
+    npm_upgraded: set[str] = field(default_factory=set)
+
+
+GLOBAL_MANAGERS = ("npm", "pipx", "uv", "homebrew")
+
+
+def global_managers(setting: bool | list[str]) -> tuple[str, ...]:
+    if isinstance(setting, bool):
+        return GLOBAL_MANAGERS[:-1] if setting else ()
+    return tuple(manager for manager in GLOBAL_MANAGERS if manager in setting)
+
+
+def update_global_tools(log, cfg, dry: bool, *, state: UpdateState) -> None:
+    for manager in global_managers(cfg.update_global_tools):
+        cmd = "brew" if manager == "homebrew" else manager
+        if not shutil.which(cmd, path=PATH):
+            continue
+        label = f"global {manager} tools"
+        if manager == "npm":
+            if dry:
+                act(log, dry, label, ["npm", "outdated", "-g", "--json"])
+                continue
+            for package in sorted(outdated_npm(state) - state.npm_upgraded):
+                upgrade_npm(log, dry, package, state, label=f"{label} ({package})")
+        elif manager == "homebrew":
+            refresh_brew(log, dry, state)
+            act(log, dry, label, ["brew", "upgrade"])
+        else:
+            args = ["pipx", "upgrade-all"] if manager == "pipx" else ["uv", "tool", "upgrade", "--all"]
+            act(log, dry, label, args)
 
 
 def refresh_brew(log, dry: bool, state: UpdateState, *, quiet: bool = False) -> None:
@@ -164,8 +202,10 @@ def outdated_npm(state: UpdateState) -> set[str]:
     return state.npm_outdated
 
 
-def upgrade_npm(log, dry: bool, package: str) -> None:
-    act(log, dry, f"{package} upgrade (npm)", ["npm", "install", "-g", f"{package}@latest"])
+def upgrade_npm(log, dry: bool, package: str, state: UpdateState, *, label: str = "") -> None:
+    if package not in state.npm_upgraded and act(
+            log, dry, label or f"{package} upgrade (npm)", ["npm", "install", "-g", f"{package}@latest"]):
+        state.npm_upgraded.add(package)
 
 
 def update_clis(log, cfg, dry: bool = False, *, state: UpdateState | None = None) -> None:
@@ -225,7 +265,7 @@ def update_prerequisites(log, dry: bool = False, *, state: UpdateState | None = 
         else:
             log("skip", f"git and Node come from Homebrew in {prefix}, which another account owns; update them there")
     if shutil.which("npm", path=PATH) and "npm" in outdated_npm(state):
-        upgrade_npm(log, dry, "npm")
+        upgrade_npm(log, dry, "npm", state)
 
 
 MCP_RUNNERS = {"npx", "npm", "pnpm", "bunx", "bun", "uvx", "uv", "node", "python", "python3", "deno", "docker"}
@@ -263,10 +303,22 @@ def package_under(real: Path, root: Path | None, manager: str) -> tuple[str, str
     return (manager, "/".join(parts[:size]), None) if len(parts) > size else None
 
 
+def can_self_update(real: Path, home: Path) -> bool:
+    if not any(real.is_relative_to(root) for root in (home.resolve(), Path("/usr/local"), Path("/opt"))):
+        return False
+    try:
+        stat = real.stat()
+    except OSError:
+        return False
+    return S_ISREG(stat.st_mode) and not (stat.st_mode & S_ISUID) and stat.st_uid in (0, os.getuid())
+
+
 def update_own_program(log, dry: bool, name: str, cmd: Path) -> None:
     help_text = raw([str(cmd), "--help"], timeout=30)
     match = re.search(rf"^\s*{re.escape(cmd.name)} ((?:self-)?update)\b", help_text, re.MULTILINE)
     if match:
+        if not dry:
+            backups.save(cmd)
         act(log, dry, f"{cmd.name} update (MCP server {name})", [str(cmd), match[1]])
 
 
@@ -303,8 +355,8 @@ def update_mcp_programs(log, cfg, dry: bool, *, state: UpdateState | None = None
         seen_paths.add(real)
         managed = next((match for resolve in package_resolvers if (match := resolve(real))), None)
         if managed is None:
-            if real.is_file():
-                update_own_program(log, dry, name, cmd)
+            if can_self_update(real, cfg.home):
+                update_own_program(log, dry, name, real)
             continue
         kind, package, prefix = managed
         key = (kind, package)
@@ -322,7 +374,7 @@ def update_mcp_programs(log, cfg, dry: bool, *, state: UpdateState | None = None
                     ["brew", "upgrade", f"--{kind}", full_name])
         elif kind == "npm":
             if package in outdated_npm(state):
-                upgrade_npm(log, dry, package)
+                upgrade_npm(log, dry, package, state)
         else:
             upgrade = ["uv", "tool", "upgrade"] if kind == "uv" else ["pipx", "upgrade"]
             act(log, dry, f"{package} upgrade ({kind}, for MCP server {name})", [*upgrade, package])
@@ -437,9 +489,25 @@ def update_antigravity_plugins(log, dry: bool, home: Path) -> None:
         if latest == version:
             current += 1
         elif new >= old:
+            backup_plugins(home, "antigravity", dry)
             act(log, dry, f"Antigravity plugin {name}", ["agy", "plugin", "install", f"{name}@{marketplace}"])
     if current:
         log("ok", f"Antigravity plugins are current ({current})")
+
+
+PLUGIN_PATHS = {
+    "claude": (".claude/plugins", ".claude/settings.json", ".claude.json"),
+    "codex": (".codex/plugins", ".codex/config.toml"),
+    "cursor": (".cursor/plugins", ".cursor/cli-config.json"),
+    "gemini": (".gemini/extensions", ".gemini/settings.json"),
+    "antigravity": (".gemini/config/plugins", ".gemini/config/config.json"),
+}
+
+
+def backup_plugins(home: Path, tool: str, dry: bool) -> None:
+    if not dry:
+        for relative in PLUGIN_PATHS[tool]:
+            backups.save(home / relative, follow=True)
 
 
 def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=DEFAULT_AGENTS) -> None:
@@ -454,6 +522,7 @@ def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=
         return tool in enabled and bool(shutil.which(cmd, path=PATH)) and (started(cmd, home) or not dry)
 
     if usable("claude"):
+        backup_plugins(home, "claude", dry)
         act(log, dry, "Claude Code plugin marketplaces", ["claude", "plugin", "marketplace", "update"])
         try:
             plugins = json.loads(raw(["claude", "plugin", "list", "--json"]) or "[]")
@@ -463,14 +532,17 @@ def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=
             if plugin.get("scope") in ("user", "project") and "@" in plugin.get("id", ""):
                 act(log, dry, f"Claude Code plugin {plugin['id']}", ["claude", "plugin", "update", plugin["id"]])
     if usable("codex"):
+        backup_plugins(home, "codex", dry)
         act(log, dry, "Codex plugin marketplaces", ["codex", "plugin", "marketplace", "upgrade"])
     if usable("cursor"):
         for line in raw(["cursor-agent", "plugin", "marketplace", "list"]).splitlines():
             parts = line.split()
             if len(parts) >= 3 and parts[1] == "user" and parts[2].startswith(("https://", "git@")):
+                backup_plugins(home, "cursor", dry)
                 act(log, dry, f"Cursor plugin marketplace {parts[0]}",
                     ["cursor-agent", "plugin", "marketplace", "update", parts[0]])
     if usable("gemini"):
+        backup_plugins(home, "gemini", dry)
         act(log, dry, f'{TOOLS["gemini"].name} extensions', [TOOLS["gemini"].command, "extensions", "update", "--all"])
     if "antigravity" in enabled and shutil.which(TOOLS["antigravity"].command, path=PATH):
         update_antigravity_plugins(log, dry, home)

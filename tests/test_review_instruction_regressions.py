@@ -61,3 +61,26 @@ def test_applying_a_review_choice_keeps_each_files_local_sections(tmp_path):
     assert source.read_text() == "Run tests using pytest.\n" + local
     assert "Claude-only instruction." not in paths["cursor"].read_text()
     assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+
+
+def test_review_applies_a_held_non_source_reword(tmp_path):
+    paths = instructions.files(tmp_path)
+    cfg = Config(home=tmp_path)
+    baselines = review.baseline_file(cfg)
+    source, codex = paths["claude"], paths["codex"]
+    source.parent.mkdir()
+    old, new = "Run tests before pushing.\n", "Run all tests before pushing.\n"
+    source.write_text(old)
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    codex.write_text(new)
+    warning, = instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert "rewords 1 shared line" in warning
+    scan = review.scan(tmp_path, cfg)
+    group, = scan.groups
+    winner = next(version for version in group.versions if version.path == codex)
+    choices = {group.key: winner.id}
+    writes.apply(tmp_path, writes.plan(tmp_path, scan, choices, "claude"), tmp_path / "review-backup")
+    review.remember(baselines, review.scan(tmp_path, cfg), choices)
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+    assert source.read_text() == codex.read_text() == new
+    assert paths["cursor"].read_text().endswith(new)

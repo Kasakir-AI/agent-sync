@@ -21,7 +21,9 @@ import json
 import os
 import shutil
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from . import backups
 from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
 
 EXTRA_ROOTS = {"codex": ".codex/skills", "cursor": ".cursor/skills", "gemini": ".gemini/skills"}
@@ -40,9 +42,11 @@ def locked(home: Path) -> dict[str, dict]:
     """The skills a package installed, from the `skills` CLI's lock file."""
     p = home / ".agents/.skill-lock.json"
     try:
-        return json.loads(p.read_text()).get("skills") or {}
+        data = json.loads(p.read_text())
     except (OSError, ValueError):
         return {}
+    entries = data.get("skills") if isinstance(data, dict) else None
+    return {name: meta for name, meta in entries.items() if isinstance(meta, dict)} if isinstance(entries, dict) else {}
 
 
 def own(home: Path, source: str, skip: list[str]) -> dict[str, Path]:
@@ -177,6 +181,7 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             if have:                                       # every tool reading `target` loads it already
                 if dest.exists():
                     if not dry:
+                        backups.save(dest)
                         shutil.rmtree(dest)
                     changes.append(f"{verb('removed', 'would remove')} skill {name}{note} from {target} "
                                    f"(already loaded from {'; '.join(have)})")
@@ -184,6 +189,7 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             if twice := doubled(home, seen, target, name, src, readers=roots[target]):
                 if dest.exists():
                     if not dry:
+                        backups.save(dest)
                         shutil.rmtree(dest)
                     changes.append(f"{verb('removed', 'would remove')} skill {name}{note} from {target} "
                                    f"({' and '.join(TOOLS[tool].name for tool in twice)} would load it twice)")
@@ -191,16 +197,19 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                 continue
             if dest.exists() and same_tree(src, dest):
                 if marker_text(dest) != mark and not dry:
+                    backups.save(dest)
                     (dest / MARKER).write_text(mark)       # same files from a new place (a plugin's new version)
                 continue
             if not dry:
-                tmp = dest.with_name(f".{name}.agent-sync-new")
-                shutil.rmtree(tmp, ignore_errors=True)
-                shutil.copytree(src, tmp, symlinks=True, ignore=shutil.ignore_patterns(".DS_Store"))
-                (tmp / MARKER).write_text(mark)
-                if dest.exists():
-                    shutil.rmtree(dest)
-                tmp.rename(dest)
+                backups.save(dest)
+                target.mkdir(parents=True, exist_ok=True)
+                with TemporaryDirectory(prefix=f".{name}.agent-sync-", dir=target) as staged:
+                    tmp = Path(staged) / name
+                    shutil.copytree(src, tmp, symlinks=True, ignore=shutil.ignore_patterns(".DS_Store"))
+                    (tmp / MARKER).write_text(mark)
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    tmp.rename(dest)
             changes.append(f"{verb('copied', 'would copy')} skill {name}{note} to {target}")
         for d in sorted(target.iterdir()) if target.is_dir() else []:
             if not (d / MARKER).is_file() or d.is_symlink() or d.name in wanted:
@@ -212,6 +221,7 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             if in_source and not plugin:
                 continue                                   # a copy from an earlier source tool; not ours to judge
             if not dry:
+                backups.save(d)
                 shutil.rmtree(d)
             why = "agent-sync no longer copies plugin skills" if plugin else "no longer in the source tool"
             changes.append(f"{verb('removed', 'would remove')} skill {d.name} from {target} ({why})")
@@ -223,20 +233,41 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
     return changes
 
 
+def installed_name(name: str, meta: dict) -> str:
+    return str(meta.get("skillName") or name).lower()
+
+
+def backup_installs(home: Path, enabled, names) -> None:
+    backups.save(home / ".agents/.skill-lock.json", follow=True)
+    roots = set(folders(home, enabled).values())
+    roots.add(home / ".agents/skills")
+    roots.update(home / root for tool, root in EXTRA_ROOTS.items() if tool in enabled)
+    for name in names:
+        if name in {"", ".", ".."} or "/" in name:
+            continue
+        for root in sorted(roots):
+            backups.save(root / name)
+
+
+def shipped(checkout: Path) -> list[str]:
+    from .duplicates import skill_name, walk
+
+    root = checkout / "skills" if (checkout / "skills").is_dir() else checkout
+    found = walk(root) or ([root] if (root / "SKILL.md").is_file() else [])
+    return sorted({skill_name(d) for d in found})
+
+
 def package_choice(home: Path, package: str, checkout: Path, taken: set[str]) -> tuple[list[str] | None, list[str]]:
     """Which skills of `package` to install, given the names packages listed before it already ship:
     (None for all of them, or the names to install) and the installed ones to remove because an earlier
     package has that name. Adds this package's names to `taken`."""
-    from .duplicates import skill_name, walk
-    root = checkout / "skills" if (checkout / "skills").is_dir() else checkout   # where the skills CLI looks
-    found = walk(root) or ([root] if (root / "SKILL.md").is_file() else [])        # a package that is one skill
-    ships = sorted({skill_name(d) for d in found})
+    ships = shipped(checkout)
     clash = [n for n in ships if n in taken]
     taken.update(ships)
     if not clash:
         return None, []
     gone = [name for name, meta in sorted(locked(home).items()) if meta.get("source") == package
-            and (meta.get("skillName") or name).lower() in clash]
+            and installed_name(name, meta) in clash]
     return [n for n in ships if n not in clash], gone
 
 

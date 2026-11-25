@@ -1,7 +1,9 @@
 import json
 import tomllib
 
-from agent_sync import mcp
+import pytest
+
+from agent_sync import backups, mcp, pending
 
 
 def test_missing_servers_are_added_and_existing_ones_left_alone(tmp_path):
@@ -40,32 +42,67 @@ def test_an_empty_mcp_file_counts_as_no_servers(tmp_path):
     assert json.loads(target.read_text())["mcpServers"]["files"] == {"command": "npx", "args": ["f"]}
 
 
-def test_mcp_dedupe_preserves_unrelated_toml_bytes_and_backs_up_once(tmp_path):
+def dedupe_runs(home, enabled, *, keep=()):
+    state = home / "state"
+    logs = []
+    for now in (100, 100 + pending.WAIT):
+        with pending.during(state, keep, lambda *line: logs.append(line), False, now=now):
+            with backups.during(home, state / "backups", 30):
+                changes = mcp.dedupe(home, False, enabled=enabled)
+    return changes, logs
+
+
+def test_mcp_dedupe_keeps_toml_extra_tables_and_backs_up_only_exact_copies(tmp_path):
     from tests.test_inventory import codex_plugin, write
 
-    plugin = codex_plugin(tmp_path, "cloudflare@claude-plugins-official", "1.0.0",
-                          manifest=".claude-plugin/plugin.json")
-    write(plugin, ".mcp.json", {"cloudflare": {"type": "http", "url": "https://mcp.cloudflare.com/mcp"}})
+    plugin = codex_plugin(tmp_path, "cloudflare@remote", "1.0.0", remote=True)
+    write(plugin, ".mcp.json", {"cloudflare": {"url": "https://cf.example/mcp"}})
     config = write(tmp_path, ".codex/config.toml", "")
-    beginning = b'# Keep my spacing\r\nmodel   = "example"\r\n\r\n'
-    first = b'[mcp_servers."cloud.flare"] # duplicate\r\nurl = "https://mcp.cloudflare.com/mcp/"\r\n'
-    second = b'[mcp_servers."cloud.flare".env]\r\nTHING = "value"\r\n'
-    middle = b'\r\n# Unrelated table\r\n[mcp_servers."cloud.flare.extra"]\r\ncommand = "different"\r\n'
-    third = b'[[mcp_servers."cloud.flare".tools]]\r\nname = "test"\r\n'
-    end = b'\r\n[plugins."cloudflare@claude-plugins-official"]\r\nenabled = true\r\n'
-    before = beginning + first + second + middle + third + end
+    start = b'# Keep my spacing\r\nmodel   = "example"\r\n\r\n'
+    exact = b'[mcp_servers."clean.copy"] # duplicate\r\nurl = "https://cf.example/mcp"\r\nenabled = true\r\n'
+    extended = (b'[mcp_servers."cloud.flare"]\r\nurl = "https://cf.example/mcp"\r\n'
+                b'[mcp_servers."cloud.flare".tools]\r\nname = "test"\r\n')
+    before = start + exact + extended
     config.write_bytes(before)
-    backups = tmp_path / "state/backups"
-    message = ("MCP server cloud.flare from Codex settings: "
-               "plugin cloudflare@claude-plugins-official brings the same server")
-    assert mcp.dedupe(tmp_path, True, backups, enabled=("codex",)) == ["would remove " + message]
-    assert config.read_bytes() == before and not backups.exists()
-    assert mcp.dedupe(tmp_path, False, backups, enabled=("codex",)) == ["removed " + message]
-    assert config.read_bytes() == beginning + middle + end
-    saved, = backups.glob("dedupe-*/.codex/config.toml")
-    assert saved.read_bytes() == before
-    assert mcp.dedupe(tmp_path, False, backups, enabled=("codex",)) == []
-    assert list(backups.iterdir()) == [saved.parents[1]]
+
+    state = tmp_path / "state"
+    logs = []
+    def log(*line):
+        logs.append(line)
+
+    with pending.during(state, [], log, True, now=100):
+        warning, = mcp.dedupe(tmp_path, True, enabled=("codex",))
+    assert "cloud.flare twice" in warning
+    assert [(kind, message.split(" MCP")[0]) for kind, message in logs] == [("dry", "would announce removal of")]
+    assert config.read_bytes() == before and not state.exists()
+    with pending.during(state, [], log, False, now=100):
+        assert mcp.dedupe(tmp_path, False, enabled=("codex",)) == [warning]
+    assert config.read_bytes() == before
+    with pending.during(state, [], log, False, now=100 + pending.WAIT):
+        with backups.during(tmp_path, state / "backups", 30) as run:
+            messages = mcp.dedupe(tmp_path, False, enabled=("codex",))
+    assert messages[0].startswith("removed MCP server clean.copy") and messages[1:] == [warning]
+    assert config.read_bytes() == start + extended
+    assert (run.folder / ".codex/config.toml").read_bytes() == before
+
+
+@pytest.mark.parametrize("extra", [
+    {"env": {"MODE": "different"}}, {"bearer_token_env_var": "TOKEN"},
+    {"headers": {"Authorization": "custom"}}, {"enabled": False},
+    {"args": ["pack@2.0.0"]},
+])
+def test_mcp_dedupe_leaves_non_identical_raw_entries(tmp_path, extra):
+    from tests.test_inventory import write
+
+    command = {"command": "npx", "args": ["pack@1.0.0"], "env": {"MODE": "plugin"}}
+    write(tmp_path, ".cursor/plugins/local/pack/mcp.json", {"pack": command})
+    path = write(tmp_path, ".cursor/mcp.json", {"mcpServers": {"pack": {**command, **extra}}})
+    before = path.read_bytes()
+    changes, logs = dedupe_runs(tmp_path, ("cursor",))
+    assert changes == ['WARN  Cursor load MCP server pack twice (settings and plugin pack@local); '
+                       'remove one, or add "mcp:cursor:pack" to keep_installed to stop this warning']
+    assert not logs and path.read_bytes() == before
+    assert dedupe_runs(tmp_path, ("cursor",), keep=["pack"]) == ([], [])
 
 
 def test_mcp_dedupe_keeps_json_keys_order_and_unicode(tmp_path):
@@ -81,12 +118,12 @@ def test_mcp_dedupe_keeps_json_keys_order_and_unicode(tmp_path):
         "tools": {"command": "python3", "args": ["é.py"]}}, "after": ["🦊"]}
     path = write(tmp_path, ".gemini/config/mcp_config.json", json.dumps(entries, ensure_ascii=False))
     before = path.read_bytes()
-    backups = tmp_path / "backups"
-    assert mcp.dedupe(tmp_path, False, backups, enabled=("antigravity",)) == [
+    changes, _ = dedupe_runs(tmp_path, ("antigravity",))
+    assert changes == [
         "removed MCP server cloudflare from Antigravity settings: plugin cloudflare@agy brings the same server"]
     del entries["mcpServers"]["cloudflare"]
     assert path.read_text() == json.dumps(entries, ensure_ascii=False, indent=2) + "\n"
-    saved, = backups.glob("dedupe-*/.gemini/config/mcp_config.json")
+    saved, = tmp_path.glob("state/backups/run-*/.gemini/config/mcp_config.json")
     assert saved.read_bytes() == before
 
 
@@ -143,25 +180,26 @@ def test_pins_change_only_selected_toml_and_json_strings(tmp_path):
         return {"rea-agents": "6.10.1", "@org/pack": "1.2.3"}[package]
 
     enabled = ("codex", "cursor")
-    backups = tmp_path / "backups"
+    root = tmp_path / "backups"
     expected = ["updated MCP server rea in Codex settings: rea-agents 6.8.0 -> 6.10.1",
                 "updated MCP server scoped in Cursor settings: @org/pack 1.2.3-rc.1 -> 1.2.3",
                 "updated MCP server rea in Cursor settings: rea-agents 6.8.0 -> 6.10.1"]
-    assert mcp.pins(tmp_path, True, enabled=enabled, keep=["hold"], latest=latest, backup_dir=backups) == [
+    assert mcp.pins(tmp_path, True, enabled=enabled, keep=["hold"], latest=latest) == [
         line.replace("updated", "would update", 1) for line in expected]
     assert codex.read_bytes() == toml_before.encode() and cursor.read_bytes() == json_before.encode()
-    assert not backups.exists()
+    assert not root.exists()
     calls.clear()
-    assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest, backup_dir=backups) == expected
+    with backups.during(tmp_path, root, 30):
+        assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest) == expected
     assert calls == ["rea-agents", "@org/pack"]
     assert codex.read_bytes() == toml_before.replace(f"'{old}'", f"'{new}'").encode()
     assert cursor.read_text() == json_before.replace('"dlx","@org/pack@1.2.3-rc.1"', '"dlx","@org/pack@1.2.3"').replace(
         f'"exec","{old}"', f'"exec","{new}"')
-    saved, = backups.iterdir()
+    saved, = root.iterdir()
     assert (saved / ".codex/config.toml").read_bytes() == toml_before.encode()
     assert (saved / ".cursor/mcp.json").read_bytes() == json_before.encode()
-    assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest, backup_dir=backups) == []
-    assert list(backups.iterdir()) == [saved]
+    assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest) == []
+    assert list(root.iterdir()) == [saved]
 
 
 def test_shared_settings_use_plugins_from_every_reader(tmp_path, monkeypatch):
@@ -177,7 +215,9 @@ def test_shared_settings_use_plugins_from_every_reader(tmp_path, monkeypatch):
     enabled = ("claude", "cursor", "gemini")
     assert mcp.mirror(tmp_path, "claude", enabled=enabled) == []
     path = write(tmp_path, ".cursor/mcp.json", {"mcpServers": {"cf": {"url": "https://example.com/mcp"}}})
-    assert mcp.dedupe(tmp_path, False, tmp_path / "backups", enabled=enabled) == [
+    changes, logs = dedupe_runs(tmp_path, enabled)
+    assert '"mcp:cursor:cf"' in logs[0][1]
+    assert changes == [
         "removed MCP server cf from Cursor, Gemini CLI settings: plugin pack@extensions brings the same server"]
     assert json.loads(path.read_text())["mcpServers"] == {}
 
@@ -190,6 +230,7 @@ def test_dedupe_handles_inline_codex_entries_without_reformatting_others(tmp_pat
     before = ('mcp_servers = { first={ url="https://first.example" }, same = {url="https://same.example"},'
               ' last={command="run",args=["a,b", "c"]} } # preserve\n')
     path = write(tmp_path, ".codex/config.toml", before)
-    assert mcp.dedupe(tmp_path, False, tmp_path / "backups", enabled=("codex",)) == [
+    changes, _ = dedupe_runs(tmp_path, ("codex",))
+    assert changes == [
         "removed MCP server same from Codex settings: plugin pack@remote brings the same server"]
     assert path.read_text() == before.replace(' same = {url="https://same.example"},', "")

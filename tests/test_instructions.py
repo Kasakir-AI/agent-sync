@@ -1,6 +1,6 @@
 import json
 
-from agent_sync import instructions
+from agent_sync import instructions, pending
 from agent_sync.registry import TOOLS
 
 OLD_BLOCK = ("<!-- agent-sync: begin (mirrored from CLAUDE.md; edit the source, not this block) -->\n{}\n"
@@ -46,15 +46,19 @@ def test_an_old_mirrored_block_folds_into_one_copy_of_each_line(tmp_path):
         assert codex.count(line) == 1, line
 
 
-def test_a_line_deleted_from_the_source_leaves_the_target_but_its_own_notes_stay(tmp_path):
+def test_a_source_deletion_waits_and_preserves_tool_local_notes(tmp_path):
     files = setup(tmp_path, "Be brief.\nAsk before pushing.\n", "Codex-only note.\n")
     baselines = tmp_path / "state/baselines.json"
     instructions.mirror(tmp_path, "claude", baselines=baselines)
     assert json.loads(baselines.read_text())[instructions.KEY]["lines"] == ["Be brief.", "Ask before pushing."]
     files["claude"].write_text("Be brief.\n")
-    instructions.mirror(tmp_path, "claude", baselines=baselines)
-    codex = files["codex"].read_text()
-    assert "Ask before pushing." not in codex and "Codex-only note." in codex and "Be brief." in codex
+    logs = []
+    for now in (100, 100 + pending.WAIT - 1, 100 + pending.WAIT):
+        with pending.during(baselines.parent, [], lambda *line: logs.append(line), False, now=now):
+            instructions.mirror(tmp_path, "claude", baselines=baselines)
+        assert ("Ask before pushing." in files["codex"].read_text()) == (now < 100 + pending.WAIT)
+    assert len(logs) == 1 and logs[0][0] == "WARN" and 'instruction "Ask before pushing."' in logs[0][1]
+    assert files["codex"].read_text() == "Codex-only note.\nBe brief.\n"
 
 
 def test_cursor_can_seed_the_shared_instructions(tmp_path):
@@ -72,20 +76,31 @@ def test_a_target_that_already_has_every_source_line_is_left_alone(tmp_path):
     assert files["codex"].read_text() == "Codex-only note.\n# Mine\n\nBe brief.\n"
 
 
-def test_rewords_from_the_source_and_gemini_reach_every_file(tmp_path):
-    files = setup(tmp_path, "Be brief.\nAsk before pushing to a shared branch.\nRun the tests.\n", "")
+def test_source_rewords_spread_and_gemini_rewords_are_held(tmp_path):
+    old, new = "Ask before pushing to a shared branch.", "Ask before pushing to any shared branch."
+    files = setup(tmp_path, f"Be brief.\n{old}\nRun the tests.\n", "")
     files.update(instructions.files(tmp_path, TOOLS))
     baselines = tmp_path / "state/baselines.json"
     instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
 
     gemini = files["gemini"]
-    gemini.write_text(gemini.read_text().replace("to a shared branch", "to any shared branch"))
-    files["claude"].write_text("Be very brief.\nAsk before pushing to a shared branch.\nRun the tests.\n")
-    messages = instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
-    assert messages and all(line.startswith("updated ") for line in messages)
-    for path in set(files.values()):
-        assert "Be very brief.\nAsk before pushing to any shared branch.\nRun the tests." in path.read_text()
+    gemini.write_text(gemini.read_text().replace(old, new))
+    files["claude"].write_text(f"Be very brief.\n{old}\nRun the tests.\n")
+    warning = (f'WARN  {gemini} rewords 1 shared line(s) (first: "{old}" -> "{new}"); '
+               'the other tools keep the old wording. Run agent-sync review to choose.')
+    for i in range(2):
+        messages = instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
+        assert messages[0] == warning
+        if i:
+            assert messages == [warning]
+        for path in set(files.values()):
+            wording = new if path == gemini else old
+            assert f"Be very brief.\n{wording}\nRun the tests." in path.read_text()
+    assert json.loads(baselines.read_text())[instructions.KEY]["held"][".gemini/GEMINI.md"] == {
+        "missing": [], "reworded": {old: new}}
+    gemini.write_text(gemini.read_text().replace(new, old))
     assert instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS) == []
+    assert "held" not in json.loads(baselines.read_text())[instructions.KEY]
 
 
 def test_first_run_keeps_similar_tool_only_wording_in_place(tmp_path):
@@ -156,16 +171,26 @@ def test_codex_additions_follow_their_neighbour_in_every_tool(tmp_path):
     assert instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS) == []
 
 
-def test_codex_delete_leaves_tool_local_notes_and_fills_empty_targets(tmp_path):
-    files = setup(tmp_path, "Be brief.\nAsk before pushing.\n", "Codex-only note.\n")
+def test_non_source_deletions_are_held_even_in_empty_files(tmp_path):
+    source = "Be brief.\nAsk before pushing.\n"
+    files = setup(tmp_path, source, "Codex-only note.\n")
     baselines = tmp_path / "state/baselines.json"
     instructions.mirror(tmp_path, "claude", baselines=baselines)
+    before = {tool: path.read_text() for tool, path in files.items()}
     files["codex"].write_text("Codex-only note.\nBe brief.\n")
     files["cursor"].write_text("")
-    instructions.mirror(tmp_path, "claude", baselines=baselines)
-    assert files["claude"].read_text() == "Be brief.\n"
-    assert files["codex"].read_text() == "Codex-only note.\nBe brief.\n"
-    assert files["cursor"].read_text().endswith("\n---\nBe brief.\n")
+    for _ in range(2):
+        codex, cursor = instructions.mirror(tmp_path, "claude", baselines=baselines)
+        assert f'{files["codex"]} no longer has 1 shared line(s) (first: "Ask before pushing.")' in codex
+        assert f'{files["cursor"]} no longer has 2 shared line(s) (first: "Be brief.")' in cursor
+        assert "Run agent-sync review to remove them everywhere or put them back." in codex
+        assert files["claude"].read_text() == source
+        assert files["codex"].read_text() == "Codex-only note.\nBe brief.\n"
+        assert files["cursor"].read_text() == ""
+    for tool in ("codex", "cursor"):
+        files[tool].write_text(before[tool])
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+    assert "held" not in json.loads(baselines.read_text())[instructions.KEY]
 
 
 def test_lines_moved_into_local_sections_do_not_signal_deletion(tmp_path):
@@ -184,22 +209,22 @@ def test_lines_moved_into_local_sections_do_not_signal_deletion(tmp_path):
     assert json.loads(baselines.read_text())[instructions.KEY]["lines"] == ["Keep replies brief.", "Format with Ruff."]
 
 
-def test_conflicting_rewords_stay_in_place_until_resolved(tmp_path):
+def test_source_reword_reaches_unedited_copies_when_codex_also_rewords(tmp_path):
     files = setup(tmp_path, "Be brief.\nAsk before pushing to a shared branch.\n", "")
     baselines = tmp_path / "state/baselines.json"
     instructions.mirror(tmp_path, "claude", baselines=baselines)
     for tool, wording in [("claude", "any shared branch"), ("codex", "the main branch")]:
         path = files[tool]
         path.write_text(path.read_text().replace("a shared branch", wording))
-    snapshot = {tool: path.read_text() for tool, path in files.items()}
-    for _ in range(2):
-        warning, = instructions.mirror(tmp_path, "claude", baselines=baselines)
-        assert warning.startswith("WARN  conflicting rewords")
-        assert str(files["claude"]) in warning and str(files["codex"]) in warning
-        assert {tool: path.read_text() for tool, path in files.items()} == snapshot
-    files["codex"].write_text(snapshot["codex"].replace("the main branch", "any shared branch"))
-    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    codex = files["codex"].read_text()
+    warning, update = instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert warning.startswith(f'WARN  {files["codex"]} rewords 1 shared line(s)')
+    assert update == f'updated {files["cursor"]}'
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines) == [warning]
+    assert files["codex"].read_text() == codex
     assert files["cursor"].read_text().endswith("Ask before pushing to any shared branch.\n")
+    files["codex"].write_text(codex.replace("the main branch", "any shared branch"))
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
 
 
 def test_dry_run_leaves_files_and_baselines_unchanged(tmp_path):

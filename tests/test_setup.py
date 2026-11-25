@@ -60,6 +60,7 @@ def test_own_brew_installs_casks_for_enabled_agents(mac):
 
 
 def test_your_own_install_command_runs(mac, monkeypatch):
+    monkeypatch.setattr(setup, "brew_prefix", lambda: None)
     done = mac / "installed"
     cfg = Config(home=mac, source="codex", agents=["codex"], update_clis=False,
                  install_commands={"homebrew": ["/usr/bin/true"], "node": ["no-such-installer"],

@@ -9,11 +9,10 @@ import shutil
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from pathlib import Path
 from stat import S_IMODE
 
-from . import instructions, mcp, review, roles, skills, tomledit
+from . import backups, instructions, mcp, review, roles, skills, tomledit
 from .config import Config
 from .registry import TOOLS
 from .review import (
@@ -321,13 +320,13 @@ def edits(steps: list[Step]) -> list[Edit]:
     return changes
 
 
-def apply(home: Path, steps: list[Step], backup_dir: Path) -> list[str]:
+def apply(home: Path, steps: list[Step], backup_dir: Path | None = None) -> list[str]:
     """Write only what changes: stage each file beside its target, back up the originals, then rename into place.
     (`remember` then records the result for the next review.)"""
     return apply_edits(home, edits(steps), backup_dir)
 
 
-def apply_edits(home: Path, changes: list[Edit], backup_dir: Path) -> list[str]:
+def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None) -> list[str]:
     staged: list[tuple[Edit, Path]] = []
     try:
         for edit in changes:
@@ -345,10 +344,9 @@ def apply_edits(home: Path, changes: list[Edit], backup_dir: Path) -> list[str]:
                 elif edit.create_mode is not None:
                     temp.chmod(edit.create_mode)
         for edit, _ in staged:
-            dest = backup_dir / edit.path.relative_to(home.resolve())
-            if edit.before is not None and not dest.exists():
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(edit.path, dest, follow_symlinks=False)
+            backups.save(edit.path)
+            if backup_dir is not None and edit.before is not None:
+                backups.copy(edit.path, home.resolve(), backup_dir)
         for edit, temp in staged:
             temp.replace(edit.path)
     finally:
@@ -360,18 +358,7 @@ def apply_edits(home: Path, changes: list[Edit], backup_dir: Path) -> list[str]:
             for target, action in targets.items()]
 
 
-def backup_folder(root: Path, prefix: str) -> Path:
-    """A new, private folder for the originals of one apply."""
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    stamp = datetime.now()
-    while True:
-        backup = root / f"{prefix}-{stamp:%Y%m%d-%H%M%S}"
-        try:
-            backup.mkdir(mode=0o700)
-        except FileExistsError:
-            stamp += timedelta(seconds=1)
-        else:
-            return backup
+backup_folder = backups.new_folder
 
 
 def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:
@@ -404,12 +391,9 @@ def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:
         return []
     if dry:
         return [f"would update {shown(home, step.path)} ({why[step.key]})" for step in steps]
-    backup = backup_folder(cfg.state_dir / "backups", "repair")
-    if not apply(home, steps, backup):
-        backup.rmdir()
+    if not apply(home, steps):
         return []
-    return [f"updated {shown(home, step.path)} ({why[step.key]})" for step in steps] + [
-        f"originals backed up in {shown(home, backup)}"]
+    return [f"updated {shown(home, step.path)} ({why[step.key]})" for step in steps]
 
 
 WRITERS = {

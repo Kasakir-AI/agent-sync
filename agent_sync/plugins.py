@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import inventory, tools
+from . import backups, inventory, pending, tools
 from .registry import DEFAULT_AGENTS, TOOLS
 
 MARKETPLACE = re.compile(r"^\s*Marketplace\s+`([^`]+)`")
@@ -91,6 +91,16 @@ def skill_problem(old: inventory.Plugin, candidate: inventory.Plugin) -> str:
     return f"it lacks {len(missing)} of its skills ({names})"
 
 
+def replacement_problem(old: inventory.Plugin, candidate: inventory.Plugin) -> str:
+    if reason := version_problem(old.version, candidate.version) or skill_problem(old, candidate):
+        return reason
+    endpoints = {inventory.endpoint(server) for _, server in candidate.servers}
+    for name, server in old.servers:
+        if (endpoint := inventory.endpoint(server)) and endpoint not in endpoints:
+            return f"it lacks one of its MCP servers ({name})"
+    return ""
+
+
 def remember(path: Path, choices: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as file:
@@ -105,7 +115,7 @@ def remember(path: Path, choices: dict) -> None:
 
 
 def own_versions(home: Path, dry: bool, log, *, enabled=DEFAULT_AGENTS, state_dir: Path,
-                 catalog=codex_catalog, run=tools.sh) -> None:
+                 catalog=codex_catalog, run=None) -> None:
     if "codex" not in enabled:
         return
     loaded = inventory.plugins(home, ("codex",))["codex"]
@@ -114,10 +124,20 @@ def own_versions(home: Path, dry: bool, log, *, enabled=DEFAULT_AGENTS, state_di
     available = None
 
     def command(action: str, pid: str) -> bool:
-        code, output = run(["codex", "plugin", action, pid])
-        if code:
-            log("FAIL", f"Codex could not {action} {pid}: {output}")
-        return code == 0
+        args = ["codex", "plugin", action, pid]
+        backups.save(home / ".codex/config.toml", follow=True)
+        name, _, marketplace = pid.partition("@")
+        if name and marketplace and all(part not in {".", ".."} and "/" not in part
+                                        for part in (name, marketplace)):
+            backups.save(home / ".codex/plugins/cache" / marketplace / name)
+        return tools.act(log, False, f"Codex {action} {pid}", args, run=run)
+
+    def switch(old: inventory.Plugin, candidate: inventory.Plugin) -> None:
+        if pending.due(f"plugin:codex:{old.id}", f"Codex plugin {old.id}") and not dry:
+            if command("remove", old.id):
+                log("ok", f"switched Codex from {label(old)} to its own {label(candidate)}")
+        elif not pending.keeps(f"plugin:codex:{old.id}"):
+            log("info", f"Codex has both {label(old)} and {label(candidate)} installed")
 
     for old in loaded:
         if old.made_for != "claude":
@@ -126,14 +146,12 @@ def own_versions(home: Path, dry: bool, log, *, enabled=DEFAULT_AGENTS, state_di
         own = [p for p in loaded if p.family == old.family and p.made_for == "codex"]
         if own:
             own.sort(key=lambda p: numbers(p.version), reverse=True)
-            options = [(p, version_problem(old.version, p.version) or skill_problem(old, p)) for p in own]
+            options = [(p, replacement_problem(old, p)) for p in own]
             candidate, reason = next(((p, why) for p, why in options if not why), options[0])
             if reason:
                 log("info", f"Codex keeps {old.id} next to its own {candidate.id}: {reason}")
-            elif dry:
-                log("dry", f"would remove {old.id} from Codex; its own {label(candidate)} covers the same skills")
-            elif command("remove", old.id):
-                log("ok", f"switched Codex from {label(old)} to its own {label(candidate)}")
+            else:
+                switch(old, candidate)
             continue
 
         if available is None:
@@ -154,14 +172,13 @@ def own_versions(home: Path, dry: bool, log, *, enabled=DEFAULT_AGENTS, state_di
             continue
         refreshed = inventory.plugins(home, ("codex",))["codex"]
         candidate = next((p for p in refreshed if p.id == entry.id and p.made_for == "codex"), None)
-        reason = (version_problem(old.version, candidate.version) or skill_problem(old, candidate)
-                  if candidate else "the Codex-format install could not be verified")
+        reason = (replacement_problem(old, candidate) if candidate
+                  else "the Codex-format install could not be verified")
         if reason:
-            if command("remove", entry.id) and candidate and old.skill_names - candidate.skill_names:
-                choices[old.id] = {**(skipped if isinstance(skipped, dict) else {}), entry.id: entry.version}
-                remember(rejected, choices)
+            choices[old.id] = {**(skipped if isinstance(skipped, dict) else {}), entry.id: entry.version}
+            remember(rejected, choices)
+            command("remove", entry.id)
             log("info", f"Codex keeps {old.id} over its own {entry.id}: {reason}")
-        else:
+        elif candidate:
             loaded.append(candidate)
-            if command("remove", old.id):
-                log("ok", f"switched Codex from {label(old)} to its own {label(candidate)}")
+            switch(old, candidate)

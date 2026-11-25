@@ -15,7 +15,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from . import instructions, membership, roles, skills, tomledit
+from . import instructions, membership, roles, skills, tomledit, tools
 from .config import AgentModels, config_path, parse
 from .registry import TOOLS
 
@@ -318,6 +318,28 @@ class Editor:
         if new is not None:
             self.set("keep_mcp_versions", new)
 
+    def installed(self) -> None:
+        self.explain("Keep installed", "Keep a skill, plugin or MCP server when upkeep finds a reason to remove it.")
+        new = self.edit_list("Keep installed", self.cfg.keep_installed, "Name or removal key", ["mcp:codex:example"])
+        if new is not None:
+            self.set("keep_installed", new)
+
+    def global_updates(self) -> None:
+        managers = tools.GLOBAL_MANAGERS
+        now = tools.global_managers(self.cfg.update_global_tools)
+        self.explain("Global tool updates", "Update tools installed globally by npm, pipx, uv or Homebrew.",
+                     "Now: " + (", ".join(now) or "none"))
+        pick = self.choose([("default", "Update npm, pipx and uv tools"), ("none", "Update none"),
+                            ("some", "Choose which")])
+        if pick in ("default", "none"):
+            self.set("update_global_tools", pick == "default")
+        elif pick == "some":
+            chosen = set(now)
+            while manager := self.choose([(m, f"[{'x' if m in chosen else ' '}] {m}") for m in managers],
+                                         "Switch which on/off"):
+                chosen.symmetric_difference_update({manager})
+            self.set("update_global_tools", [m for m in managers if m in chosen])
+
     def cli_updates(self) -> None:
         now = self.cfg.update_clis
         self.explain("CLI updates", "Update the enabled agent CLIs during upkeep.",
@@ -380,16 +402,17 @@ class Editor:
     def advanced(self) -> None:
         self.explain("Advanced")
         pick = self.choose([("skills_cli", f"skills CLI version      {self.cfg.skills_cli}"),
-                            ("log_days", f"Days of log to keep     {self.cfg.log_days}")])
+                            ("log_days", f"Days of log to keep     {self.cfg.log_days}"),
+                            ("backup_days", f"Days of backups to keep {self.cfg.backup_days}")])
         if pick == "skills_cli":
             self.say("  skills@latest always uses the newest release; pin one to hold it (example: skills@1.2.3).")
             value = self.ask("skills CLI (Enter keeps it): ")
             if value:
                 self.set("skills_cli", value)
-        elif pick == "log_days":
+        elif pick in ("log_days", "backup_days"):
             value = self.ask("Days (example: 14): ")
             if value.isdigit() and int(value) > 0:
-                self.set("log_days", int(value))
+                self.set(pick, int(value))
             elif value:
                 self.say("  Please type a whole number, like 7.")
 
@@ -479,10 +502,12 @@ class Editor:
             ("9", "Your own update commands", few(list(c.cli_commands)), self.update_commands),
             ("10", "Your own install commands", few(list(c.install_commands)), self.install_commands),
             ("11", "Extra steps", few([s.get("name", "?") for s in c.extra_steps]), self.steps),
-            ("12", "Advanced", "skills CLI version, days of log", self.advanced),
+            ("12", "Advanced", "skills CLI version, log and backup retention", self.advanced),
             ("13", "Skills allowed twice", few(c.allow_duplicate_skills), self.duplicates),
             ("14", "Agents", few([TOOLS[agent].name for agent in c.agents]), self.agents),
             ("15", "MCP versions to keep", few(c.keep_mcp_versions), self.mcp_versions),
+            ("16", "Keep installed", few(c.keep_installed), self.installed),
+            ("17", "Global tool updates", few(tools.global_managers(c.update_global_tools)), self.global_updates),
             ("r", "pstack model roles", self.roles_path.name if self.roles_text is not None else "none yet",
              self.model_roles),
             ("i", "Global instructions", "opens your editor", self.instructions_file),

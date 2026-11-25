@@ -21,9 +21,17 @@ def home(tmp_path, monkeypatch):
 def upkeep_home(home, monkeypatch):
     path = config_path(home)
     path.parent.mkdir(parents=True)
-    path.write_text("skill_packages = []\nupdate_plugins = false\nupdate_clis = false\nupdate_self = false\n")
+    path.write_text("skill_packages = []\nupdate_plugins = false\nupdate_mcp_programs = false\n"
+                    "update_clis = false\nupdate_self = false\n")
     monkeypatch.setattr(cli, "online", lambda: True)
     monkeypatch.setattr(cli.tools, "skills", lambda *args: (0, "test version"))
+    def unexpected(args, *unused, **kwargs):
+        if args[0] in {"npx", "npm", "brew"}:
+            pytest.fail(f"unexpected package command: {args}")
+        pytest.fail(f"unexpected external command: {args}")
+
+    monkeypatch.setattr(cli.tools, "sh", unexpected)
+    monkeypatch.setattr(cli.tools, "raw", unexpected)
     return home
 
 
