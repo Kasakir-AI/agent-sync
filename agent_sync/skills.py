@@ -200,9 +200,8 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             pending.removed(key)
             changes.append(f"removed {what}")
 
-    from .duplicates import codex_config, codex_off, doubled, elsewhere, views  # they build on this module
+    from .duplicates import doubled, elsewhere, views  # they build on this module
     seen = views(home, enabled=enabled)
-    off = codex_off(codex_config(home))
     left_out: dict[tuple[Path, tuple[str, ...]], list[str]] = {}   # (target, tools that have them) -> skill names
     for target in sorted(plan):
         wanted, in_source = plan[target], target == source_dir
@@ -222,7 +221,7 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             if dest.exists() and in_source and not is_plugin_copy(dest):
                 changes.append(f"WARN  {dest} is a copy from an earlier source tool; left alone")
                 continue
-            have = elsewhere(home, seen, target, name, src, readers=roots[target], off=off)
+            have = elsewhere(home, seen, target, name, src, readers=roots[target])
             if have:                                       # every tool reading `target` loads this very skill already
                 if dest.exists():
                     remove_copy(dest, f"already loaded from {'; '.join(have)}")

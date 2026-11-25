@@ -186,24 +186,19 @@ def within(path: Path, folder: str) -> bool:
 
 
 def elsewhere(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, src: Path, *,
-              readers: tuple[str, ...] | None = None, off: set[str] | None = None) -> list[str]:
-    """Where each tool reads an identical skill elsewhere, or deliberately disabled the copy a second tool reads.
-    Empty when a reader would lose its only identical copy.
-    `off`: Codex's switched-off skill folders, read once by the caller."""
+              readers: tuple[str, ...] | None = None) -> list[str]:
+    """Where each reader loads an identical skill elsewhere, or empty if any reader lacks one."""
     if readers is None:
         readers = tuple(tool for tool, folder in skills.folders(home).items() if folder == target)
     mine = os.path.realpath(target / name)
     want = skills.tree_digest(src)
     name = skill_name(src)
-    switched_off = off if off is not None else codex_off(codex_config(home))
     places = []
     for tool in readers:
         hit = next((s for s in seen.get(tool, []) if not within(s.path, mine) and s.name == name
                     and (s.path / "SKILL.md").is_file() and skills.tree_digest(s.path) == want), None)
         if hit:
             places.append(f"{TOOLS[tool].name}: {hit.where}")
-        elif tool == "codex" and mine in switched_off and len(readers) > 1:
-            places.append("Codex: switched off there")
         else:
             return []
     return places

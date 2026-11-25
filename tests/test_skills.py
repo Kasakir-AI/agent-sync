@@ -217,6 +217,44 @@ def test_a_skill_in_a_folder_whose_name_extends_the_copys_still_counts(tmp_path)
         "Codex: ~/.agents/skills"]
 
 
+def test_shared_copy_survives_until_codex_has_an_active_identical_alternative(tmp_path):
+    from tests.test_inventory import write
+
+    claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    state = tmp_path / "state"
+    enabled = ("claude", "codex", "gemini")
+    make_skill(claude, "notes")
+    skills.mirror(tmp_path, "claude", enabled=enabled)
+    copied = shared / "notes/SKILL.md"
+    write(tmp_path, ".codex/config.toml", f'[[skills.config]]\npath = "{copied}"\nenabled = false\n')
+    plugin = tmp_path / ".gemini/extensions/pack"
+    write(plugin, "gemini-extension.json", {"name": "pack"})
+    make_skill(plugin / "skills", "notes")
+
+    with pending.during(state, [], lambda *_: None, False) as run:
+        skills.mirror(tmp_path, "claude", enabled=enabled)
+        assert not run.questions()
+    assert copied.is_file()
+
+    native = tmp_path / ".codex/skills"
+    make_skill(native, "notes", "Different content.")
+    with pending.during(state, [], lambda *_: None, False) as run:
+        skills.mirror(tmp_path, "claude", enabled=enabled)
+        assert not run.questions()
+    assert copied.is_file()
+
+    alternative = native / "notes/SKILL.md"
+    alternative.write_bytes(copied.read_bytes())
+    with pending.during(state, [], lambda *_: None, False) as run:
+        skills.mirror(tmp_path, "claude", enabled=enabled)
+        assert list(run.questions()) == ["skill-copy:.agents/skills:notes"]
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        skills.mirror(tmp_path, "claude", enabled=enabled)
+    assert not copied.exists()
+    assert alternative.is_file()
+
+
 def test_plugin_skill_children_and_definition_links_cannot_escape_root(tmp_path):
     root = make_plugin(tmp_path, "pack@market", ["inside"], manifest_skills=["custom"])
     external = tmp_path / "external"
