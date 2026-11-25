@@ -15,6 +15,7 @@
     agent-sync agents add <id>...       choose agents to keep in step
     agent-sync agents remove <id>...    stop keeping agents in step and leave their files in place
     agent-sync inventory                show loaded plugins, MCP servers, skills, and upkeep findings
+    agent-sync pending                  list pending removals and unacknowledged warnings
     agent-sync status                   last run, log location, enabled CLI versions
     agent-sync review [--no-open]        compare settings and choose which versions to keep in a local page
     agent-sync review --list             print the comparison and recommendations in the terminal
@@ -45,6 +46,7 @@ from . import (
     mcp,
     membership,
     memory,
+    notify,
     pending,
     plugins,
     review,
@@ -56,8 +58,9 @@ from . import (
 )
 from .config import Config, load, save_setting
 from .locking import run_lock
-from .log import Log
+from .log import Log, WarningAcks
 from .registry import TOOLS
+from .textmerge import save_baselines
 
 DUE_HOURS = 20
 
@@ -111,7 +114,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         if not online():
             log("skip", "no network; will try again at the next scheduled check")
             return 0
-        stack.enter_context(pending.during(cfg.state_dir, cfg.keep_installed, log, dry))
+        removals = stack.enter_context(pending.during(cfg.state_dir, cfg.keep_installed, log, dry))
         updates = tools.UpdateState()
         log("start", f"agent-sync {__version__}, source of truth: {cfg.source}"
             + ("  (dry run: nothing is changed)" if dry else ""))
@@ -183,9 +186,25 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 backups.save(schedule.launcher_path(cfg.home), follow=True)
                 tools.act(log, dry, "Desktop launcher from the new version", [exe, "launcher"])
         log.lines(checks.unwanted_models(cfg.home, cfg.warn_models, enabled=cfg.agents), "WARN")
+        acknowledgements = WarningAcks(cfg.state_dir)
+        warnings = acknowledgements.unseen(log.warnings)
+        questions = removals.questions()
         if dry:
+            for warning in warnings:
+                print(f"WARN  {warning}")
+            for what in questions.values():
+                print(f"Would ask: Remove {what}? [y/N]")
+            if warnings:
+                print("Would ask: Press Enter once you have read the warnings")
             log("done", f"dry run finished, nothing was changed. A real run: {log.summary()}")
             return 0
+        if echo and not notify.in_terminal():
+            for warning in warnings:
+                print(f"WARN  {warning}")
+        approved, acknowledged = notify.deliver(cfg, log, warnings, questions)
+        for key in approved:
+            removals.seen[key]["approved"] = True
+        acknowledgements.save(warnings if acknowledged else [])
         stamp.touch()
         summary = f", backups: {saved.folder}" if saved and saved.folder else ""
         log("done", f"agent-sync finished: {log.summary()}{summary}")
@@ -209,9 +228,11 @@ def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
                 removals.setdefault(name, f"no longer in {package}")
         for name, reason in removals.items():
             what = f"skill {name} ({reason})"
-            if pending.due(f"skill:{name}", what) and not dry:
+            key = f"skill:{name}"
+            if pending.due(key, what) and not dry:
                 skills.backup_installs(cfg.home, cfg.agents, [name])
-                tools.act(log, dry, f"remove {what}", tools.remove_args(cfg.skills_cli, name, enabled=cfg.agents))
+                if tools.act(log, dry, f"remove {what}", tools.remove_args(cfg.skills_cli, name, enabled=cfg.agents)):
+                    pending.removed(key)
 
     installed = skills.locked(cfg.home)
     for package, checkout, names in packages:
@@ -362,10 +383,50 @@ def show_inventory() -> int:
                 + plugins.twice(home, enabled=enabled)
                 + mcp.same_server_twice(home, enabled=enabled)
                 + mcp.pins(home, True, enabled=enabled, keep=cfg.keep_mcp_versions, latest=latest))
-    with pending.during(cfg.state_dir, cfg.keep_installed, lambda _, text: problems.append(text), True):
+    with pending.during(cfg.state_dir, cfg.keep_installed, lambda _, text: problems.append(text), True) as removals:
         problems.extend(mcp.dedupe(home, True, enabled=enabled))
+        problems.extend(f"approval required to remove {what}" for what in removals.questions().values())
     for line in problems or ["None"]:
         print(f"  {line}")
+    return 0
+
+
+def pending_command(approve: list[str], keep: list[str], ack: bool) -> int:
+    cfg = load()
+    with ExitStack() as stack:
+        if (approve or keep or ack) and not stack.enter_context(run_lock(cfg.state_dir / "lock")):
+            print("another agent-sync run is in progress. Try again when it finishes.", file=sys.stderr)
+            return 1
+        entries = pending.load(cfg.state_dir)
+        unknown = sorted((set(approve) | set(keep)) - entries.keys())
+        if unknown:
+            print(f"Unknown pending removal key(s): {', '.join(unknown)}", file=sys.stderr)
+            return 1
+        if approve or keep:
+            for key in approve:
+                entries[key]["approved"] = True
+            if keep:
+                save_setting(cfg.home, "keep_installed", list(dict.fromkeys([*cfg.keep_installed, *keep])))
+                for key in set(keep):
+                    del entries[key]
+            save_baselines(cfg.state_dir / pending.FILENAME, entries)
+        if ack or not (approve or keep):
+            acknowledgements = WarningAcks(cfg.state_dir)
+            log = Log(cfg.log_file, write=False)
+            warnings = acknowledgements.unseen(log.recent_warnings(cfg.log_days))
+            if ack:
+                acknowledgements.save(warnings)
+            else:
+                print("Pending removals")
+                for key, item in sorted(entries.items()):
+                    since = datetime.fromtimestamp(item["first"]).strftime("%Y-%m-%d %H:%M:%S")
+                    approved = "yes" if item["approved"] else "no"
+                    print(f"  {key} | {item['what']} | since {since} | approved {approved}")
+                if not entries:
+                    print("  None")
+                print("Unacknowledged recent warnings")
+                for warning in warnings or ["None"]:
+                    print(f"  {warning}")
     return 0
 
 
@@ -404,6 +465,10 @@ def main(argv: list[str] | None = None) -> int:
         command = membership_commands.add_parser(action, help=f"{action} agents")
         command.add_argument("ids", metavar="id", nargs="+")
     sub.add_parser("inventory", help="show loaded plugins, MCP servers, skills, and upkeep findings")
+    p = sub.add_parser("pending", help="list or act on pending removals and warnings")
+    p.add_argument("--approve", metavar="KEY", nargs="+", default=[], action="extend")
+    p.add_argument("--keep", metavar="KEY", nargs="+", default=[], action="extend")
+    p.add_argument("--ack", action="store_true", help="acknowledge all recent warnings")
     sub.add_parser("status", help="show the last run and versions")
     review_parser = sub.add_parser("review", help="compare settings and choose which versions to keep")
     review_parser.add_argument("--list", action="store_true", help="print the comparison and recommendations")
@@ -413,6 +478,8 @@ def main(argv: list[str] | None = None) -> int:
         return membership.run(load(), a.agent_action, getattr(a, "ids", []))
     if a.cmd == "run":
         return run(a.force, a.echo, a.dry_run)
+    if a.cmd == "pending":
+        return pending_command(a.approve, a.keep, a.ack)
     if a.cmd == "review":
         return review_settings(a.list, a.no_open)
     if a.cmd == "setup":

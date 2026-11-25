@@ -1,11 +1,21 @@
 import json
 
-from agent_sync import skills
+from agent_sync import pending, skills
+from tests.test_pending import approve_current
 
 
 def make_skill(folder, name, text="Do the thing."):
     (folder / name).mkdir(parents=True)
     (folder / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {text}\n---\n{text}\n")
+
+
+def mirror_removals(home, source):
+    state = home / "state"
+    with pending.during(state, [], lambda *_: None, False):
+        skills.mirror(home, source)
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        return skills.mirror(home, source)
 
 
 def test_own_skills_copied_updated_and_removed(tmp_path):
@@ -29,9 +39,14 @@ def test_own_skills_copied_updated_and_removed(tmp_path):
 
     (claude / "mine/SKILL.md").unlink()
     (claude / "mine").rmdir()
-    assert skills.mirror(tmp_path, "claude") == [
-        f"copied skill skipped to {shared}",
-        f"removed skill mine from {shared} (no longer in the source tool)"]
+    state = tmp_path / "state"
+    with pending.during(state, [], lambda *_: None, False):
+        assert skills.mirror(tmp_path, "claude") == [f"copied skill skipped to {shared}"]
+    assert (shared / "mine").exists()
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        assert skills.mirror(tmp_path, "claude") == [
+            f"removed skill mine from {shared} (no longer in the source tool)"]
     assert not (shared / "mine").exists()
 
 
@@ -94,9 +109,12 @@ def test_plugin_skills_are_never_copied_and_old_copies_go(tmp_path):
     make_skill(shared, "outline", "writing's outline")                 # a copy an earlier version made
     (shared / "outline" / skills.MARKER).write_text(f"{skills.PLUGIN_MARK}writing@market: {root}/skills/outline\n")
 
-    assert skills.mirror(tmp_path, "claude", dry=True) == [
-        f"would remove skill outline from {shared} (agent-sync no longer copies plugin skills)"]
-    assert skills.mirror(tmp_path, "claude") == [
+    state = tmp_path / "state"
+    with pending.during(state, [], lambda *_: None, True) as run:
+        assert skills.mirror(tmp_path, "claude", dry=True) == []
+        assert list(run.questions()) == ["skill-copy:.agents/skills:outline"]
+    assert (shared / "outline").exists() and not state.exists()
+    assert mirror_removals(tmp_path, "claude") == [
         f"removed skill outline from {shared} (agent-sync no longer copies plugin skills)"]
     assert not (shared / "outline").exists() and not (shared / "edit-prose").exists()
     assert skills.mirror(tmp_path, "claude") == []
@@ -108,9 +126,8 @@ def test_old_plugin_copies_go_when_codex_is_the_source(tmp_path):
     make_skill(shared, "outline", "writing's outline")
     (shared / "outline" / skills.MARKER).write_text(f"{skills.PLUGIN_MARK}writing@market: {root}/skills/outline\n")
     make_skill(shared, "codex-own")
-    assert skills.mirror(tmp_path, "codex") == [
-        f"removed skill outline from {shared} (agent-sync no longer copies plugin skills)",
-        f"copied skill codex-own to {tmp_path / '.claude/skills'}"]
+    assert mirror_removals(tmp_path, "codex") == [
+        f"removed skill outline from {shared} (agent-sync no longer copies plugin skills)"]
     assert (shared / "codex-own").exists()
 
 
@@ -123,8 +140,7 @@ def test_a_copy_a_tool_would_load_twice_is_left_out(tmp_path):
     make_skill(shared, "outline", "my outline")                         # copied before Codex had the plugin
     (shared / "outline" / skills.MARKER).write_text(f"{skills.COPY_MARK}{claude / 'outline'}\n")
 
-    assert skills.mirror(tmp_path, "claude") == [
-        f"copied skill mine to {shared}",
+    assert mirror_removals(tmp_path, "claude") == [
         f"removed skill outline from {shared} (Codex would load it twice)",
         f"WARN  skill outline not copied to {shared}: Codex already loads a skill of that name, so a copy would "
         "load twice"]

@@ -49,6 +49,7 @@ class Config:
     extra_steps: list[dict] = field(default_factory=list)    # [{name = "...", command = ["..."]}] run at the end
     launcher: bool = False                                   # keep "Agent Upkeep" on the Desktop (macOS)
     update_self: bool = True                                 # update agent-sync itself (Homebrew, pipx, git)
+    notify: bool = True
     log_days: int = 7
     backup_days: int = 30
     home: Path = field(default_factory=Path.home)
@@ -77,7 +78,7 @@ KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skil
         "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "allow_duplicate_skills",
         "mirror_instructions", "mirror_memory", "warn_models", "keep_mcp_versions", "keep_installed",
         "update_clis", "update_global_tools", "update_plugins", "update_mcp_programs", "cli_commands",
-        "install_commands", "extra_steps", "launcher", "update_self", "log_days", "backup_days")
+        "install_commands", "extra_steps", "launcher", "update_self", "notify", "log_days", "backup_days")
 
 
 def config_path(home: Path) -> Path:
@@ -120,6 +121,8 @@ def parse(text: str, path: Path, home: Path) -> Config:
         raise ValueError(f"source must be one of {', '.join(registry.TOOLS)}, not {cfg.source!r}")
     if cfg.source not in cfg.agents:
         raise ValueError(f"source {cfg.source!r} must be enabled in agents")
+    if not isinstance(cfg.notify, bool):
+        raise ValueError("notify must be true or false")
     if type(cfg.backup_days) is not int or cfg.backup_days < 0:
         raise ValueError("backup_days must be a nonnegative whole number")
     if not isinstance(cfg.keep_installed, list) or any(not isinstance(key, str) for key in cfg.keep_installed):

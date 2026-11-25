@@ -1,4 +1,4 @@
-"""Announce removals before applying them on a later upkeep run."""
+"""Require approval before upkeep removes an item."""
 from __future__ import annotations
 
 import time
@@ -6,46 +6,57 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
+from typing import TypedDict
 
 from .textmerge import load_baselines, save_baselines
 
-WAIT = 20 * 3600
+FILENAME = "pending-removals.json"
 
 
-@dataclass(frozen=True)
+class Removal(TypedDict):
+    first: float
+    what: str
+    approved: bool
+
+
+def load(state_dir: Path) -> dict[str, Removal]:
+    return {
+        key: Removal(first=item["first"], what=item["what"], approved=item.get("approved") is True)
+        for key, item in load_baselines(state_dir / FILENAME).items()
+        if isinstance(item, dict) and type(item.get("first")) in (int, float)
+        and isinstance(item.get("what"), str)
+    }
+
+
+@dataclass
 class Run:
     log: Callable[[str, str], None]
     dry: bool
     now: float
     keep: frozenset[str]
-    previous: dict
-    seen: dict = field(default_factory=dict)
+    previous: dict[str, Removal]
+    seen: dict[str, Removal] = field(default_factory=dict)
+    removed: set[str] = field(default_factory=set)
 
     def keeps(self, key: str) -> bool:
         return key in self.keep or key.rsplit(":", 1)[-1] in self.keep
 
     def due(self, key: str, what: str) -> bool:
-        if self.keeps(key):
+        if self.keeps(key) or key in self.removed:
             return False
-        first = self.previous.get(key, {}).get("first") if isinstance(self.previous.get(key), dict) else None
-        if not isinstance(first, (int, float)):
-            if key not in self.seen:
-                if self.dry:
-                    self.log("dry", f"would announce removal of {what}")
-                else:
-                    date = datetime.fromtimestamp(self.now + WAIT).strftime("%Y-%m-%d %H:%M:%S")
-                    self.log("WARN", f'will remove {what} at the first run after {date}; '
-                             f'to keep it, add "{key}" to keep_installed')
-            self.seen[key] = {"first": self.now, "what": what}
-            return False
-        self.seen[key] = {"first": first, "what": what}
-        if self.now - first < WAIT:
-            return False
-        if self.dry:
+        item = self.seen.get(key) or self.previous.get(key)
+        if item is None or item["what"] != what:
+            item = Removal(first=self.now, what=what, approved=False)
+            if not self.dry:
+                self.log("WARN", f"approval required to remove {what}")
+        self.seen[key] = item.copy()
+        if self.dry and item["approved"]:
             self.log("dry", f"would remove {what}")
-        return True
+        return item["approved"]
+
+    def questions(self) -> dict[str, str]:
+        return {key: item["what"] for key, item in self.seen.items() if not item["approved"]}
 
 
 current: ContextVar[Run | None] = ContextVar("pending", default=None)
@@ -61,15 +72,20 @@ def due(key: str, what: str) -> bool:
     return run is not None and run.due(key, what)
 
 
+def removed(key: str) -> None:
+    if (run := current.get()) is not None and not run.dry:
+        run.seen.pop(key, None)
+        run.removed.add(key)
+
+
 @contextmanager
 def during(state_dir: Path, keep: list[str], log, dry: bool, *, now: float | None = None):
-    path = state_dir / "pending-removals.json"
-    previous = load_baselines(path)
-    run = Run(log, dry, time.time() if now is None else now, frozenset(keep), previous)
+    run = Run(log, dry, time.time() if now is None else now, frozenset(keep), load(state_dir))
     token = current.set(run)
     try:
         yield run
-        if not dry and run.seen != previous:
+        path = state_dir / FILENAME
+        if not dry and (run.seen or path.exists()):
             save_baselines(path, run.seen)
     finally:
         current.reset(token)

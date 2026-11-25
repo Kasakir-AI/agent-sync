@@ -109,5 +109,5 @@ def test_inventory_command_is_read_only(tmp_path, monkeypatch, capsys):
     assert "Skills loaded: 1" in output
     assert "MCP server cloudflare from plugin cloudflare@remote" in output
     assert "MCP server rea from settings (rea-agents 6.8.0, 6.10.1 is out)" in output
-    assert "would announce removal of MCP server cf from Codex settings" in output
+    assert "approval required to remove MCP server cf from Codex settings" in output
     assert "would update MCP server rea in Codex settings" in output

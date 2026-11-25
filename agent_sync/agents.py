@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backups
+from . import backups, pending
 from .config import AgentModels
 from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths
 from .tomledit import basic_string
@@ -139,9 +139,13 @@ def mirror(package_dir: Path, package: str, home: Path, models: AgentModels, ver
             changes.append(f"{verb} {plugin}/.cursor-plugin/plugin.json")
         names = {f"{a.name}.md" for a in agents}
         for old in folder.glob("*.md"):
-            if old.name not in names:
-                if not dry:
-                    backups.save(old)
-                    old.unlink()
-                changes.append(f"{'would remove' if dry else 'removed'} {old} (no longer in {package})")
+            if old.name in names:
+                continue
+            key = f"agent:{folder.relative_to(home)}:{old.stem}"
+            what = f"Cursor agent {old} (no longer in {package})"
+            if pending.due(key, what) and not dry:
+                backups.save(old)
+                old.unlink()
+                pending.removed(key)
+                changes.append(f"removed {what}")
     return changes

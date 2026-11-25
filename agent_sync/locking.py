@@ -18,7 +18,7 @@ def run_lock(path: Path) -> Iterator[bool]:
     fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         try:
-            # Lock the parent before checking or replacing a stale lock directory.
+            # Hold this through upkeep and its dialogs. Only abandoned directories can age out.
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             yield False

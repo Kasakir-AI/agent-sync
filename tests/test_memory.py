@@ -1,7 +1,8 @@
 import re
 
-from agent_sync import instructions, memory
+from agent_sync import instructions, memory, pending
 from agent_sync.registry import TOOLS
+from tests.test_pending import approve_current
 
 INDEX = "- [Workspace preferences](workspace.md) — habits to use across projects\n"
 
@@ -63,7 +64,13 @@ def test_refresh_removes_stale_copies_and_replaces_the_index_in_place(tmp_path):
     codex = files["codex"]
     codex.write_text("Before.\n\n" + codex.read_text() + "\nAfter.\n")
 
-    assert memory.mirror(tmp_path, False, enabled=TOOLS)[0] == "updated memory copy (2 files)"
+    state = tmp_path / "state"
+    with pending.during(state, [], lambda *_: None, False):
+        assert memory.mirror(tmp_path, False, enabled=TOOLS)[0] == "updated memory copy (2 files)"
+    assert (dest / "workspace.md").exists()
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        assert memory.mirror(tmp_path, False, enabled=TOOLS) == ["updated memory copy (2 files)"]
     assert not (dest / "workspace.md").exists()
     assert (dest / "new.md").read_text() == "Another preference.\n"
     text = codex.read_text()

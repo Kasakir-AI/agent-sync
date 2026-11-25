@@ -2,6 +2,7 @@ import json
 
 from agent_sync import instructions, pending
 from agent_sync.registry import TOOLS
+from tests.test_pending import approve_current
 
 OLD_BLOCK = ("<!-- agent-sync: begin (mirrored from CLAUDE.md; edit the source, not this block) -->\n{}\n"
              "<!-- agent-sync: end -->\n")
@@ -53,10 +54,13 @@ def test_a_source_deletion_waits_and_preserves_tool_local_notes(tmp_path):
     assert json.loads(baselines.read_text())[instructions.KEY]["lines"] == ["Be brief.", "Ask before pushing."]
     files["claude"].write_text("Be brief.\n")
     logs = []
-    for now in (100, 100 + pending.WAIT - 1, 100 + pending.WAIT):
+    for now in (100, 10_000_000):
         with pending.during(baselines.parent, [], lambda *line: logs.append(line), False, now=now):
             instructions.mirror(tmp_path, "claude", baselines=baselines)
-        assert ("Ask before pushing." in files["codex"].read_text()) == (now < 100 + pending.WAIT)
+        assert "Ask before pushing." in files["codex"].read_text()
+    approve_current(baselines.parent)
+    with pending.during(baselines.parent, [], lambda *line: logs.append(line), False, now=10_000_001):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
     assert len(logs) == 1 and logs[0][0] == "WARN" and 'instruction "Ask before pushing."' in logs[0][1]
     assert files["codex"].read_text() == "Codex-only note.\nBe brief.\n"
 

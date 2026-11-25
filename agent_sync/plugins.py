@@ -133,10 +133,12 @@ def own_versions(home: Path, dry: bool, log, *, enabled=DEFAULT_AGENTS, state_di
         return tools.act(log, False, f"Codex {action} {pid}", args, run=run)
 
     def switch(old: inventory.Plugin, candidate: inventory.Plugin) -> None:
-        if pending.due(f"plugin:codex:{old.id}", f"Codex plugin {old.id}") and not dry:
+        key = f"plugin:codex:{old.id}"
+        if pending.due(key, f"Codex plugin {old.id}") and not dry:
             if command("remove", old.id):
+                pending.removed(key)
                 log("ok", f"switched Codex from {label(old)} to its own {label(candidate)}")
-        elif not pending.keeps(f"plugin:codex:{old.id}"):
+        elif not pending.keeps(key):
             log("info", f"Codex has both {label(old)} and {label(candidate)} installed")
 
     for old in loaded:

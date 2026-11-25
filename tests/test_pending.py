@@ -1,51 +1,75 @@
 import json
-from datetime import datetime
 
 from agent_sync import pending
 
 
-def test_announces_waits_respects_keep_and_expires_removal_reasons(tmp_path):
-    state = tmp_path / "pending-removals.json"
+def approve_current(state_dir):
+    path = state_dir / pending.FILENAME
+    entries = json.loads(path.read_text())
+    assert entries
+    for item in entries.values():
+        item["approved"] = True
+    path.write_text(json.dumps(entries))
+
+
+def test_requires_approval_respects_keep_and_expires_removal_reasons(tmp_path):
+    state = tmp_path / pending.FILENAME
     logs = []
 
     def log(*line):
         logs.append(line)
 
     key, what, start = "skill:extract", "skill extract (no longer shipped)", 1_000_000
-    with pending.during(tmp_path, [], log, True, now=start):
+    with pending.during(tmp_path, [], log, True, now=start) as run:
         assert not pending.due(key, what)
-    assert logs.pop() == ("dry", f"would announce removal of {what}")
-    assert not state.exists()
+        assert run.questions() == {key: what}
+    assert not logs and not state.exists()
     with pending.during(tmp_path, [], log, False, now=start):
         assert not pending.due(key, what)
         assert not pending.due(key, what)
-    date = datetime.fromtimestamp(start + pending.WAIT).strftime("%Y-%m-%d %H:%M:%S")
-    assert logs == [("WARN", f'will remove {what} at the first run after {date}; '
-                            f'to keep it, add "{key}" to keep_installed')]
-    assert json.loads(state.read_bytes()) == {key: {"first": start, "what": what}}
-    before = state.read_bytes()
+    assert logs == [("WARN", f"approval required to remove {what}")]
+    assert json.loads(state.read_text()) == {key: {"first": start, "what": what, "approved": False}}
     logs.clear()
 
-    with pending.during(tmp_path, [], log, False, now=start + pending.WAIT - 1):
+    later = start + 10_000_000
+    with pending.during(tmp_path, [], log, False, now=later):
         assert not pending.due(key, what)
-    with pending.during(tmp_path, [], log, True, now=start + pending.WAIT):
+    approve_current(tmp_path)
+    before = state.read_bytes()
+    with pending.during(tmp_path, [], log, True, now=later):
         assert pending.due(key, what)
     assert logs.pop() == ("dry", f"would remove {what}")
     for keep in ([key], ["extract"]):
-        with pending.during(tmp_path, keep, log, True, now=start + pending.WAIT):
+        with pending.during(tmp_path, keep, log, True, now=later):
             assert not pending.due(key, what)
         assert not logs and state.read_bytes() == before
-    with pending.during(tmp_path, [], log, False, now=start + pending.WAIT):
+    with pending.during(tmp_path, [], log, False, now=later):
         assert pending.due(key, what)
-    with pending.during(tmp_path, [], log, False, now=start + pending.WAIT + 1):
-        pass
-    assert json.loads(state.read_bytes()) == {}
-    with pending.during(tmp_path, [], log, False, now=start + pending.WAIT + 2):
+        pending.removed(key)
+    assert json.loads(state.read_text()) == {}
+    with pending.during(tmp_path, [], log, False, now=later):
         assert not pending.due(key, what)
-    assert logs[0][0] == "WARN"
+    with pending.during(tmp_path, [], log, False, now=later):
+        pass
+    assert json.loads(state.read_text()) == {}
 
 
-def test_package_skill_removals_wait_and_save_the_originals(tmp_path, monkeypatch, capsys):
+def test_legacy_pending_entries_and_changed_reasons_require_approval(tmp_path):
+    key, what = "skill:extract", "old reason"
+    path = tmp_path / pending.FILENAME
+    path.write_text(json.dumps({key: {"what": what, "first": 100}}))
+    with pending.during(tmp_path, [], lambda *_: None, False, now=10_000_000):
+        assert not pending.due(key, what)
+    assert json.loads(path.read_text()) == {key: {"what": what, "first": 100, "approved": False}}
+    approve_current(tmp_path)
+    with pending.during(tmp_path, [], lambda *_: None, False, now=10_000_001):
+        assert not pending.due(key, "different reason")
+    assert json.loads(path.read_text()) == {
+        key: {"what": "different reason", "first": 10_000_001, "approved": False}
+    }
+
+
+def test_package_skill_removals_require_approval_and_save_the_originals(tmp_path, monkeypatch, capsys):
     from agent_sync import cli, tools
     from agent_sync.config import Config
     from tests.test_inventory import write
@@ -93,8 +117,9 @@ def test_package_skill_removals_wait_and_save_the_originals(tmp_path, monkeypatc
     monkeypatch.setattr(pending, "during", during)
     assert cli.run(force=True, echo=True) == 0
     output = capsys.readouterr().out
-    assert "WARN  will remove skill dropped (no longer in org/second)" in output
-    assert "WARN  will remove skill clash (org/second ships it, but an earlier package has that name)" in output
+    assert "WARN  approval required to remove skill dropped (no longer in org/second)" in output
+    assert ("WARN  approval required to remove skill clash "
+            "(org/second ships it, but an earlier package has that name)") in output
     assert not any("remove" in args for args in calls)
     assert not any("add" in args and ("clash" in args or "*" in args) for args in calls)
     assert all(path.read_bytes() == content for path, content in before.items())
@@ -102,7 +127,8 @@ def test_package_skill_removals_wait_and_save_the_originals(tmp_path, monkeypatc
     backup_root = cfg.state_dir / "backups"
     first_run = set(backup_root.iterdir())
     calls.clear()
-    now += pending.WAIT
+    now += 1
+    assert cli.main(["pending", "--approve", "skill:clash", "skill:dropped"]) == 0
     assert cli.run(force=True, echo=True) == 0
     assert not dropped.exists() and not clashing.exists()
     assert [args[args.index("-s") + 1] for args in calls if "remove" in args] == ["clash", "dropped"]
@@ -110,3 +136,4 @@ def test_package_skill_removals_wait_and_save_the_originals(tmp_path, monkeypatc
     saved, = set(backup_root.iterdir()) - first_run
     for path, content in before.items():
         assert (saved / path.relative_to(tmp_path)).read_bytes() == content
+    assert json.loads((cfg.state_dir / pending.FILENAME).read_text()) == {}

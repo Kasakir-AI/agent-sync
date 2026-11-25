@@ -22,6 +22,14 @@ def editor(home, answers, text=SETTINGS):
     return ed, path, said
 
 
+def test_desktop_notifications_default_on_and_can_be_disabled(tmp_path):
+    position = next(i for i, (key, _) in enumerate(configure.PARTS, 1) if key == "notify")
+    ed, path, _ = editor(tmp_path, ["3", str(position), "", "s", "q"])
+    assert ed.cfg.notify is True
+    ed.menu()
+    assert tomllib.loads(path.read_text())["notify"] is False
+
+
 def test_change_several_settings_and_save(tmp_path):
     answers = ["1", "2", "",                          # source: Codex
                "7", "1", "preview-", "",              # model warnings: add preview-

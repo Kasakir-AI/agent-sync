@@ -106,7 +106,13 @@ def test_upkeep_writers_share_one_pre_run_backup(tmp_path, monkeypatch, capsys):
 
     assert cli.run(force=True, echo=True) == 0
     saved, = root.iterdir()
+    awaiting_approval = {
+        tmp_path / ".cursor/plugins/local/pack-agents/agents/dropped.md", memory_dir / "gone.md",
+    }
     for path, content in before.items():
+        if path in awaiting_approval:
+            assert path.read_bytes() == content and not (saved / path.relative_to(tmp_path)).exists()
+            continue
         assert (saved / path.relative_to(tmp_path)).read_bytes() == content, path
         assert not path.exists() or path.read_bytes() != content, path
     assert f"backups: {saved}" in capsys.readouterr().out
@@ -115,3 +121,10 @@ def test_upkeep_writers_share_one_pre_run_backup(tmp_path, monkeypatch, capsys):
     cursor = json.loads((tmp_path / ".cursor/mcp.json").read_text())["mcpServers"]
     assert cursor == {"pin": {"command": "npx", "args": ["pack@2.0.0"]},
                       "mirror": {"url": "https://example.invalid/mcp"}}
+    assert cli.main(["pending", "--approve", "agent:.cursor/plugins/local/pack-agents/agents:dropped",
+                     "memory:gone.md"]) == 0
+    assert cli.run(force=True, echo=True) == 0
+    removal_backup, = set(root.iterdir()) - {saved}
+    for path in awaiting_approval:
+        assert not path.exists()
+        assert (removal_backup / path.relative_to(tmp_path)).read_bytes() == before[path]

@@ -4,6 +4,7 @@ import tomllib
 import pytest
 
 from agent_sync import backups, mcp, pending
+from tests.test_pending import approve_current
 
 
 def test_missing_servers_are_added_and_existing_ones_left_alone(tmp_path):
@@ -45,8 +46,12 @@ def test_an_empty_mcp_file_counts_as_no_servers(tmp_path):
 def dedupe_runs(home, enabled, *, keep=()):
     state = home / "state"
     logs = []
-    for now in (100, 100 + pending.WAIT):
-        with pending.during(state, keep, lambda *line: logs.append(line), False, now=now):
+    with pending.during(state, keep, lambda *line: logs.append(line), False, now=100):
+        with backups.during(home, state / "backups", 30):
+            changes = mcp.dedupe(home, False, enabled=enabled)
+    if pending.load(state):
+        approve_current(state)
+        with pending.during(state, keep, lambda *line: logs.append(line), False, now=101):
             with backups.during(home, state / "backups", 30):
                 changes = mcp.dedupe(home, False, enabled=enabled)
     return changes, logs
@@ -70,15 +75,16 @@ def test_mcp_dedupe_keeps_toml_extra_tables_and_backs_up_only_exact_copies(tmp_p
     def log(*line):
         logs.append(line)
 
-    with pending.during(state, [], log, True, now=100):
+    with pending.during(state, [], log, True, now=100) as run:
         warning, = mcp.dedupe(tmp_path, True, enabled=("codex",))
     assert "cloud.flare twice" in warning
-    assert [(kind, message.split(" MCP")[0]) for kind, message in logs] == [("dry", "would announce removal of")]
+    assert list(run.questions()) == ["mcp:codex:clean.copy"]
     assert config.read_bytes() == before and not state.exists()
     with pending.during(state, [], log, False, now=100):
         assert mcp.dedupe(tmp_path, False, enabled=("codex",)) == [warning]
     assert config.read_bytes() == before
-    with pending.during(state, [], log, False, now=100 + pending.WAIT):
+    approve_current(state)
+    with pending.during(state, [], log, False, now=101):
         with backups.during(tmp_path, state / "backups", 30) as run:
             messages = mcp.dedupe(tmp_path, False, enabled=("codex",))
     assert messages[0].startswith("removed MCP server clean.copy") and messages[1:] == [warning]
@@ -216,7 +222,7 @@ def test_shared_settings_use_plugins_from_every_reader(tmp_path, monkeypatch):
     assert mcp.mirror(tmp_path, "claude", enabled=enabled) == []
     path = write(tmp_path, ".cursor/mcp.json", {"mcpServers": {"cf": {"url": "https://example.com/mcp"}}})
     changes, logs = dedupe_runs(tmp_path, enabled)
-    assert '"mcp:cursor:cf"' in logs[0][1]
+    assert "approval required to remove MCP server cf from Cursor, Gemini CLI settings" in logs[0][1]
     assert changes == [
         "removed MCP server cf from Cursor, Gemini CLI settings: plugin pack@extensions brings the same server"]
     assert json.loads(path.read_text())["mcpServers"] == {}

@@ -1,8 +1,9 @@
 import json
 import tomllib
 
-from agent_sync import agents
+from agent_sync import agents, pending
 from agent_sync.config import AgentModels
+from tests.test_pending import approve_current
 
 HELPER = """---
 name: helper
@@ -58,9 +59,16 @@ def test_second_run_changes_nothing_and_dropped_agents_leave_cursor(tmp_path):
     agents.mirror(pkg, "someone/pack", home, AgentModels())
     assert agents.mirror(pkg, "someone/pack", home, AgentModels()) == []
     (pkg / "agents/reviewer.md").unlink()
-    changes = agents.mirror(pkg, "someone/pack", home, AgentModels())
-    assert any("removed" in c for c in changes)
-    assert not (home / ".cursor/plugins/local/pack-agents/agents/reviewer.md").exists()
+    state = tmp_path / "state"
+    old = home / ".cursor/plugins/local/pack-agents/agents/reviewer.md"
+    with pending.during(state, [], lambda *_: None, False):
+        assert agents.mirror(pkg, "someone/pack", home, AgentModels()) == []
+    assert old.exists()
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        changes = agents.mirror(pkg, "someone/pack", home, AgentModels())
+    assert changes == [f"removed Cursor agent {old} (no longer in someone/pack)"]
+    assert not old.exists()
 
 
 def test_agent_notes_are_added_to_every_tools_copy(tmp_path):

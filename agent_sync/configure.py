@@ -30,6 +30,7 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("remove_dropped_skills", "Uninstall skills a skill package stops shipping"),
     ("update_self", "Update agent-sync itself when a new version is out"),
     ("launcher", "Keep the double-click \"Agent Upkeep\" launcher on the Desktop (macOS)"),
+    ("notify", "Show desktop notifications and post to Plannotator Inbox"),
 ]
 INSTALL_ITEMS = ("homebrew", "git", "node", *TOOLS)
 

@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from . import backups
+from . import backups, pending
 from .instructions import MEMORY_END, MEMORY_START, files, rendered, split_front
 from .registry import grouped_paths
 
@@ -61,10 +61,12 @@ def mirror(home: Path, dry: bool, *, enabled) -> list[str]:
             replace_file(path, data)
     for path in dest.glob("*.md"):
         if path.name not in source_files and (path.is_symlink() or path.is_file()):
-            copied = True
-            if not dry:
+            key = f"memory:{path.name}"
+            if pending.due(key, f"memory copy {path} (no longer in Claude Code's memory)") and not dry:
                 backups.save(path)
                 path.unlink()
+                pending.removed(key)
+                copied = True
     if copied or not exists:
         messages.append(f"{action} memory copy ({len(source_files)} files)")
 

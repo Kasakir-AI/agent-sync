@@ -1,0 +1,191 @@
+import json
+import os
+import shlex
+import subprocess
+import time
+from hashlib import sha256
+
+import pytest
+
+from agent_sync import cli, notify, pending
+from agent_sync.config import Config, load
+from agent_sync.locking import MAX_AGE, run_lock
+from agent_sync.log import ACK_AGE, Log
+from tests.test_notify import available, inbox
+
+
+@pytest.fixture
+def upkeep(tmp_path, monkeypatch):
+    cfg = Config(home=tmp_path, skill_packages=[], mirror_skills=False, mirror_roles=False, mirror_mcp=False,
+                 update_plugins=False, update_clis=False, update_mcp_programs=False, update_self=False)
+    monkeypatch.setattr(cli, "load", lambda: cfg)
+    monkeypatch.setattr(cli, "online", lambda: True)
+    monkeypatch.setattr(cli.membership, "available", lambda cfg: {})
+    monkeypatch.setattr(cli.tools, "skills", lambda *args: (0, "test"))
+    return cfg
+
+
+def test_pending_command_lists_approves_keeps_and_acknowledges(upkeep, capsys):
+    cfg = upkeep
+    state = cfg.state_dir / pending.FILENAME
+    log = Log(cfg.log_file)
+    warning = 'something changed\nCheck the next line, too.'
+    log("WARN", warning)
+    with pending.during(cfg.state_dir, [], log, False, now=time.time()):
+        for key in ("skill:approve", "plugin:codex:keep"):
+            assert not pending.due(key, f"example {key}")
+
+    assert cli.main(["pending"]) == 0
+    output = capsys.readouterr().out
+    assert "skill:approve | example skill:approve | since " in output
+    assert "plugin:codex:keep | example plugin:codex:keep | since " in output
+    assert output.count("approved no") == 2
+    assert warning in output
+
+    before = state.read_bytes()
+    assert cli.main(["pending", "--approve", "skill:approve", "missing", "--ack"]) == 1
+    assert "Unknown pending removal key(s): missing" in capsys.readouterr().err
+    assert state.read_bytes() == before
+    assert not (cfg.state_dir / "acknowledged-warnings.json").exists()
+    assert cli.main(["pending", "--keep", "unknown"]) == 1
+
+    assert cli.main(["pending", "--approve", "skill:approve", "--keep", "plugin:codex:keep", "--ack"]) == 0
+    assert load(home=cfg.home).keep_installed == ["plugin:codex:keep"]
+    assert cli.main(["pending"]) == 0
+    output = capsys.readouterr().out
+    assert "skill:approve" in output and "approved yes" in output
+    assert "plugin:codex:keep" not in output and warning not in output
+    assert json.loads(state.read_text())["skill:approve"]["approved"] is True
+    stored = json.loads((cfg.state_dir / "acknowledged-warnings.json").read_text())
+    assert sha256(warning.encode()).hexdigest() in stored
+    assert all(time.time() - 60 < stamp <= time.time() for stamp in stored.values())
+
+
+@pytest.fixture
+def removable_items(upkeep, monkeypatch):
+    paths = {f"skill:{name}": upkeep.home / name for name in ("first", "second")}
+    for path in paths.values():
+        path.touch()
+
+    def remove(cfg, log, work, dry):
+        for key, path in paths.items():
+            if path.exists() and pending.due(key, f"example {path.name}") and not dry:
+                path.unlink()
+                pending.removed(key)
+
+    monkeypatch.setattr(cli, "sync_packages", remove)
+    return paths
+
+
+@pytest.mark.parametrize("channel", ["terminal", "osascript", "zenity"])
+def test_run_applies_choice_next_run_and_only_repeats_unacknowledged_warnings(
+        channel, upkeep, removable_items, monkeypatch, capsys):
+    original = "Settings differ"
+    warning = [original]
+    monkeypatch.setattr(cli, "log_review", lambda cfg, log: log("WARN", warning[0]))
+    monkeypatch.setattr(notify, "in_terminal", lambda: channel == "terminal")
+    monkeypatch.setattr(notify, "find_command", lambda name: name if channel == name else None)
+    monkeypatch.setenv("DISPLAY", ":0")
+    if channel != "terminal":
+        monkeypatch.setattr(notify.sys, "platform", "darwin" if channel == "osascript" else "linux")
+
+    prompts = []
+    dialogs = []
+    lock = upkeep.state_dir / "lock"
+
+    def assert_locked():
+        stale = time.time() - MAX_AGE - 1
+        os.utime(lock, (stale, stale))
+        with run_lock(lock) as held:
+            assert not held
+            assert lock.is_dir()
+
+    def answer(prompt):
+        assert_locked()
+        prompts.append(prompt)
+        return "y" if "example first" in prompt else ""
+
+    def dialog(args, **_):
+        assert_locked()
+        dialogs.append(args)
+        if channel == "osascript":
+            reply = "1\n" if "choose from list" in args[2] and any("example first" in a for a in args) else ""
+            if "display alert" in args[2]:
+                reply = "button returned:OK, gave up:false"
+        else:
+            reply = '"skill:first"\n' if "--list" in args else ""
+        return subprocess.CompletedProcess(args, 0, stdout=reply)
+
+    monkeypatch.setattr("builtins.input", answer)
+    monkeypatch.setattr(notify.subprocess, "run", dialog)
+
+    assert cli.main(["run", "--force"]) == 0
+    assert all(path.exists() for path in removable_items.values())
+    assert {key: item["approved"] for key, item in pending.load(upkeep.state_dir).items()} == {
+        "skill:first": True, "skill:second": False,
+    }
+    first_output = capsys.readouterr().out + str(dialogs)
+    assert original in first_output
+    assert not lock.exists()
+    dialogs.clear()
+    prompts.clear()
+
+    assert cli.main(["run", "--force"]) == 0
+    assert not removable_items["skill:first"].exists() and removable_items["skill:second"].exists()
+    assert list(pending.load(upkeep.state_dir)) == ["skill:second"]
+    assert original not in capsys.readouterr().out + str(dialogs)
+    assert not any("Press Enter" in prompt for prompt in prompts)
+    dialogs.clear()
+
+    warning[0] = "Different settings differ"
+    assert cli.main(["run", "--force"]) == 0
+    assert warning[0] in capsys.readouterr().out + str(dialogs)
+    assert removable_items["skill:second"].exists()
+
+
+def test_dry_run_prints_without_prompting_posting_or_writing(upkeep, removable_items, monkeypatch, capsys):
+    def unexpected(*args, **kwargs):
+        pytest.fail("dry run tried to notify")
+
+    monkeypatch.setattr(notify, "find_command", unexpected)
+    monkeypatch.setattr(notify, "deliver", unexpected)
+    monkeypatch.setattr("builtins.input", unexpected)
+    monkeypatch.setattr(cli, "log_review", lambda cfg, log: log("WARN", "Settings differ"))
+    assert cli.main(["run", "--dry-run"]) == 0
+    output = capsys.readouterr().out
+    assert "Would ask: Remove example first? [y/N]" in output
+    assert "Would ask: Remove example second? [y/N]" in output
+    assert "Settings differ" in output and "Would ask: Press Enter" in output
+    assert not upkeep.state_dir.exists()
+    assert not upkeep.log_file.exists()
+    assert all(path.exists() for path in removable_items.values())
+
+
+def test_inbox_button_approves_one_item_for_the_next_run(upkeep, removable_items, monkeypatch):
+    available(monkeypatch, "plannotator")
+    processes = inbox(monkeypatch, {"result": {}}, {"result": {}})
+    monkeypatch.setattr(notify, "in_terminal", lambda: False)
+
+    assert cli.main(["run", "--force"]) == 0
+    first = processes[0].messages[-1]["params"]["arguments"]["body"]
+    commands = [shlex.split(line) for line in first.splitlines() if line.startswith("agent-sync pending")]
+    approve_first = next(command for command in commands if command[-2:] == ["--approve", "skill:first"])
+    assert cli.main(approve_first[1:]) == 0
+    assert all(path.exists() for path in removable_items.values())
+    assert not (upkeep.state_dir / "acknowledged-warnings.json").exists()
+
+    assert cli.main(["run", "--force"]) == 0
+    assert not removable_items["skill:first"].exists() and removable_items["skill:second"].exists()
+    assert list(pending.load(upkeep.state_dir)) == ["skill:second"]
+
+
+def test_expired_warning_acknowledgement_is_removed(upkeep, monkeypatch, capsys):
+    state = upkeep.state_dir / "acknowledged-warnings.json"
+    state.parent.mkdir(parents=True)
+    warning = "Still relevant"
+    digest = sha256(warning.encode()).hexdigest()
+    state.write_text(json.dumps({digest: time.time() - ACK_AGE - 1}))
+    monkeypatch.setattr(cli, "log_review", lambda cfg, log: log("WARN", warning))
+    assert cli.main(["run", "--force", "--echo"]) == 0
+    assert warning in capsys.readouterr().out
+    assert json.loads(state.read_text()) == {}

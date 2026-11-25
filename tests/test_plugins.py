@@ -4,6 +4,7 @@ import pytest
 
 from agent_sync import backups, pending, plugins
 from tests.test_inventory import codex_plugin, write
+from tests.test_pending import approve_current
 from tests.test_skills import make_skill
 
 OLD = "netlify-skills@claude-plugins-official"
@@ -70,11 +71,12 @@ def test_switches_to_an_installed_codex_app_that_keeps_skills(tmp_path):
     assert not calls and not logs
     switch(100)
     assert not calls
-    assert logs[0][0] == "WARN" and f'add "plugin:codex:{OLD}"' in logs[0][1]
+    assert logs[0][0] == "WARN" and f'approval required to remove Codex plugin {OLD}' in logs[0][1]
     assert "both" in logs[1][1]
-    switch(100 + pending.WAIT - 1)
+    switch(10_000_000)
     assert not calls
-    switch(100 + pending.WAIT)
+    approve_current(state)
+    switch(10_000_001)
     assert calls == [["codex", "plugin", "remove", OLD]]
     assert logs[-1] == ("ok", f"switched Codex from {OLD} 1.7.0 to its own {pid} 1.7.0")
 

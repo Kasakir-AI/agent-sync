@@ -23,7 +23,7 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from . import backups
+from . import backups, pending
 from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
 
 EXTRA_ROOTS = {"codex": ".codex/skills", "cursor": ".cursor/skills", "gemini": ".gemini/skills"}
@@ -156,6 +156,15 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
         plan.setdefault(source_dir, {})  # Clean up old plugin copies in the shared directory.
     changes: list[str] = []
 
+    def remove_copy(dest: Path, reason: str) -> None:
+        key = f"skill-copy:{dest.parent.relative_to(home)}:{dest.name}"
+        what = f"skill {dest.name} from {dest.parent} ({reason})"
+        if pending.due(key, what) and not dry:
+            backups.save(dest)
+            shutil.rmtree(dest)
+            pending.removed(key)
+            changes.append(f"removed {what}")
+
     from .duplicates import doubled, elsewhere, views  # builds on this module, so it is imported here
     seen = views(home, enabled=enabled)
     left_out: dict[tuple[Path, tuple[str, ...]], list[str]] = {}   # (target, tools that have them) -> skill names
@@ -180,19 +189,11 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             have = elsewhere(home, seen, target, name, src, readers=roots[target])
             if have:                                       # every tool reading `target` loads it already
                 if dest.exists():
-                    if not dry:
-                        backups.save(dest)
-                        shutil.rmtree(dest)
-                    changes.append(f"{verb('removed', 'would remove')} skill {name}{note} from {target} "
-                                   f"(already loaded from {'; '.join(have)})")
+                    remove_copy(dest, f"already loaded from {'; '.join(have)}")
                 continue
             if twice := doubled(home, seen, target, name, src, readers=roots[target]):
                 if dest.exists():
-                    if not dry:
-                        backups.save(dest)
-                        shutil.rmtree(dest)
-                    changes.append(f"{verb('removed', 'would remove')} skill {name}{note} from {target} "
-                                   f"({' and '.join(TOOLS[tool].name for tool in twice)} would load it twice)")
+                    remove_copy(dest, f"{' and '.join(TOOLS[tool].name for tool in twice)} would load it twice")
                 left_out.setdefault((target, tuple(twice)), []).append(name)
                 continue
             if dest.exists() and same_tree(src, dest):
@@ -220,11 +221,8 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
             plugin = marker.startswith(PLUGIN_MARK)
             if in_source and not plugin:
                 continue                                   # a copy from an earlier source tool; not ours to judge
-            if not dry:
-                backups.save(d)
-                shutil.rmtree(d)
             why = "agent-sync no longer copies plugin skills" if plugin else "no longer in the source tool"
-            changes.append(f"{verb('removed', 'would remove')} skill {d.name} from {target} ({why})")
+            remove_copy(d, why)
     for (target, twice), names in sorted(left_out.items()):
         have = " and ".join(TOOLS[tool].name for tool in twice)
         what = f"skill {names[0]}" if len(names) == 1 else f"{len(names)} skills ({', '.join(names[:8])})"

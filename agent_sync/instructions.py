@@ -150,6 +150,7 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
     recorded = entry.get("local")
     messages = []
     drop, replacements, held = set(), {}, {}
+    removal_keys = []
     tracked = list(dict.fromkeys((*line_list(entry.get("lines")), *line_list(entry.get("conflicts")),
                                  *(line for item in previous.values()
                                    for line in (*item.get("missing", []), *item.get("reworded", {}))))))
@@ -179,6 +180,7 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
                 key = f"instruction:{sha256(line.encode()).hexdigest()}"
                 if pending.due(key, f'instruction "{line}" from the other tools') and not dry:
                     drop.add(line)
+                    removal_keys.append(key)
                 else:
                     held.setdefault(names[src], {"missing": [], "reworded": {}})["missing"].append(line)
         for path in (path for path in paired if path != src):
@@ -233,6 +235,8 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
             updated.pop("held", None)
         if updated != entry:
             save_baselines(baselines, {**stored, KEY: updated})
+    for key in removal_keys:
+        pending.removed(key)
     return messages
 
 

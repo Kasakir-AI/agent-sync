@@ -178,6 +178,7 @@ def dedupe(home: Path, dry: bool, backup_dir: Path | None = None, *, enabled=DEF
     enabled = tuple(enabled)
     loaded = inventory.plugins(home, enabled)
     lines, edits = [], []
+    removed = []
     for path, readers, codex, text, entries in settings_files(home, enabled):
         providers = {}
         for plugin in reader_plugins(loaded, readers):
@@ -208,10 +209,13 @@ def dedupe(home: Path, dry: bool, backup_dir: Path | None = None, *, enabled=DEF
             rewrite = writes.codex_mcp_text if codex else writes.json_mcp_text
             updated = rewrite(updated, name, None)
             lines.append(f"removed {what}")
+            removed.append(key)
         if updated != text:
             target = writes.checked_path(home, path)
             edits.append(writes.Edit("mcp", readers, target, "replace", target, text.encode(), updated.encode()))
     writes.apply_edits(home, edits, backup_dir)
+    for key in removed:
+        pending.removed(key)
     return lines
 
 
