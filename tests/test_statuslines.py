@@ -169,20 +169,36 @@ def test_dry_run_leaves_settings_and_state_absent(tmp_path):
     assert not logs and list(tmp_path.iterdir()) == []
 
 
-def test_leaves_settings_replaced_during_upkeep_alone(tmp_path, monkeypatch):
+def test_replans_from_settings_replaced_during_upkeep(tmp_path, monkeypatch):
     path = write(tmp_path, "claude", "{}")
     custom = '{"statusLine":{"type":"command","command":"custom"}}'
     save = writes.backups.save
 
-    def change_on_save(target):
-        save(target)
-        if target == path:
+    def change_on_save(target, **kwargs):
+        save(target, **kwargs)
+        if target == path and path.read_text() != custom:
             path.write_text(custom)
 
     monkeypatch.setattr(writes.backups, "save", change_on_save)
     lines, logs = upkeep(tmp_path, "claude")
-    assert len(lines) == 1 and "target changed while preparing the edit" in lines[0]
-    assert not logs and path.read_text() == custom
+    assert lines == [] and path.read_text() == custom           # planned again: now it needs approval
+    assert [kind for kind, _ in logs] == ["WARN"] and "custom" in logs[0][1]
+
+
+def test_settings_that_keep_changing_are_left_with_a_warning(tmp_path, monkeypatch):
+    path = write(tmp_path, "claude", "{}")
+    save = writes.backups.save
+    edits = iter(range(100))
+
+    def change_on_save(target, **kwargs):
+        save(target, **kwargs)
+        if target == path:
+            path.write_text(json.dumps({"other": next(edits)}))
+
+    monkeypatch.setattr(writes.backups, "save", change_on_save)
+    lines, _ = upkeep(tmp_path, "claude")
+    assert lines == [f"WARN  {path} changed while agent-sync was updating it; will retry next run"]
+    assert "statusLine" not in json.loads(path.read_text())
 
 
 def test_status_line_defaults_on_and_can_be_disabled(tmp_path):

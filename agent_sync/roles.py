@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import backups
 from .registry import DEFAULT_AGENTS, grouped_paths, paths
 
 ROLE = re.compile(r"^[a-z][a-z ,&-]*:\s*\S")
@@ -43,6 +42,8 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
     src = locations[source]
     if not src.exists():
         return [f"skip  no {src}"]
+    from . import writes  # writes builds on this module
+
     _, roles, _ = split(src.read_text())
     if not roles:
         return [f"WARN  no role lines in {src}"]
@@ -50,17 +51,25 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
     for path in grouped_paths(locations):
         if path == src:
             continue
-        if path.exists():
-            current = path.read_text()
+
+        def change(current: str, path=path) -> str:
+            if not current and path.suffix == ".mdc":
+                current = "---\ndescription: pstack model roles\nalwaysApply: true\n---\n"
+            header, old, rest = split(current)
+            if old == roles:
+                return current
+            return ("\n".join(header + roles) + ("\n" + rest if rest else "") + "\n").replace("\n\n\n", "\n\n")
+
+        if dry:
+            current = path.read_text() if path.exists() else ""
+            if change(current) == current:
+                continue
         else:
-            current = "---\ndescription: pstack model roles\nalwaysApply: true\n---\n" if path.suffix == ".mdc" else ""
-        header, old, rest = split(current)
-        if old == roles:
-            continue
-        new = "\n".join(header + roles) + ("\n" + rest if rest else "") + "\n"
-        if not dry:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            backups.save(path, follow=True)
-            path.write_text(new.replace("\n\n\n", "\n\n"))
+            try:
+                if not writes.update_text(path, change):
+                    continue
+            except writes.Raced as raced:
+                changes.append(f"WARN  {raced}")
+                continue
         changes.append(f"{'would update' if dry else 'updated'} {path}")
     return changes

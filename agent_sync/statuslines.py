@@ -65,7 +65,7 @@ def approved(run: pending.Run, tool: str, current: object, wanted: object) -> bo
         return True
     command = current.get("command", current) if isinstance(current, dict) else current
     label = command if isinstance(command, str) and command.isprintable() else repr(command)
-    what = f"replace your {TOOLS[tool].name} status line ({label}) with agent-sync's"
+    what = f"your {TOOLS[tool].name} status line ({label}); agent-sync's replaces it"
     return run.due(f"statusline:{tool}", what)
 
 
@@ -111,24 +111,21 @@ def apply(home: Path, dry: bool, cfg: Config, run: pending.Run) -> list[str]:
             lines.append("info  Gemini CLI has no custom status line; skipped")
             continue
         path = home / (".codex/config.toml" if tool == "codex" else JSON_FILES[tool])
+        created = not path.exists()
+
+        def change(text: str, tool=tool) -> str:
+            return codex_update(text, run) if tool == "codex" else json_update(text, tool, command, run)
+
         try:
-            real = writes.checked_path(home, path)
-            try:
-                before = real.read_bytes()
-            except FileNotFoundError:
-                before = None
-            text = before.decode("utf-8") if before is not None else ("" if tool == "codex" else "{}")
-            new = codex_update(text, run) if tool == "codex" else json_update(text, tool, command, run)
-            if new == text:
-                continue
-            action = "create" if before is None else "replace"
             if dry:
-                verb = "create" if before is None else "update"
-                lines.append(f"dry  would {verb} {path.relative_to(home)} ({TOOLS[tool].name} status line)")
-            else:
-                edit = writes.Edit(f"statusline:{tool}", (tool,), path, action, real, before, new.encode("utf-8"),
-                                   create_mode=0o600)
-                lines.extend(writes.apply_edits(home, [edit], check_current=True))
+                text = path.read_text() if path.exists() else ("" if tool == "codex" else "{}")
+                if change(text) != text:
+                    verb = "create" if created else "update"
+                    lines.append(f"dry  would {verb} {path.relative_to(home)} ({TOOLS[tool].name} status line)")
+            elif writes.update_text(path, change, new_mode=0o600, empty="" if tool == "codex" else "{}"):
+                lines.append(f"{'created' if created else 'updated'} {path.relative_to(home)}")
+        except writes.Raced as raced:
+            lines.append(f"WARN  {raced}")
         except (OSError, ValueError) as error:
             lines.append(f"FAIL  {TOOLS[tool].name} status line: {error}")
     return lines

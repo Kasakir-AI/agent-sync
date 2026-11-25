@@ -1,11 +1,12 @@
-"""Write the version chosen in review (or by upkeep's MCP repair) to the other tools: plan the target files, merge
-the chosen text into each, stage and back up, then rename into place."""
+"""Every write to a tool's settings, instructions or memory goes through here: stage a temp file beside the target
+with its mode, fsync it, back up the original, and rename into place only when the file still holds the bytes the
+change was planned from. Also writes the version chosen in review (or by upkeep's MCP repair) to the other tools."""
 from __future__ import annotations
 
 import json
 import os
 import secrets
-import shutil
+import tempfile
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -60,6 +61,62 @@ class Edit:
 
 
 Reader = Callable[[Path], Content | None]
+
+
+class Raced(ValueError):
+    """A file changed again while agent-sync was writing it."""
+
+    def __init__(self, path: Path):
+        super().__init__(f"{path} changed while agent-sync was updating it; will retry next run")
+
+
+def read_bytes(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def stage(target: Path, data: bytes, mode: int) -> Path:
+    """A synced temp copy of `data` beside `target`, with `mode`."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.agent-sync-")
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+            file.flush()
+            os.fsync(file.fileno())
+        os.chmod(name, mode)
+    except BaseException:
+        os.unlink(name)
+        raise
+    return Path(name)
+
+
+def update(path: Path, plan: Callable[[bytes | None], bytes | None], *, new_mode: int = 0o644) -> bool:
+    """Write plan(current bytes) to `path` (through a link, to its target). Returns whether it wrote. When the file
+    changes between reading and renaming, plans once more from the new bytes; when it changes again, raises Raced."""
+    target = Path(os.path.realpath(path))
+    for _ in range(2):
+        before = read_bytes(target)
+        after = plan(before)
+        if after is None or after == before:
+            return False
+        mode = S_IMODE(target.stat().st_mode) if before is not None else new_mode
+        temp = stage(target, after, mode)
+        try:
+            backups.save(path, follow=True)
+            if read_bytes(target) == before:
+                temp.replace(target)
+                return True
+        finally:
+            temp.unlink(missing_ok=True)
+    raise Raced(path)
+
+
+def update_text(path: Path, change: Callable[[str], str], *, new_mode: int = 0o644, empty: str = "") -> bool:
+    """`update` for a UTF-8 text file; a missing file reads as `empty`."""
+    return update(path, lambda data: change(empty if data is None else data.decode()).encode(), new_mode=new_mode)
 
 
 def checked_path(home: Path, path: Path) -> Path:
@@ -326,31 +383,32 @@ def apply(home: Path, steps: list[Step], backup_dir: Path | None = None) -> list
     return apply_edits(home, edits(steps), backup_dir)
 
 
-def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None, *,
-                check_current: bool = False) -> list[str]:
+def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None) -> list[str]:
+    """Stage every file, back up the originals, then rename each into place; raises Raced, before renaming any, when
+    one no longer holds what the edits were planned from."""
     staged: list[tuple[Edit, Path]] = []
     try:
         for edit in changes:
             if checked_path(home, edit.path) != edit.path:
                 raise ValueError(f"target moved: {edit.path}")
-            edit.path.parent.mkdir(parents=True, exist_ok=True)
-            temp = edit.path.with_name(f".{edit.path.name}.agent-sync-{secrets.token_hex(4)}")
-            staged.append((edit, temp))
             if isinstance(edit.after, Link):
+                edit.path.parent.mkdir(parents=True, exist_ok=True)
+                temp = edit.path.with_name(f".{edit.path.name}.agent-sync-{secrets.token_hex(4)}")
                 temp.symlink_to(edit.after.target)
             else:
-                temp.write_bytes(edit.after)
-                if edit.before is not None:
-                    shutil.copymode(edit.path, temp)
-                elif edit.create_mode is not None:
-                    temp.chmod(edit.create_mode)
+                mode = (S_IMODE(edit.path.stat().st_mode) if edit.before is not None
+                        else edit.create_mode if edit.create_mode is not None
+                        else 0o600 if edit.key.startswith("mcp") else 0o644)
+                temp = stage(edit.path, edit.after, mode)
+            staged.append((edit, temp))
         for edit, _ in staged:
             backups.save(edit.path)
             if backup_dir is not None and edit.before is not None:
                 backups.copy(edit.path, home.resolve(), backup_dir)
+        for edit, _ in staged:
+            if current(edit.path) != edit.before:
+                raise Raced(edit.path)
         for edit, temp in staged:
-            if check_current and (checked_path(home, edit.target) != edit.path or current(edit.path) != edit.before):
-                raise ValueError(f"target changed while preparing the edit: {edit.target}")
             temp.replace(edit.path)
     finally:
         for _, temp in staged:
@@ -364,7 +422,7 @@ def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None,
 backup_folder = backups.new_folder
 
 
-def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:
+def repair(home: Path, cfg: Config, dry: bool = False) -> list[str]:
     """Bring every copy of an MCP server up to its newest working version. A tool that owns a server (Codex's
     node_repl) rewrites its own copy on every app update; copies made from it before then point at an older version,
     or at files that no longer exist, and would stay so, as the MCP mirror never changes an existing server. Acts
@@ -397,6 +455,17 @@ def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:
     if not apply(home, steps):
         return []
     return [f"updated {shown(home, step.path)} ({why[step.key]})" for step in steps]
+
+
+def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:
+    """`repair` once more from the new state when a file changed under it."""
+    try:
+        return repair(home, cfg, dry)
+    except Raced:
+        try:
+            return repair(home, cfg, dry)
+        except Raced as raced:
+            return [f"WARN  {raced}"]
 
 
 WRITERS = {

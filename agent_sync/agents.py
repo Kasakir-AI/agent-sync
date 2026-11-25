@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backups, pending
+from . import backups, pending, writes
 from .config import AgentModels
 from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths
 from .tomledit import basic_string
@@ -74,14 +74,9 @@ class Agent:
 
 
 def write_if_changed(path: Path, text: str, dry: bool = False) -> bool:
-    if path.exists() and path.read_text() == text:
-        return False
     if dry:
-        return True
-    path.parent.mkdir(parents=True, exist_ok=True)
-    backups.save(path, follow=True)
-    path.write_text(text)
-    return True
+        return not path.exists() or path.read_text() != text
+    return writes.update_text(path, lambda _: text)
 
 
 def gemini_markdown(agent: Agent, models: AgentModels) -> str:
