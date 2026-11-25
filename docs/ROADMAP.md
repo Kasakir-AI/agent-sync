@@ -46,6 +46,22 @@
 
 - [x] No upkeep warning for skills made separately for each tool.
 
+0.6.0 to 0.8.1 (published 2026-11-23 to 2026-11-25):
+
+- [x] Warn about skills a tool loads twice; the first package keeps a shared skill name.
+- [x] Replace stale MCP copies; merge mirrored instructions line by line.
+- [x] Gemini CLI and Antigravity; choose which agents to keep in step.
+
+0.9.0 (published 2026-11-25):
+
+- [x] `agent-sync inventory`: plugins, MCP servers and skills per agent, and what is loaded twice.
+- [x] Each tool's own plugin version; MCP servers and plugins loaded once.
+- [x] Update every skill, Antigravity plugin, MCP server program, pinned MCP package and npm; global tools on
+      request.
+- [x] Instructions shared by every agent; Claude Code's memory shared, with sensitive notes kept private.
+- [x] A backup before every change; removals only after approval by click, terminal or Plannotator Inbox.
+- [x] One status line in Claude Code, Cursor CLI and Antigravity.
+
 Later:
 
 - Cursor as the source of global instructions (its User Rules live in the app's own database).

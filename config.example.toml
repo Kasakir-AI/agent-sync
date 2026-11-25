@@ -16,17 +16,29 @@ skills_cli = "skills@latest"
 remove_dropped_skills = true   # uninstall skills a package no longer ships
 
 mirror_roles = true     # copy pstack's per-role model lines from the source tool's pstack-models file
-mirror_mcp = true       # add the source tool's user-level MCP servers to the other tools (never deletes)
+mirror_mcp = true       # add the source tool's user-level MCP servers to the other tools, update pinned
+                        # packages, and offer to remove settings copies of servers a plugin already brings
 update_clis = true      # update all enabled CLIs, or choose a subset such as ["claude", "codex"]
 mirror_skills = true    # copy your own skills (not from a package) from the source tool to the others
 skip_skills = []        # your own skills that stay in the source tool, e.g. ["only-for-claude"]
 allow_duplicate_skills = []  # skill names a tool may load from two places without a warning, e.g. ["pdf"]
-mirror_instructions = false  # copy global instructions from the source agent. Cursor cannot be the source
+mirror_instructions = false  # share global instructions across the enabled agents
+mirror_memory = true    # share Claude Code's memory notes with the other agents; sensitive notes stay in Claude Code
+private_memory = []     # memory notes that stay in Claude Code, e.g. ["my-accounts"]
+share_memory = []       # notes flagged as sensitive that may be shared anyway
+status_line = true      # one status line in Claude Code, Cursor CLI and Antigravity; Codex's built-in items
 update_plugins = true   # update plugins and extensions for the enabled agents
+update_mcp_programs = true   # upgrade the programs MCP servers run (Homebrew, npm, pipx, uv)
+update_global_tools = false  # also update global npm, pipx and uv tools (true), or a list that may add "homebrew"
+keep_mcp_versions = []  # MCP servers whose pinned package version stays, e.g. ["rea"]
+mcp_major_updates = false    # let a pinned MCP package move to a new major version
+keep_installed = []     # items upkeep never removes or replaces, by key or name (see `agent-sync pending`)
+notify = true           # ask for approvals and show warnings in a macOS window and the Plannotator Inbox
 warn_models = []        # warn when a model name containing one of these shows up, e.g. ["preview-"]
 update_self = true      # update agent-sync itself (Homebrew, pipx, or a pip install from GitHub)
 launcher = false        # keep "Agent Upkeep" on the Desktop and up to date (macOS); agent-sync launcher sets it
 log_days = 7            # keep this many days of log lines
+backup_days = 30        # keep backups of changed files this many days
 
 # The model each tool's copy of a mirrored agent runs on.
 [agent_models]
@@ -49,6 +61,10 @@ gemini = ""             # inherit the Gemini CLI model
 # Use an agent ID, or homebrew, git, or node.
 # [install_commands]
 # codex = ["npm", "install", "-g", "@openai/codex"]
+
+# A program an MCP server runs that updates itself with its own command. Listed programs only.
+# [program_updates]
+# plannotator = ["plannotator", "update"]
 
 # Extra commands run at the end of every upkeep, in order. A dry run only prints them.
 # [[extra_steps]]

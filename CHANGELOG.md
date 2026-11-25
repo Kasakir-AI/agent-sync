@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.9.0 (2026-11-25)
+
+New: every agent gets the right version of each plugin, skill and MCP server, each loaded once and kept up to date,
+with a backup before every change and nothing removed until you approve it.
+
+**Loaded once, in each tool's own version**
+
+- `agent-sync inventory` lists, for each enabled agent, the plugins it loads (version, which tool each was made
+  for), its MCP servers (from its settings or from a plugin, with pinned package versions and newer ones), the
+  number of skills it loads, and every problem found. It changes nothing.
+- Codex online-catalog plugins now count: Codex loads them, so their skills and MCP servers are checked for
+  duplicates. Antigravity plugins and Gemini CLI extensions count too.
+- An MCP server a tool's settings list and one of its plugins also brings is loaded twice. When the settings
+  entry is an exact copy, upkeep asks you to approve removing it. Otherwise it warns. The source tool's settings
+  are never changed this way, because the other tools copy from them.
+- A plugin installed twice in one tool, from two catalogs, is reported.
+- Codex uses a plugin made for Codex in place of a Claude Code-format copy when the Codex one is not older and keeps
+  every skill, MCP server, command, agent and hook. Otherwise both stay and the run says why.
+
+**Kept up to date**
+
+- Every installed skill is updated, whichever repository it came from, not only the packages in `skill_packages`.
+- Antigravity plugins are reinstalled when its catalog has a newer version. A release never moves to a prerelease.
+- Programs that MCP servers run are upgraded the way they were installed: Homebrew, npm, pipx or uv
+  (`update_mcp_programs`). A program with its own updater runs it only when you list it in `program_updates`.
+  Interpreters such as `python3` or `node` are never upgraded on an MCP server's behalf.
+- A pinned package in an MCP server (`npx -y name@1.2.3`) moves to the newest release in the same major version
+  once that release is at least 2 days old. `mcp_major_updates = true` allows new major versions.
+  `keep_mcp_versions` holds a server's pin.
+- npm itself is updated when it is installed globally. `update_global_tools` (off by default) also updates your
+  other global npm, pipx and uv tools, and Homebrew packages when you list `"homebrew"`.
+- Homebrew refreshes once per run instead of once per step.
+
+**Instructions and memory**
+
+- With `mirror_instructions = true`, every agent's instruction file contributes: a line added in any of them
+  reaches the others, next to the lines around it. A rewording in the source tool's file reaches the others too.
+- A line is never deleted from another tool on its own. When another tool drops or rewords a shared line (Codex and
+  Gemini do when they remember something), the others keep it and the run warns until you choose in
+  `agent-sync review`. A large deletion in the source, a missing source file, or an empty one is held for approval.
+- Lines between `<!-- agent-sync: local -->` and `<!-- agent-sync: end local -->` stay in their file. So do lines
+  between `<!-- agent-sync: private -->` and `<!-- agent-sync: end private -->`.
+- Claude Code's memory is shared with the other agents (`mirror_memory`, on by default): the notes are copied to
+  `~/.agents/memory/`, and the other agents' instructions get the memory index.
+- Notes that mention credentials, tokens, keys, legal names or similar personal details stay in Claude Code. The run
+  lists them. `private_memory` and `private: true` keep a note private. `share_memory` shares a flagged note. A note
+  or an instruction line that contains a secret value, such as a token or a private key, never leaves its file.
+- An MCP server copied to another tool no longer carries environment values that look like secrets. The run says
+  which variable to set there.
+
+**Safety**
+
+- Every run saves the original of each file it changes in `~/.local/state/agent-sync/backups/run-<date-time>/`,
+  kept for 30 days (`backup_days`). Folders are saved as APFS clones on macOS, which take almost no space.
+- Nothing you or another program installed is removed until you approve it. A scheduled run asks in a macOS window
+  where you pick what may go. In a terminal it asks yes or no. Your Plannotator Inbox gets buttons to approve or
+  keep each removal, when Plannotator is installed. `agent-sync pending` lists what waits and takes
+  `--approve`, `--keep` and `--ack`. `keep_installed` keeps an item for good.
+- New warnings appear in a macOS alert that stays until you click **OK**, and in the Inbox. A warning you
+  acknowledged is not shown again until it changes. `notify = false` turns off the window and the Inbox messages.
+- Settings files are written through one checked writer. When Claude Code or another tool changes a file while a run
+  updates it, the run plans the change again from the new contents instead of overwriting them. New MCP settings
+  files are readable only by you.
+- One failed step no longer stops the rest of the run.
+
+**Status line**
+
+- `agent-sync-statusline` draws one status line for Claude Code, Cursor CLI and Antigravity: the model and mode,
+  the 5-hour and weekly limits with their reset times, the context left, the cost, and running agents and tasks.
+  It uses one line when the terminal is wide and wraps between parts on narrow terminals.
+- Upkeep sets it up in those tools and sets Codex's built-in status items (`status_line`, on by default).
+  Replacing a status line of your own needs your approval. Gemini CLI has no custom status line.
+
 ## 0.8.1 (2026-11-25)
 
 - A package agent whose description spans several lines (`description: >` or `|`) keeps that description in

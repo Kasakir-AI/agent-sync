@@ -15,42 +15,54 @@ share.
   the other tool is never touched. With Gemini CLI as the source, skills only in `~/.gemini/skills` reach
   Antigravity but not Codex or Cursor, which share Gemini CLI's other folder (`~/.agents/skills`): keep a skill
   there to share it with them.
-- **No skill twice**: a copy is left out when a tool that would read it already loads a skill of that name, and
-  the log says which. Skills inside Claude Code plugins are never copied: Cursor loads them from Claude Code
-  already. To give Codex a plugin's skills, install the plugin in Codex too (`codex plugin list`).
-- **Duplicate skills**: every upkeep checks whether a tool loads the same skill name from two places, such as a
-  pack installed both as a package and as a plugin, and names the skills and both places in the log. Codex
-  skills you switched off and Claude Code plugins you disabled don't count. Cursor reads Claude Code's skills and
-  plugins too unless you turned off its third-party setting, so a pack installed as a Claude Code plugin and as a
-  package shows up twice there. Skills you keep twice on purpose go in `allow_duplicate_skills`.
+- **Loaded once**: a copy is left out when a tool that would read it already loads the same skill. Every upkeep
+  checks each tool for a skill name it loads from two places, a plugin installed twice from two catalogs, and an
+  MCP server it loads twice (from its settings and from a plugin), and names both places. Codex online-catalog
+  plugins, Antigravity plugins and Gemini CLI extensions count. Codex skills you switched off and plugins you
+  disabled don't. Cursor reads Claude Code's skills and plugins too unless you turned off its third-party setting.
+  Skills you keep twice on purpose go in `allow_duplicate_skills`.
+- **Each tool's own version**: Codex uses a plugin made for Codex in place of a Claude Code-format copy when the
+  Codex one is not older and keeps every skill, MCP server, command, agent and hook. Otherwise both stay and the
+  run says why.
 - **pstack model roles** (`feature, refactoring: <model>` and the rest) are copied from the source tool's
   `pstack-models` file to the others, and each tool keeps its own notes on how to run each model.
-- **MCP servers** at user level are added to the tools that don't have them yet. Nothing is ever deleted, and
-  servers that already exist are left alone, with one exception: every copy follows the newest version of a server
-  an app rewrites on its updates (Codex's `node_repl`). A copy that points at files that no longer exist, or that
-  differs only in an older app version (a versioned folder or a `*VERSION` setting), is brought up to the newest
-  working copy, and the original is backed up.
-- **Global instructions** (optional) follow the source into the other agents' instruction files. Gemini CLI and
-  Antigravity share `~/.gemini/GEMINI.md`. Cursor receives an always-applied rule. Changes and deletions in the
-  source carry over, while local notes stay in each file. If you reword a shared line in another file, upkeep
-  keeps your wording and reminds you to make the same change in the source.
-- **Plugins and extensions** are updated for enabled agents. Upkeep refreshes Claude Code's plugins and
-  marketplaces, Git plugin marketplaces in Codex, user marketplaces in Cursor, and Gemini CLI extensions.
+- **MCP servers** at user level are added to the tools that don't have them yet. A server a tool's plugin already
+  brings is not added again. An exact settings copy of a plugin's server can be removed after you approve it.
+  Environment values that look like secrets are not copied: the run tells you which variable to set. Every copy
+  follows the newest version of a server an app rewrites on its updates (Codex's `node_repl`). A pinned package
+  (`npx -y name@1.2.3`) moves to the newest release in the same major version once it is at least 2 days old.
+- **Global instructions** (optional, `mirror_instructions`) are shared by every enabled agent. A line added in any
+  agent's file reaches the others. A line is never deleted from another tool on its own: when a tool drops or
+  rewords a shared line, the others keep it and the run warns until you choose in `agent-sync review`. Gemini CLI
+  and Antigravity share `~/.gemini/GEMINI.md`. Cursor receives an always-applied rule.
+- **Memory**: Claude Code's memory notes are shared with the other agents, except notes about credentials, keys or
+  personal details, which stay in Claude Code. See [Memory and privacy](#memory-and-privacy).
+- **Plugins and extensions** are updated for enabled agents: Claude Code's plugins and marketplaces, Git plugin
+  marketplaces in Codex, user marketplaces in Cursor, Antigravity plugins (from its catalog), and Gemini CLI
+  extensions.
+- **Skills** from every source are updated (`skills update`), not only the packages in `skill_packages`.
+- **MCP server programs** are upgraded the way they were installed (Homebrew, npm, pipx or uv). A program with its
+  own updater runs it when you list it in `program_updates`.
 - **CLIs** are updated through Homebrew when it installed them or through their own update commands. Gemini CLI
   uses npm outside Homebrew. Antigravity uses `agy update`. Upkeep also upgrades git and Node when Homebrew
-  installed them.
+  installed them, and npm when it is installed globally. `update_global_tools` (off by default) also updates your
+  other global npm, pipx and uv tools, and Homebrew packages when you list `"homebrew"`.
 - **agent-sync itself** is updated the way you installed it: `brew upgrade` for the Homebrew formula,
   `pipx upgrade`, or the newest release from GitHub for an install from the repository.
 - **A double-click launcher** (macOS, optional): "Agent Upkeep" on the Desktop runs the upkeep with every step on
   screen, then lets you press `r` to review differences or `s` to change the settings. Every run puts it back if
   it is missing and rewrites it when a new version of agent-sync changes it.
+- **A status line** in Claude Code, Cursor CLI and Antigravity, and Codex's built-in status items. See
+  [Status line](#status-line).
+- **Backups and approvals**: every file a run changes is saved first, and nothing you installed is removed until you
+  approve it. See [Approve removals](#approve-removals).
 - **A small log** with a timestamp on every line keeps the last 7 days, and warns when a model you listed in
   `warn_models` (one you have no subscription for, say) shows up in any tool's settings.
 
 It runs hourly and at login but only does the work once every 20 hours, so a day the Mac was off is caught up
 soon after it starts.
 
-> Status: 0.8.0. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
+> Status: 0.9.0. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
 
 ## Install
 
@@ -69,6 +81,8 @@ agent-sync run --force            # first run, with every step on screen
 agent-sync install --launcher     # schedule it (hourly + at login, works once a day); --launcher adds
                                   # a double-click "Agent Upkeep" to the Desktop (macOS)
 agent-sync launcher               # just the Desktop launcher, if you want it without reinstalling
+agent-sync inventory              # what each agent loads, and any duplicates or outdated pins
+agent-sync pending                # removals waiting for your approval, and warnings to acknowledge
 ```
 
 In a terminal, `agent-sync setup` first offers to add installed agents you haven't enabled. It then offers to
@@ -85,6 +99,64 @@ while you are logged out.
 `agent-sync run --dry-run` lists the files it would change and the commands it would run.
 `agent-sync status` shows the last run, the log location, and the enabled CLI versions.
 `agent-sync uninstall` removes the schedule and the launcher and turns off the launcher setting.
+
+## Check what each agent loads
+
+`agent-sync inventory` lists, for each enabled agent, the plugins it loads (with the version and the tool each was
+made for), its MCP servers (from its settings or from a plugin, with pinned package versions and newer ones), and
+the number of skills it loads. It ends with every problem it found: skills, plugins or MCP servers loaded twice, and
+pins with a newer release. It changes nothing.
+
+## Approve removals
+
+Before a run changes or replaces a file, it saves the original in
+`~/.local/state/agent-sync/backups/run-<date-time>/`, at the same path relative to your home folder. Folders are
+saved as APFS clones on macOS, which take almost no space. Backups are kept for 30 days (`backup_days`).
+
+A run never removes something you or another program installed until you approve it. This covers an MCP settings
+entry that a plugin already brings, a Codex plugin replaced by Codex's own version, a skill a package dropped, an
+edited skill or memory copy, a large deletion in your instructions, and replacing your own status line.
+
+- **Scheduled run (macOS):** a window lists what is waiting. Select what may go and click **Remove selected**, or
+  click **Keep all for now**. Anything you don't select is asked about again at the next run.
+- **Terminal and the Desktop launcher:** the run asks yes or no for each item. The default is no.
+- **Plannotator Inbox:** when Plannotator is installed, each run with something new posts to the Inbox thread
+  "agent-sync upkeep" with a button to approve and a button to keep each item.
+- **Any time:** `agent-sync pending` lists what is waiting. `agent-sync pending --approve <key>` lets the next run
+  remove it. `agent-sync pending --keep <key>` adds it to `keep_installed`, which keeps it for good.
+
+New warnings appear in a macOS alert that stays until you click **OK** (in a terminal, until you press Enter), and in
+the Inbox. A warning you acknowledged is not shown again until its text changes. `agent-sync pending --ack`
+acknowledges the current warnings. `notify = false` turns off the window, the alert and the Inbox messages.
+
+## Memory and privacy
+
+Claude Code keeps long-term memory as notes in `~/.claude/projects/<your home folder>/memory/`. With `mirror_memory`
+(on by default), upkeep copies them to `~/.agents/memory/` and adds the memory index to the other agents'
+instructions, so they read the same facts. The copies are agent-sync's. It never touches other files in that folder.
+
+The other agents send their instructions to their own companies, so some notes stay in Claude Code:
+
+- A note that contains a secret value, such as a GitHub or API token, an AWS key or a private key, never leaves
+  Claude Code. The same goes for an instruction line with a secret value: it stays in its file.
+- A note that mentions credentials, tokens, keys, a legal name, an address, a phone number or bank details stays in
+  Claude Code by default. Each run lists these notes and why. Add a note's name to `share_memory` to share it.
+- A note with `private: true` in its front matter, or listed in `private_memory`, stays in Claude Code.
+- Lines between `<!-- agent-sync: private -->` and `<!-- agent-sync: end private -->` in an instruction file stay in
+  that file. Lines between `<!-- agent-sync: local -->` and `<!-- agent-sync: end local -->` do too.
+
+## Status line
+
+`agent-sync-statusline <tool>` draws one status line from the data each CLI passes it: the model and mode, the
+5-hour and weekly limits used with their reset times, the context left, the cost, and running agents and tasks. On a
+wide terminal it uses one line. On narrower ones it shortens labels, then wraps between parts, so the whole line
+stays visible.
+
+With `status_line` (on by default), upkeep sets it up in Claude Code (`~/.claude/settings.json`), Cursor CLI
+(`~/.cursor/cli-config.json`) and Antigravity (`~/.gemini/antigravity-cli/settings.json`). Cursor does not pass plan
+limits or cost, so its line shows the model and the context. Codex has no custom status line command, so upkeep sets
+its built-in items in `~/.codex/config.toml`: model, 5-hour limit, weekly limit, context, tokens and cost. Gemini CLI
+has no custom status line. If a tool already has a status line of yours, upkeep asks before replacing it.
 
 ## Choose your agents
 
@@ -177,7 +249,18 @@ and change what you need. Every key is optional:
 | `mirror_roles` / `mirror_mcp` / `mirror_skills` / `update_plugins` | `true` | switch parts off |
 | `skip_skills` | `[]` | your own skills that stay in the source tool only |
 | `allow_duplicate_skills` | `[]` | skill names a tool may load from two places without a warning, e.g. `["pdf"]` |
-| `mirror_instructions` | `false` | copy the source tool's global instructions to the others |
+| `mirror_instructions` | `false` | share global instructions across the enabled agents |
+| `mirror_memory` | `true` | share Claude Code's memory notes with the other agents (sensitive notes stay) |
+| `private_memory` / `share_memory` | `[]` | memory notes to keep in Claude Code, or flagged notes to share anyway |
+| `status_line` | `true` | set up one status line in every CLI that supports it |
+| `keep_installed` | `[]` | items upkeep never removes or replaces, by key or name, e.g. `["cloudflare"]` |
+| `keep_mcp_versions` | `[]` | MCP servers whose pinned package version stays as it is |
+| `mcp_major_updates` | `false` | let a pinned MCP package move to a new major version |
+| `update_mcp_programs` | `true` | upgrade the programs MCP servers run (Homebrew, npm, pipx, uv) |
+| `[program_updates]` | none | a program's own update command, e.g. `plannotator = ["plannotator", "update"]` |
+| `update_global_tools` | `false` | also update global npm, pipx and uv tools (`true`), or a list that may include `"homebrew"` |
+| `notify` | `true` | ask for approvals and show warnings in a macOS window and the Plannotator Inbox |
+| `backup_days` | `30` | how long backups of changed files are kept |
 | `warn_models` | `[]` | warn when a model name containing one of these appears, e.g. `["preview-"]` |
 | `update_clis` | `true` | update all enabled CLIs, disable updates with `false`, or choose a subset |
 | `[cli_commands]` | none | your own update command for a CLI, e.g. `codex = ["npm", "install", "-g", "@openai/codex@latest"]` |
@@ -201,13 +284,17 @@ and `XDG_STATE_HOME` when set.
 - **Try changes safely.** `agent-sync run --dry-run` after every config change shows exactly what would happen
   (`agent-sync config` offers it after you save).
 - **Change the code.** The supported agents and their settings paths are in `agent_sync/registry.py`. See `agents.py` (agent
-  formats per tool), `skills.py` (your own skills, package skills), `duplicates.py` (skills a tool loads twice),
-  `roles.py` (pstack model roles), `mcp.py` (MCP servers), `instructions.py` (global instructions), `tools.py`
-  (skill packages, plugins, CLI updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd,
-  launcher), `setup.py` (installing what is missing), `configure.py` and `tomledit.py` (the settings editor),
-  `review.py` (comparing settings and recommending one), `textmerge.py` (merging lines), `writes.py` (writing a
-  choice), `reviewpage.py` and `review.html` (the review page), `cli.py` (the order of the steps). To add a step,
-  write a function that takes `log` and `dry`, never writes when `dry` is true, and call it from `run()` in
+  formats per tool), `skills.py` (your own skills, package skills), `inventory.py` (the plugins each tool loads),
+  `duplicates.py` (skills a tool loads twice), `plugins.py` (plugins loaded twice, each tool's own version),
+  `roles.py` (pstack model roles), `mcp.py` (MCP servers, duplicates and pinned versions), `instructions.py`
+  (shared instructions), `memory.py` and `privacy.py` (shared memory, private notes, secret values), `tools.py`
+  (skill packages, plugins, CLI, program and global tool updates, extra steps), `backups.py` (the copy of every
+  changed file), `pending.py` and `notify.py` (approvals and warnings), `statusline.py` and `statuslines.py`
+  (the status line), `checks.py` (warnings), `schedule.py` (launchd, systemd, launcher), `setup.py` (installing
+  what is missing), `configure.py` and `tomledit.py` (the settings editor), `review.py` (comparing settings and
+  recommending one), `textmerge.py` (merging lines), `writes.py` (the checked writer), `reviewpage.py` and
+  `review.html` (the review page), `cli.py` (the order of the steps). To add a step, write a function that takes
+  `log` and `dry`, never writes when `dry` is true, writes through `writes.update`, and call it from `run()` in
   `cli.py`. `tests/` shows how to test a part against a throwaway home folder (`python -m pytest`).
 
 ## Moving from your own upkeep scripts
@@ -226,13 +313,14 @@ The review writes only the settings you pick and apply, and in those files only 
 
 | tool | files |
 | --- | --- |
-| Claude Code | `~/.claude/skills/*` (links and copies), `~/.claude/agents/*.md`, `~/.claude/rules/pstack-models.md`, `~/.claude.json` (`mcpServers`), `~/.claude/CLAUDE.md` (opt-in) |
-| Codex | `~/.agents/skills/*`, `~/.codex/agents/*.toml`, `~/.agents/pstack-models.md`, `~/.codex/config.toml` (`[mcp_servers.*]`, appended), `~/.codex/AGENTS.md` (opt-in) |
-| Cursor | `~/.agents/skills/*`, `~/.cursor/plugins/local/<package>-agents/`, `~/.cursor/rules/pstack-models.mdc`, `~/.cursor/mcp.json`, `~/.cursor/rules/agent-sync-instructions.mdc` (opt-in) |
-| Gemini CLI | `~/.agents/skills/*`, `~/.gemini/agents/*.md`, `~/.agents/pstack-models.md`, `~/.gemini/settings.json` (`mcpServers`), `~/.gemini/GEMINI.md` (opt-in) |
-| Antigravity | `~/.gemini/config/skills/*`, `~/.gemini/config/agents/*.md`, `~/.agents/pstack-models.md`, `~/.gemini/config/mcp_config.json`, `~/.gemini/GEMINI.md` (opt-in) |
+| Claude Code | `~/.claude/skills/*` (links and copies), `~/.claude/agents/*.md`, `~/.claude/rules/pstack-models.md`, `~/.claude.json` (`mcpServers`), `~/.claude/settings.json` (`statusLine`), `~/.claude/CLAUDE.md` (opt-in) |
+| Codex | `~/.agents/skills/*`, `~/.codex/agents/*.toml`, `~/.agents/pstack-models.md`, `~/.codex/config.toml` (`[mcp_servers.*]`, `[tui] status_line`), Codex plugins (`codex plugin add` and `remove`), `~/.codex/AGENTS.md` (opt-in, memory index) |
+| Cursor | `~/.agents/skills/*`, `~/.cursor/plugins/local/<package>-agents/`, `~/.cursor/rules/pstack-models.mdc`, `~/.cursor/mcp.json`, `~/.cursor/cli-config.json` (`statusLine`), `~/.cursor/rules/agent-sync-instructions.mdc` (opt-in, memory index) |
+| Gemini CLI | `~/.agents/skills/*`, `~/.gemini/agents/*.md`, `~/.agents/pstack-models.md`, `~/.gemini/settings.json` (`mcpServers`), `~/.gemini/GEMINI.md` (opt-in, memory index) |
+| Antigravity | `~/.gemini/config/skills/*`, `~/.gemini/config/agents/*.md`, `~/.agents/pstack-models.md`, `~/.gemini/config/mcp_config.json`, `~/.gemini/antigravity-cli/settings.json` (`statusLine`), Antigravity plugins (`agy plugin install`), `~/.gemini/GEMINI.md` (opt-in, memory index) |
+| All | `~/.agents/memory/*` (memory copies), MCP server programs and global tools through their package managers |
 
-State and the package checkouts live in `~/.local/state/agent-sync/`. The log is `~/Library/Logs/agent-sync.log`
+State, backups (`backups/run-*`), pending removals and the package checkouts live in `~/.local/state/agent-sync/`. The log is `~/Library/Logs/agent-sync.log`
 on macOS and `~/.local/state/agent-sync/agent-sync.log` on Linux. The schedule is
 `~/Library/LaunchAgents/io.github.agent-sync.plist` or `~/.config/systemd/user/agent-sync.{service,timer}`.
 
@@ -240,7 +328,8 @@ on macOS and `~/.local/state/agent-sync/agent-sync.log` on Linux. The schedule i
 
 Read [SECURITY.md](SECURITY.md). In short: skill packages and the `skills` CLI run with your agents' full
 permissions, so only add packages you trust, and pin `skills_cli` if you don't want new releases picked up
-automatically.
+automatically. Every change is backed up first, nothing is removed until you approve it, and secret values never
+leave the tool they are in.
 
 ## Support
 
