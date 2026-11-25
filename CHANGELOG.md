@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-11-25)
 
 - Keep any selection of Claude Code, Codex, Cursor, Gemini CLI, and Antigravity in step. Existing settings still
   use the first three by default.
@@ -8,6 +8,9 @@
   or the **Agents** section in `agent-sync config` to change the list. Removing an agent keeps its files.
 - Setup offers to add installed agents and installs missing enabled CLIs. Review shows shared settings once
   with the names of the enabled agents that use them.
+- On a Google AI Pro or other Google One plan, add `antigravity`: Google replaced Gemini CLI with the Antigravity CLI
+  (`agy`) for those plans. Antigravity and Gemini CLI share `~/.gemini/GEMINI.md`, so it is written once.
+- An empty MCP settings file (Antigravity creates one) counts as having no servers instead of stopping the MCP step.
 
 ## 0.7.1 (2026-11-24)
 
