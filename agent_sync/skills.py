@@ -147,7 +147,8 @@ def plugin_skill_dirs(root: Path) -> dict[str, Path]:
                 out.setdefault(path.name, path)
             continue
         for d in sorted(path.iterdir()) if path.is_dir() else []:
-            if (not d.name.startswith(".") and inside(root, d / "SKILL.md") and (d / "SKILL.md").is_file()):
+            if (not d.name.startswith(".") and inside(root, d)
+                    and inside(root, d / "SKILL.md") and (d / "SKILL.md").is_file()):
                 out.setdefault(d.name, d)
     return out
 

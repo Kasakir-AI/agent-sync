@@ -226,6 +226,9 @@ def test_plugin_skill_children_and_definition_links_cannot_escape_root(tmp_path)
     (root / "custom/escaped").symlink_to(external / "foreign", target_is_directory=True)
     (root / "skills/escaped-definition").mkdir()
     (root / "skills/escaped-definition/SKILL.md").symlink_to(external / "foreign/SKILL.md")
+    (external / "return-link").mkdir()
+    (external / "return-link/SKILL.md").symlink_to(root / "skills/inside/SKILL.md")
+    (root / "skills/return-link").symlink_to(external / "return-link", target_is_directory=True)
 
     assert set(skills.plugin_skill_dirs(root)) == {"inside"}
 
