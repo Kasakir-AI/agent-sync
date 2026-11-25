@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from stat import S_ISDIR, S_ISLNK, S_ISREG
+from stat import S_IMODE, S_ISDIR, S_ISLNK, S_ISREG
 
 FOLDER_NAME = re.compile(r"(?:run|review|repair|dedupe|pins)-([0-9]{8}-[0-9]{6})")
 MIB = 1024 * 1024
@@ -150,6 +150,7 @@ def discard_unchanged(saved: Path, original: Path | None, originals: dict[Path, 
             if saved.readlink() == original.readlink():
                 saved.unlink()
         elif (S_ISREG(saved_stat.st_mode) and S_ISREG(live_stat.st_mode)
+              and S_IMODE(saved_stat.st_mode) == S_IMODE(live_stat.st_mode)
               and saved_stat.st_size == live_stat.st_size and same_bytes(saved, original)):
             saved.unlink()
 

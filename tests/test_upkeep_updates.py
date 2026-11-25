@@ -1,12 +1,14 @@
 import json
+from stat import S_IMODE
 from types import SimpleNamespace
 
 import pytest
 
-from agent_sync import cli, tools
+from agent_sync import backups, cli, tools
 from agent_sync.config import Config, parse
 
 SKILLS_UPDATE = ["npx", "-y", "--prefer-online", "skills@latest", "update", "-g", "-y"]
+SKILLS_CHECK = (*SKILLS_UPDATE[:4], "check", "-g")
 BREW_UPDATE = ["brew", "update", "-q"]
 BREW_FORMULAE = ("brew", "outdated", "--formula", "--quiet")
 BREW_CASKS = ("brew", "outdated", "--cask", "--greedy", "--quiet")
@@ -63,6 +65,7 @@ def servers(home, path=".claude.json", **entries):
 @pytest.mark.parametrize("dry", [False, True])
 def test_run_updates_global_skills_once_after_packages(tmp_path, monkeypatch, commands, capsys, dry):
     write(tmp_path, ".agents/.skill-lock.json", '{"skills":{"example":{}}}')
+    commands.output[SKILLS_CHECK] = "Checking for skill updates…\n↑ example has an update\n"
     cfg = Config(home=tmp_path, skill_packages=["team/one", "team/two"], update_clis=False,
                  update_plugins=False, update_self=False)
     monkeypatch.setattr(cli, "load", lambda: cfg)
@@ -75,7 +78,113 @@ def test_run_updates_global_skills_once_after_packages(tmp_path, monkeypatch, co
         assert SKILLS_UPDATE not in commands.ran
         assert f"would run: {' '.join(SKILLS_UPDATE)}" in output
     else:
-        assert commands.ran.count(SKILLS_UPDATE) == 1
+        assert commands.ran.count([*SKILLS_UPDATE, "example"]) == 1
+
+
+def test_global_skills_up_to_date_never_open_a_backup(tmp_path, commands):
+    write(tmp_path, ".agents/.skill-lock.json", '{"skills":{"current":{}}}')
+    write(tmp_path, ".agents/skills/current/SKILL.md", "unchanged")
+    commands.output[SKILLS_CHECK] = "Checking for skill updates…\n✓ All global skills are up to date\n"
+    root = tmp_path / "backups"
+
+    with backups.during(tmp_path, root):
+        tools.update_skills(commands.log, False, "skills@latest", home=tmp_path)
+        assert not root.exists()
+
+    assert commands.read == [SKILLS_CHECK]
+    assert commands.ran == []
+
+
+def test_global_skills_check_failure_leaves_installed_skills_alone(tmp_path, commands):
+    write(tmp_path, ".agents/.skill-lock.json", '{"skills":{"current":{}}}')
+    original = write(tmp_path, ".agents/skills/current/SKILL.md", "unchanged")
+    commands.output[SKILLS_CHECK] = "Checking for skill updates…\n✗ Failed to check skills from team/pack\n"
+    root = tmp_path / "backups"
+
+    with backups.during(tmp_path, root):
+        tools.update_skills(commands.log, False, "skills@latest", home=tmp_path)
+        assert not root.exists()
+
+    assert commands.ran == []
+    assert commands.lines[-1][0] == "FAIL"
+    assert original.read_text() == "unchanged"
+
+
+def test_global_skill_update_backs_up_only_reported_installs(tmp_path, monkeypatch, commands):
+    write(tmp_path, ".agents/.skill-lock.json", '{"skills":{"renamed":{},"current":{}}}')
+    changed = write(tmp_path, ".agents/skills/renamed/SKILL.md", "original")
+    current = write(tmp_path, ".agents/skills/current/SKILL.md", "unchanged")
+    commands.output[SKILLS_CHECK] = "Checking for skill updates…\n\x1b[32m↑ renamed has an update\x1b[0m\n"
+    root = tmp_path / "backups"
+
+    def sh(args, timeout):
+        assert args == [*SKILLS_UPDATE, "renamed"]
+        folder, = root.iterdir()
+        assert not (folder / current.relative_to(tmp_path)).exists()
+        assert (folder / changed.relative_to(tmp_path)).read_text() == "original"
+        changed.write_text("updated")
+        return 0, ""
+
+    monkeypatch.setattr(tools, "sh", sh)
+    with backups.during(tmp_path, root):
+        tools.update_skills(commands.log, False, "skills@latest", home=tmp_path)
+
+    assert changed.read_text() == "updated"
+
+
+def test_gemini_update_backs_up_only_updatable_extension_folders(tmp_path, monkeypatch, commands):
+    program(tmp_path, "gemini")
+    changed = write(tmp_path, ".gemini/extensions/changed/gemini-extension.json", '{"name":"changed"}')
+    write(changed.parent, ".gemini-extension-install.json", '{"type":"git"}')
+    current = write(tmp_path, ".gemini/extensions/current/gemini-extension.json", '{"name":"current"}')
+    write(current.parent, ".gemini-extension-install.json", '{"type":"local"}')
+    linked = write(tmp_path, ".gemini/extensions/linked/gemini-extension.json", '{"name":"linked"}')
+    write(linked.parent, ".gemini-extension-install.json", '{"type":"link"}')
+    write(tmp_path, ".gemini/extensions/unrelated/archive", "unrelated")
+    root = tmp_path / "backups"
+
+    def sh(args, timeout):
+        assert args == ["gemini", "extensions", "update", "--all"]
+        folder, = root.iterdir()
+        saved = folder / ".gemini/extensions"
+        assert {path.name for path in saved.iterdir()} == {"changed", "current"}
+        changed.write_text('{"name":"changed","version":"2.0.0"}')
+        return 0, ""
+
+    monkeypatch.setattr(tools, "sh", sh)
+    with backups.during(tmp_path, root):
+        tools.update_plugins(commands.log, home=tmp_path, enabled=["gemini"])
+
+    folder, = root.iterdir()
+    assert (folder / changed.relative_to(tmp_path)).read_text() == '{"name":"changed"}'
+    assert not (folder / current.parent.relative_to(tmp_path)).exists()
+
+
+@pytest.mark.parametrize("same_bytes", [False, True])
+def test_failed_standalone_update_preserves_resolved_executable(tmp_path, monkeypatch, commands, same_bytes):
+    link = program(tmp_path, "standalone", "libexec/standalone")
+    real = link.resolve()
+    original = real.read_bytes()
+    servers(tmp_path, own="standalone")
+    cfg = Config(home=tmp_path, program_updates={"standalone": ["standalone", "update"]})
+    root = tmp_path / "backups"
+
+    def sh(args, timeout):
+        assert args == ["standalone", "update"]
+        if not same_bytes:
+            real.write_text("broken")
+        real.chmod(0o644)
+        return 1, "update failed"
+
+    monkeypatch.setattr(tools, "sh", sh)
+    with backups.during(tmp_path, root):
+        tools.update_mcp_programs(commands.log, cfg, False)
+
+    assert commands.lines[-1][0] == "FAIL"
+    folder, = root.iterdir()
+    saved = folder / real.relative_to(tmp_path)
+    assert saved.read_bytes() == original
+    assert S_IMODE(saved.stat().st_mode) == 0o755
 
 
 @pytest.mark.parametrize(("installed", "available", "expected"), [
@@ -145,6 +254,14 @@ def test_mcp_brew_skips_another_accounts_install(tmp_path, monkeypatch, commands
     tools.update_mcp_programs(commands.log, Config(home=tmp_path), False)
     assert commands.read == commands.ran == []
     assert len(commands.lines) == 1 and "another account owns" in commands.lines[0][1]
+
+
+def test_mcp_program_updates_report_non_object_settings(tmp_path, commands):
+    malformed = write(tmp_path, ".claude.json", "[]")
+    tools.update_mcp_programs(commands.log, Config(home=tmp_path), True)
+
+    assert commands.read == commands.ran == []
+    assert any(level == "WARN" and str(malformed) in message for level, message in commands.lines)
 
 
 @pytest.mark.parametrize("dry", [False, True])
@@ -365,3 +482,28 @@ def test_claude_plugins_update_only_at_user_scope_and_back_up_their_state(tmp_pa
         assert not (saved / ".claude/plugins/marketplaces").exists()
     assert commands.ran == [["claude", "plugin", "marketplace", "update"], ["claude", "plugin", "update", "notes@team"]]
     assert run.folder is None and not saved.exists()
+
+
+def test_standalone_updater_backs_up_its_install_folder(tmp_path, monkeypatch, commands):
+    link = program(tmp_path, "standalone", ".local/share/standalone/bin/standalone")
+    real = link.resolve()
+    support = real.parent.parent / "support.txt"
+    support.write_text("before")
+    unrelated = tmp_path / ".local/share/unrelated.txt"
+    unrelated.write_text("unrelated")
+    servers(tmp_path, own="standalone")
+    cfg = Config(home=tmp_path, program_updates={"standalone": ["standalone", "update"]})
+
+    def sh(args, timeout):
+        assert args == ["standalone", "update"]
+        support.write_text("after")
+        unrelated.write_text("independent edit")
+        real.write_text("new executable")
+        return 1, "update failed"
+
+    monkeypatch.setattr(tools, "sh", sh)
+    with backups.during(tmp_path, tmp_path / "backups") as run:
+        tools.update_mcp_programs(commands.log, cfg, False)
+    assert (run.folder / support.relative_to(tmp_path)).read_text() == "before"
+    assert (run.folder / real.relative_to(tmp_path)).is_file()
+    assert not (run.folder / unrelated.relative_to(tmp_path)).exists()

@@ -135,15 +135,25 @@ def act(log, dry: bool, label: str, args: list[str], timeout: int = 900, *, run=
 
 
 def update_skills(log, dry: bool, cli: str, *, home: Path, enabled=DEFAULT_AGENTS) -> None:
-    """Update globally installed skills when the lock lists any."""
+    """Check for global skill updates before backing up and updating the reported installs."""
     from . import skills as installed_skills
 
     if not (locked := installed_skills.locked(home)):
         return
+    command = ["npx", "-y", "--prefer-online", cli]
+    label = "skills from every source (skills update)"
+    names = []
     if not dry:
-        installed_skills.backup_installs(home, enabled, locked)
-    act(log, dry, "skills from every source (skills update)",
-        ["npx", "-y", "--prefer-online", cli, "update", "-g", "-y"])
+        report = ANSI.sub("", raw([*command, "check", "-g"], timeout=900, ok_codes=(0, 1)))
+        reported = set(re.findall(r"^↑ (.+) has an update$", report, re.MULTILINE))
+        names = sorted(name for name in reported if name in locked and safe_id(name))
+        if ("Checking for skill updates" not in report or "Failed to check skills from" in report
+                or "Failed to update" in report or reported != set(names)):
+            log("FAIL", "skills check did not confirm all global updates")
+        if not names:
+            return
+        installed_skills.backup_installs(home, enabled, names)
+    act(log, dry, label, [*command, "update", "-g", "-y", *names])
 
 
 @dataclass
@@ -284,10 +294,15 @@ INTERPRETERS = re.compile(r"python\d*(?:\.\d+)?|ruby|java|node|bash|zsh|sh|perl|
                           r"|npx|npm|pnpm|pnpx")
 
 
-def mcp_commands(cfg):
+def mcp_commands(cfg, log):
     """Yield the name, executable and resolved executable of each switched-on stdio server's own program."""
     clis = {tool.command for tool in TOOLS.values()}
-    for _, _, _, _, servers in mcp.settings_files(cfg.home, cfg.agents):
+    notices: list[str] = []
+    settings = list(mcp.settings_files(cfg.home, cfg.agents, notices))
+    for notice in notices:
+        level, _, message = notice.partition("  ")
+        log(level, message)
+    for _, _, _, _, servers in settings:
         for name, server in servers.items():
             if server.get("enabled", True) is False or server.get("disabled") is True or server.get("url"):
                 continue
@@ -310,6 +325,29 @@ def package_under(real: Path, root: Path | None, manager: str) -> tuple[str, str
     parts = real.relative_to(root).parts
     size = 2 if manager == "npm" and parts and parts[0].startswith("@") else 1
     return (manager, "/".join(parts[:size]), None) if len(parts) > size else None
+
+
+def standalone_folder(home: Path, executable: Path, real: Path) -> Path | None:
+    opt = Path("/usr/local/opt")
+    if executable.is_relative_to(opt):
+        parts = executable.relative_to(opt).parts
+        if len(parts) > 1 and real.is_relative_to(root := (opt / parts[0]).resolve()):
+            return root
+    local = (home / ".local").resolve()
+    if real.is_relative_to(local):
+        folder = real.parent
+        if folder.name in {"bin", "sbin", "libexec"}:
+            folder = folder.parent
+        if folder != local and folder.is_relative_to(local) and folder != local / "share":
+            return folder
+    if real.is_relative_to(opt) and len(parts := real.relative_to(opt).parts) > 1:
+        return opt / parts[0]
+    cellar = opt.parent / "Cellar"
+    if real.is_relative_to(cellar) and len(parts := real.relative_to(cellar).parts) > 2:
+        root = (opt / parts[0]).resolve()
+        if real.is_relative_to(root):
+            return root
+    return None
 
 
 def update_mcp_programs(log, cfg, dry: bool, *, state: UpdateState | None = None) -> None:
@@ -340,12 +378,16 @@ def update_mcp_programs(log, cfg, dry: bool, *, state: UpdateState | None = None
     )
     seen_paths: set[Path] = set()
     seen_packages: set[tuple[str, str]] = set()
-    for name, cmd, real in mcp_commands(cfg):
+    for name, cmd, real in mcp_commands(cfg, log):
         if real in seen_paths:
             continue
         seen_paths.add(real)
         own = cfg.program_updates.get(cmd.name) or cfg.program_updates.get(real.name)
         if own:
+            if not dry:
+                if folder := standalone_folder(cfg.home, cmd, real):
+                    backups.save(folder)
+                backups.save(real)
             act(log, dry, f"{cmd.name} update (MCP server {name})", list(own))
             continue
         managed = next((match for resolve in package_resolvers if (match := resolve(real))), None)
@@ -534,6 +576,16 @@ def backup_plugins(home: Path, tool: str, dry: bool, folders: tuple[Path, ...] =
             backups.save(folder)
 
 
+def gemini_update_folders(home: Path) -> tuple[Path, ...]:
+    root = home / ".gemini/extensions"
+    return tuple(
+        manifest.parent for manifest in sorted(root.glob("*/gemini-extension.json"))
+        if isinstance(read_json_object(manifest).get("name"), str)
+        and read_json_object(manifest.parent / ".gemini-extension-install.json").get("type")
+        in ("git", "github-release", "local")
+    )
+
+
 def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=DEFAULT_AGENTS) -> None:
     """Claude Code: refresh every marketplace, then update each user-installed plugin.
     Codex: refresh the Git plugin marketplaces you added; its installed plugins follow them.
@@ -573,7 +625,7 @@ def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=
                 act(log, dry, f"Cursor plugin marketplace {parts[0]}",
                     ["cursor-agent", "plugin", "marketplace", "update", parts[0]])
     if usable("gemini"):
-        backup_plugins(home, "gemini", dry, (home / ".gemini/extensions",))
+        backup_plugins(home, "gemini", dry, () if dry else gemini_update_folders(home))
         act(log, dry, f'{TOOLS["gemini"].name} extensions', [TOOLS["gemini"].command, "extensions", "update", "--all"])
     if "antigravity" in enabled and shutil.which(TOOLS["antigravity"].command, path=PATH):
         update_antigravity_plugins(log, dry, home)
