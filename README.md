@@ -12,7 +12,9 @@ share.
   subagent prompts. Antigravity chooses its own model.
 - **Your own skills** (the ones you made in the source tool, not from a package) are copied to the other tools.
   A copy is marked as agent-sync's, so it follows the source and goes away with it; a folder you made by hand in
-  the other tool is never touched.
+  the other tool is never touched. With Gemini CLI as the source, skills only in `~/.gemini/skills` reach
+  Antigravity but not Codex or Cursor, which share Gemini CLI's other folder (`~/.agents/skills`): keep a skill
+  there to share it with them.
 - **No skill twice**: a copy is left out when a tool that would read it already loads a skill of that name, and
   the log says which. Skills inside Claude Code plugins are never copied: Cursor loads them from Claude Code
   already. To give Codex a plugin's skills, install the plugin in Codex too (`codex plugin list`).
