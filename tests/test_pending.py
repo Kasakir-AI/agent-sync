@@ -149,3 +149,29 @@ def test_keep_matches_exact_key_last_segment_and_colon_delimited_prefix(tmp_path
     with pending.during(tmp_path, ["instruction"], lambda *_: None, True) as run:
         assert not pending.due(key, "deletion batch")
         assert run.questions() == {key: "deletion batch"}
+
+
+def test_upgrade_questions_name_the_upgrade_and_keep_their_approval_by_key(tmp_path):
+    logs = []
+    key = "upgrade:npm:wrangler@5"
+    first = "upgrade wrangler 4.1.0 -> 5.0.0 (a new major version, which can include breaking changes)"
+    moved = "upgrade wrangler 4.2.0 -> 5.0.1 (a new major version, which can include breaking changes)"
+    with pending.during(tmp_path, [], lambda *line: logs.append(line), False):
+        assert not pending.due(key, first, by_key=True)
+    assert logs == [("WARN", f"approval required to {first}")]
+    assert pending.question(first) == f"U{first[1:]}?"
+    approve_current(tmp_path)
+    with pending.during(tmp_path, [], lambda *line: logs.append(line), False):
+        assert pending.due(key, moved, by_key=True)
+    assert json.loads((tmp_path / pending.FILENAME).read_text())[key]["what"] == moved
+    with pending.during(tmp_path, [], lambda *line: logs.append(line), False):
+        assert not pending.due("skill:extract", "skill extract")
+    assert logs[-1] == ("WARN", "approval required to remove skill extract")
+    assert pending.question("MCP server cf") == "Remove MCP server cf?"
+
+
+def test_a_package_prefix_keeps_every_major_version_of_it(tmp_path):
+    for keep, kept in ((["upgrade:npm:wrangler"], True), (["upgrade:npm:wrangler@5"], True),
+                       (["upgrade:npm:wrangler@6"], False), (["upgrade:npm:wrang"], False)):
+        with pending.during(tmp_path, keep, lambda *_: None, True):
+            assert pending.keeps("upgrade:npm:wrangler@5") is kept

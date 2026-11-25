@@ -15,20 +15,20 @@ from collections.abc import Callable
 from queue import Empty, Queue
 from threading import Thread
 
-from . import __version__, textmerge, tools
+from . import __version__, pending, textmerge, tools
 from .config import Config
 from .log import Log
 
 DIALOG_TIMEOUT = 12 * 3600
 INBOX_TIMEOUT = 30
 INBOX_FILE = "inbox-notifications.json"
-REMOVAL_PROMPT = ("agent-sync wants to remove these. Select what may go; "
-                  "anything not selected is kept and asked about again next run.")
+REMOVAL_PROMPT = ("agent-sync asks before removing these or upgrading them to a new major version. Select what may "
+                  "go ahead; anything not selected stays as it is and is asked about again next run.")
 MACOS_CHOOSE = """
 on run argv
     with timeout of 43200 seconds
         set selected to choose from list (rest of argv) with title "agent-sync" with prompt (item 1 of argv) ¬
-            default items {} OK button name "Remove selected" cancel button name "Keep all for now" ¬
+            default items {} OK button name "Approve selected" cancel button name "Keep all for now" ¬
             with multiple selections allowed and empty selection allowed
     end timeout
     if selected is false then return ""
@@ -75,7 +75,8 @@ def _terminal(_log: Log, warnings: list[str], removals: dict[str, str]) -> tuple
     for warning in warnings:
         print(f"Warning: {warning}")
     try:
-        approved = {key for key, what in removals.items() if input(f"Remove {what}? [y/N] ").strip().lower() == "y"}
+        approved = {key for key, what in removals.items()
+                    if input(f"{pending.question(what)} [y/N] ").strip().lower() == "y"}
         if warnings:
             input("Press Enter once you have read the warnings. ")
     except (EOFError, KeyboardInterrupt):
@@ -122,7 +123,7 @@ def _linux(log: Log, warnings: list[str], removals: dict[str, str]) -> tuple[set
         keys = {json.dumps(key): key for key in removals}
         rows = [value for encoded, key in keys.items() for value in ("FALSE", encoded, removals[key])]
         selected = _dialog(log, ["zenity", "--list", "--checklist", "--title=agent-sync", f"--text={REMOVAL_PROMPT}",
-                                 "--ok-label=Remove selected", "--cancel-label=Keep all for now", "--column=Remove",
+                                 "--ok-label=Approve selected", "--cancel-label=Keep all for now", "--column=Approve",
                                  "--column=Key", "--column=Item", "--hide-column=2", "--print-column=2",
                                  "--separator=\n", f"--timeout={DIALOG_TIMEOUT}", "--", *rows])
         approved = {keys[key] for key in (selected or "").splitlines() if key in keys}
@@ -188,8 +189,9 @@ def _inbox_body(warnings: list[str], removals: dict[str, str]) -> str:
     for key, what in sorted(removals.items()):
         label = _inbox_line(what)
         for action, title, detail in (
-            ("approve", f"Approve: remove {label}",
-             "agent-sync asks before removing anything. Press to let the next run remove it."),
+            ("approve", f"Approve: {pending.change(label)}",
+             "agent-sync asks before removing anything or installing a new major version. "
+             "Press to let the next run do it."),
             ("keep", f"Keep: {label}", "Press to keep this item and stop asking about it."),
         ):
             parts.append(f":::run\n{title}\n{detail}\n\n```\n{_inbox_command(action, key)}\n```\n:::")

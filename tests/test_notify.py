@@ -101,7 +101,7 @@ def test_macos_uses_argv_and_tracks_duplicate_labels_independently(tmp_path, mon
     assert choose[0] == alert[0] == "/fake/bin/osascript"
     assert choose[-2:] == [f"1\t{label}", f"2\t{label}"]
     assert label not in choose[2]
-    assert 'OK button name "Remove selected"' in choose[2]
+    assert 'OK button name "Approve selected"' in choose[2]
     assert 'cancel button name "Keep all for now"' in choose[2]
     assert alert[-2] == "agent-sync: 17 new warnings"
     assert alert[-1].splitlines()[:15] == warnings[:15]

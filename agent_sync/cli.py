@@ -148,7 +148,7 @@ def upkeep(cfg: Config, log: Log, work: Path, force: bool, dry: bool, stack: Exi
         for warning in warnings:
             print(f"WARN  {warning}")
         for what in questions.values():
-            print(f"Would ask: Remove {what}? [y/N]")
+            print(f"Would ask: {pending.question(what)} [y/N]")
         if warnings:
             print("Would ask: Press Enter once you have read the warnings")
         log("done", f"dry run finished, nothing was changed. A real run: {log.summary()}")
@@ -501,7 +501,7 @@ def print_inventory(cfg: Config) -> int:
                            released=npm.released, major=cfg.mcp_major_updates))
     with pending.during(cfg.state_dir, cfg.keep_installed, lambda _, text: problems.append(text), True) as removals:
         problems.extend(mcp.dedupe(home, True, enabled=enabled, source=cfg.source))
-        problems.extend(f"approval required to remove {what}" for what in removals.questions().values())
+        problems.extend(f"approval required to {pending.change(what)}" for what in removals.questions().values())
     for line in dict.fromkeys(problems or ["None"]):
         print(f"  {line}")
     return 0

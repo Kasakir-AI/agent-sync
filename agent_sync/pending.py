@@ -1,4 +1,4 @@
-"""Require approval before upkeep removes an item."""
+"""Require approval before upkeep removes an item or installs a new major version."""
 from __future__ import annotations
 
 import time
@@ -53,24 +53,36 @@ class Run:
 
     def keeps(self, key: str) -> bool:
         return (key in self.keep or key.rsplit(":", 1)[-1] in self.keep
-                or any(prefix and key.startswith(prefix if prefix.endswith(":") else f"{prefix}:")
+                or any(prefix and (key.startswith(prefix) if prefix.endswith(":") else
+                                   key.startswith((f"{prefix}:", f"{prefix}@")))
                        for prefix in self.keep))
 
-    def due(self, key: str, what: str, *, warn: bool = True) -> bool:
+    def due(self, key: str, what: str, *, warn: bool = True, by_key: bool = False) -> bool:
+        """The change is approved. `by_key`: an approval stays when `what` changes (an upgrade's versions move)."""
         if self.keeps(key) or key in self.removed:
             return False
         item = self.seen.get(key) or self.previous.get(key)
-        if item is None or item["what"] != what:
+        if item is None or item["what"] != what and not by_key:
             item = Removal(first=self.now, what=what, approved=False)
             if warn and not self.dry:
-                self.log("WARN", f"approval required to remove {what}")
-        self.seen[key] = item.copy()
+                self.log("WARN", f"approval required to {change(what)}")
+        self.seen[key] = Removal(first=item["first"], what=what, approved=item["approved"])
         if self.dry and item["approved"]:
-            self.log("dry", f"would remove {what}")
+            self.log("dry", f"would {change(what)}")
         return item["approved"]
 
     def questions(self) -> dict[str, str]:
         return {key: item["what"] for key, item in self.seen.items() if not item["approved"]}
+
+
+def change(what: str) -> str:
+    """What approving a question does: an upgrade names itself; anything else is a removal."""
+    return what if what.startswith("upgrade ") else f"remove {what}"
+
+
+def question(what: str) -> str:
+    text = change(what)
+    return f"{text[:1].upper()}{text[1:]}?"
 
 
 current: ContextVar[Run | None] = ContextVar("pending", default=None)
@@ -109,9 +121,9 @@ def asked(key: str) -> bool:
     return run is not None and key in run.seen and not run.seen[key]["approved"]
 
 
-def due(key: str, what: str, *, warn: bool = True) -> bool:
+def due(key: str, what: str, *, warn: bool = True, by_key: bool = False) -> bool:
     run = current.get()
-    return run is not None and run.due(key, what, warn=warn)
+    return run is not None and run.due(key, what, warn=warn, by_key=by_key)
 
 
 def removed(key: str) -> None:
