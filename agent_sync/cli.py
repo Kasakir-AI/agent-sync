@@ -268,8 +268,7 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
 
         failed = log.problems
         guarded(log, "MCP repair", lambda: log.lines(writes.repair_mcp(home, cfg, dry)))
-        guarded(log, "MCP duplicates", lambda: log.lines(mcp.dedupe(home, dry, enabled=enabled, source=cfg.source)),
-                *(f"mcp:{readers[0]}" for readers in mcp.groups(home, enabled).values() if cfg.source not in readers))
+        guarded(log, "MCP duplicates", lambda: log.lines(mcp.dedupe(home, dry, enabled=enabled, source=cfg.source)))
         guarded(log, "MCP versions", mcp_versions)
         guarded(log, "MCP servers", lambda: log.lines(mcp.mirror(home, cfg.source, dry, enabled=enabled)))
         guarded(log, "MCP servers", lambda: log.lines(mcp.same_server_twice(home, enabled=enabled), "WARN"))

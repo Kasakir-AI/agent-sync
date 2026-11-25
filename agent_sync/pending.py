@@ -81,6 +81,11 @@ def incomplete() -> None:
         run.step_incomplete = True
 
 
+def complete(owner: str) -> None:
+    if (run := current.get()) is not None and run.completed is not None:
+        run.completed.add(owner)
+
+
 def retry(*namespaces: str) -> None:
     if (run := current.get()) is not None:
         for key in list(run.seen):

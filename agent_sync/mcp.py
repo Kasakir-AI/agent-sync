@@ -267,12 +267,11 @@ def dedupe(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, source: str | None 
     enabled = tuple(enabled)
     loaded = inventory.plugins(home, enabled)
     lines: list[str] = []
-    files = list(settings_files(home, enabled, lines))
-    if lines:
-        pending.incomplete()
-    for path, readers, codex, _, _ in files:
+    for path, readers in groups(home, enabled).items():
         if source in readers:
             continue
+        codex = TOOLS[readers[0]].mcp_format == "codex-toml"
+        owner = f"mcp:{readers[0]}"
         providers = {}
         for plugin in reader_plugins(loaded, readers):
             for server_name, server in plugin.servers:
@@ -282,14 +281,14 @@ def dedupe(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, source: str | None 
         found: list[str] = []
         removed: list[str] = []
 
-        def remove(text: str, path=path, readers=readers, codex=codex, providers=providers, found=found,
-                   removed=removed) -> str:
+        def remove(text: str, path=path, readers=readers, codex=codex, owner=owner, providers=providers,
+                   found=found, removed=removed) -> str:
             found.clear()
             removed.clear()
             entries = codex_entries(text) if codex else json_servers(text)
             updated = text
             for name, server in entries.items():
-                key = f"mcp:{readers[0]}:{name}"
+                key = f"{owner}:{name}"
                 if not isinstance(server, dict) or pending.keeps(key):
                     continue
                 matches = [*providers.get(inventory.endpoint(server), ()), *providers.get(("name", name), ())]
@@ -318,17 +317,16 @@ def dedupe(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, source: str | None 
 
         try:
             if dry:
-                remove(path.read_text())
+                remove((writes.read_bytes(path) or b"").decode())
             else:
                 writes.update_text(path, remove)
         except writes.Raced as raced:
-            pending.incomplete()
             lines.append(f"WARN  {raced}")
             continue
         except (OSError, ValueError) as error:
-            pending.incomplete()
             lines.append(settings_problem(path, error))
             continue
+        pending.complete(owner)
         lines += found
         for key in removed:
             pending.removed(key)

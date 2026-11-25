@@ -250,6 +250,43 @@ def test_disabled_step_retains_approval_and_completed_owner_expires_it(upkeep, m
     assert not pending.load(cfg.state_dir)[key]["approved"]
 
 
+@pytest.mark.parametrize("delete_file", [False, True])
+def test_malformed_mcp_file_preserves_only_its_own_stale_approval(upkeep, monkeypatch, delete_file):
+    from tests.test_inventory import codex_plugin, write
+
+    cfg = upkeep
+    cfg.mirror_mcp = True
+    cfg.status_line = False
+    monkeypatch.setattr(notify, "deliver", lambda *args: (set(), False))
+    url = "https://example.com/mcp"
+    server = {"url": url}
+    root = codex_plugin(cfg.home, "pack@remote", "1.0.0", remote=True)
+    write(root, ".mcp.json", {"pack": server})
+    write(cfg.home, ".cursor/plugins/local/pack/mcp.json", {"pack": server})
+    codex_entry = f'[mcp_servers.pack]\nurl = "{url}"\n'
+    codex_path = write(cfg.home, ".codex/config.toml", codex_entry)
+    cursor_path = write(cfg.home, ".cursor/mcp.json", {"mcpServers": {"pack": server}})
+    codex_key, cursor_key = "mcp:codex:pack", "mcp:cursor:pack"
+
+    assert cli.main(["run", "--force"]) == 0
+    assert cli.main(["pending", "--approve", codex_key, cursor_key]) == 0
+    if delete_file:
+        codex_path.unlink()
+    else:
+        codex_path.write_text("")
+    cursor_path.write_text("{")
+
+    assert cli.main(["run", "--force"]) == 1
+    approvals = pending.load(cfg.state_dir)
+    assert set(approvals) == {cursor_key}
+    assert approvals[cursor_key]["approved"]
+
+    codex_path.write_text(codex_entry)
+    assert cli.main(["run", "--force"]) == 1
+    assert codex_path.read_text() == codex_entry
+    assert not pending.load(cfg.state_dir)[codex_key]["approved"]
+
+
 def test_launcher_and_npm_cache_failures_leave_later_steps_running(upkeep, monkeypatch):
     upkeep.launcher = True
     upkeep.mirror_mcp = True
