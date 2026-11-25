@@ -459,6 +459,10 @@ def pin_server(server: dict) -> dict | None:
     normalized = {**server, "args": endpoint[1]}
     if normalized.get("env") in (None, {}):
         normalized.pop("env", None)
+    if normalized.get("type") == "stdio":
+        normalized.pop("type")
+    if normalized.get("enabled") is True:
+        normalized.pop("enabled")
     return normalized
 
 

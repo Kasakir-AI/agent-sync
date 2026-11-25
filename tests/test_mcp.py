@@ -416,3 +416,17 @@ def test_pins_wait_for_settled_releases_and_stay_within_the_major_version(tmp_pa
     servers = json.loads(path.read_text())["mcpServers"]
     assert servers["fresh"]["args"] == ["fresh@1.1.0"] and servers["major"]["args"] == ["major@2.0.0"]
     assert tomllib.loads(codex.read_text())["mcp_servers"]["plugin"]["args"] == ["plugged@1.0.0"]
+
+
+@pytest.mark.parametrize("spelled_out", [{"type": "stdio"}, {"enabled": True}])
+def test_pin_update_is_suppressed_when_settings_only_spell_out_defaults(tmp_path, spelled_out):
+    from tests.test_inventory import write
+
+    server = {"command": "npx", "args": ["pack@1.0.0"], **spelled_out}
+    write(tmp_path, ".cursor/plugins/local/pack/mcp.json", {"pack": {"command": "npx", "args": ["pack@1.0.0"]}})
+    write(tmp_path, ".cursor/mcp.json", {"mcpServers": {"pack": server}})
+
+    mcp.pins(tmp_path, False, enabled=("cursor",), keep=[], latest=lambda _: "1.1.0",
+             released=lambda _: {"1.1.0": "2020-01-01T00:00:00Z"})
+
+    assert mcp.read(tmp_path, "cursor") == {"pack": server}
