@@ -13,6 +13,7 @@ dependencies = []
 
 [project.scripts]
 agent-sync = "agent_sync.cli:main"
+agent-sync-statusline = "agent_sync.statusline:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "agent_sync.__version__" }

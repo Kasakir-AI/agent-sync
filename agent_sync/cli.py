@@ -53,6 +53,7 @@ from . import (
     roles,
     schedule,
     skills,
+    statuslines,
     tools,
     writes,
 )
@@ -77,7 +78,7 @@ def hours(n: float) -> str:
     return "under an hour" if n < 1 else f"{n:.0f} hour{'' if round(n) == 1 else 's'}"
 
 
-def run(force: bool, echo: bool, dry: bool = False) -> int:
+def run(force: bool, echo: bool, dry: bool = False, *, approvals: tuple[str, ...] = ()) -> int:
     cfg = load()
     echo = echo or sys.stdout.isatty()
     stamp = cfg.state_dir / "last-run"
@@ -167,6 +168,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                                         private_memory=cfg.private_memory, share_memory=cfg.share_memory))
             except OSError as e:
                 log("FAIL", f"shared memory: {e}")
+        log.lines(statuslines.apply(cfg.home, dry, cfg, removals))
         log_review(cfg, log)
         if cfg.update_plugins:
             tools.update_plugins(log, dry, cfg.home, enabled=cfg.agents)

@@ -25,6 +25,7 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("mirror_mcp", "Add the source tool's MCP servers to the other tools (never deletes any)"),
     ("mirror_instructions", "Share global instructions across enabled tools"),
     ("mirror_memory", "Share Claude Code's home-project memory with the other tools (on by default)"),
+    ("status_line", "Set up one status line in every CLI that supports it (on by default)"),
     ("update_plugins", "Update plugins and extensions for enabled agents"),
     ("update_mcp_programs", "Update programs used by enabled agents' MCP servers"),
     ("remove_dropped_skills", "Uninstall skills a skill package stops shipping"),

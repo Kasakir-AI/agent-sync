@@ -326,7 +326,8 @@ def apply(home: Path, steps: list[Step], backup_dir: Path | None = None) -> list
     return apply_edits(home, edits(steps), backup_dir)
 
 
-def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None) -> list[str]:
+def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None, *,
+                check_current: bool = False) -> list[str]:
     staged: list[tuple[Edit, Path]] = []
     try:
         for edit in changes:
@@ -348,6 +349,8 @@ def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None)
             if backup_dir is not None and edit.before is not None:
                 backups.copy(edit.path, home.resolve(), backup_dir)
         for edit, temp in staged:
+            if check_current and (checked_path(home, edit.target) != edit.path or current(edit.path) != edit.before):
+                raise ValueError(f"target changed while preparing the edit: {edit.target}")
             temp.replace(edit.path)
     finally:
         for _, temp in staged:

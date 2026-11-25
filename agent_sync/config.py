@@ -41,6 +41,7 @@ class Config:
     mirror_memory: bool = True                               # Claude Code's home-project memory
     private_memory: list[str] = field(default_factory=list)   # memory notes kept in Claude Code
     share_memory: list[str] = field(default_factory=list)     # sensitive notes allowed to be shared
+    status_line: bool = True                                 # one status line in every CLI that supports it
     warn_models: list[str] = field(default_factory=list)     # warn when a model name containing one of these appears
     update_clis: bool | list[str] = True                     # true, false, or a list like ["claude", "codex"]
     update_global_tools: bool | list[str] = False
@@ -79,7 +80,7 @@ class Config:
 KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
         "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "allow_duplicate_skills",
         "mirror_instructions", "mirror_memory", "private_memory", "share_memory", "warn_models", "keep_mcp_versions",
-        "keep_installed",
+        "status_line", "keep_installed",
         "update_clis", "update_global_tools", "update_plugins", "update_mcp_programs", "cli_commands",
         "install_commands", "extra_steps", "launcher", "update_self", "notify", "log_days", "backup_days")
 
@@ -128,6 +129,8 @@ def parse(text: str, path: Path, home: Path) -> Config:
         raise ValueError("notify must be true or false")
     if type(cfg.backup_days) is not int or cfg.backup_days < 0:
         raise ValueError("backup_days must be a nonnegative whole number")
+    if not isinstance(cfg.status_line, bool):
+        raise ValueError("status_line must be true or false")
     if not isinstance(cfg.keep_installed, list) or any(not isinstance(key, str) for key in cfg.keep_installed):
         raise ValueError("keep_installed must be a list of removal keys or names")
     for key in ("private_memory", "share_memory"):

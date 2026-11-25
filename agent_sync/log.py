@@ -75,7 +75,7 @@ class Log:
         """Log the lines a mirror returned. A line may name its own kind first ("WARN  ...", "skip  ...")."""
         for line in lines:
             head, _, rest = line.partition("  ")
-            if head in ("WARN", "skip"):
+            if head in ("WARN", "skip", "info", "FAIL", "dry"):
                 self(head, rest)
             else:
                 self(kind, line)

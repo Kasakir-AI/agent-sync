@@ -111,8 +111,8 @@ def test_package_skill_removals_require_approval_and_save_the_originals(tmp_path
     now = start
     original_during = pending.during
 
-    def during(*args):
-        return original_during(*args, now=now)
+    def during(*args, **kwargs):
+        return original_during(*args, now=now, **kwargs)
 
     monkeypatch.setattr(pending, "during", during)
     assert cli.run(force=True, echo=True) == 0
