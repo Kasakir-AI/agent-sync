@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1 (2026-11-25)
+
+- A package agent whose description spans several lines (`description: >` or `|`) keeps that description in
+  its Gemini CLI and Antigravity copies. Before, those copies got an empty description.
+- The README says which skills reach Codex and Cursor when Gemini CLI is the source.
+
 ## 0.8.0 (2026-11-25)
 
 - Keep any selection of Claude Code, Codex, Cursor, Gemini CLI, and Antigravity in step. Existing settings still
