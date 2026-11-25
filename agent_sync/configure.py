@@ -25,6 +25,7 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("mirror_mcp", "Add the source tool's MCP servers to the other tools (never deletes any)"),
     ("mirror_instructions", "Copy the global instructions (CLAUDE.md / AGENTS.md) to the other tools"),
     ("update_plugins", "Update plugins and extensions for enabled agents"),
+    ("update_mcp_programs", "Update programs used by enabled agents' MCP servers"),
     ("remove_dropped_skills", "Uninstall skills a skill package stops shipping"),
     ("update_self", "Update agent-sync itself when a new version is out"),
     ("launcher", "Keep the double-click \"Agent Upkeep\" launcher on the Desktop (macOS)"),

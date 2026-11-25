@@ -103,6 +103,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         if not online():
             log("skip", "no network; will try again at the next scheduled check")
             return 0
+        updates = tools.UpdateState()
         log("start", f"agent-sync {__version__}, source of truth: {cfg.source}"
             + ("  (dry run: nothing is changed)" if dry else ""))
         log("info", f"skills tool: {tools.skills(cfg.skills_cli, '--version')[1]}")
@@ -135,6 +136,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                     log("ok", f"agents from {package} mirrored")
                 except (ValueError, OSError) as e:
                     log("FAIL", f"agents from {package}: {e}")
+        tools.update_skills(log, dry, cfg.skills_cli, enabled=cfg.agents)
         if cfg.plugin_skills:
             log("WARN", "plugin_skills is no longer used: Cursor loads Claude Code plugins' skills itself, so copies "
                 "made it load them twice. To give Codex a plugin's skills, install the plugin in Codex "
@@ -172,11 +174,13 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         log_review(cfg, log)
         if cfg.update_plugins:
             tools.update_plugins(log, dry, cfg.home, enabled=cfg.agents)
+        if cfg.update_mcp_programs:
+            tools.update_mcp_programs(log, cfg, dry, state=updates)
         if cfg.update_clis:
-            tools.update_clis(log, cfg, dry)
-            tools.update_prerequisites(log, dry)
+            tools.update_clis(log, cfg, dry, state=updates)
+            tools.update_prerequisites(log, dry, state=updates)
         tools.extra_steps(log, cfg.extra_steps, dry)
-        if cfg.update_self and tools.update_self(log, dry, cfg.home) and cfg.launcher and cfg.macos:
+        if cfg.update_self and tools.update_self(log, dry, cfg.home, state=updates) and cfg.launcher and cfg.macos:
             # the new version writes its own launcher now, not at the next run
             exe = shutil.which("agent-sync", path=tools.PATH)
             if exe:

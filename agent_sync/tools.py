@@ -7,10 +7,12 @@ import re
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
+from functools import cache
 from importlib import metadata
 from pathlib import Path
 
-from . import __version__
+from . import __version__, mcp, registry
 from .registry import DEFAULT_AGENTS, TOOLS, Tool
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[─-◿]")
@@ -33,14 +35,14 @@ def sh(args: list[str], timeout: int = 900, cwd: Path | None = None) -> tuple[in
     return p.returncode, tail
 
 
-def raw(args: list[str], timeout: int = 120) -> str:
-    """A command's standard output ("" if it fails), for listings that are parsed."""
+def raw(args: list[str], timeout: int = 120, *, ok_codes: tuple[int, ...] = (0,)) -> str:
+    """A command's standard output when its exit code is accepted."""
     try:
         p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
-                           env={**os.environ, "PATH": PATH})
+                           env={**os.environ, "PATH": PATH, "HOMEBREW_NO_AUTO_UPDATE": "1"})
     except (OSError, subprocess.TimeoutExpired):
         return ""
-    return p.stdout if p.returncode == 0 else ""
+    return p.stdout if p.returncode in ok_codes else ""
 
 
 def checkout(package: str, dest: Path) -> tuple[int, str]:
@@ -97,9 +99,16 @@ def homebrew_prefix(cmd: str, name: str, kind: str = "cask") -> Path | None:
     """The Homebrew prefix when it owns this copy of the command."""
     found = shutil.which(cmd, path=PATH)
     real = Path(os.path.realpath(found)) if found else None
-    room = "Caskroom" if kind == "cask" else "Cellar"
-    if real and f"/{room}/{name}/" in str(real):
-        return Path(str(real).split(f"/{room}/", 1)[0])
+    package = brew_package(real) if real else None
+    return package[2] if package and package[:2] == (kind, name) else None
+
+
+def brew_package(real: Path) -> tuple[str, str, Path] | None:
+    """The Homebrew kind, package and prefix of a resolved executable."""
+    for room, kind in (("Cellar", "formula"), ("Caskroom", "cask")):
+        prefix, sep, tail = str(real).partition(f"/{room}/")
+        if sep and "/" in tail:
+            return kind, tail.split("/", 1)[0], Path(prefix or "/")
     return None
 
 
@@ -117,11 +126,53 @@ def act(log, dry: bool, label: str, args: list[str], timeout: int = 900) -> None
     log("ran" if code == 0 else "FAIL", f"{label}{': ' + out if code else ''}")
 
 
-def update_clis(log, cfg, dry: bool = False) -> None:
+def update_skills(log, dry: bool, cli: str, *, enabled=DEFAULT_AGENTS) -> None:
+    """Update all globally installed skills."""
+    act(log, dry, "skills from every source (skills update)",
+        ["npx", "-y", "--prefer-online", cli, "update", "-g", "-y"])
+
+
+@dataclass
+class UpdateState:
+    brew_updated: bool = False
+    npm_outdated: set[str] | None = None
+
+
+def refresh_brew(log, dry: bool, state: UpdateState, *, quiet: bool = False) -> None:
+    if dry or state.brew_updated:
+        return
+    state.brew_updated = True
+
+    def report(kind: str, message: str) -> None:
+        if kind == "FAIL" or not quiet:
+            log("ok" if kind == "ran" else kind, message)
+
+    act(report, dry, "brew update", ["brew", "update", "-q"])
+
+
+def json_object(text: str) -> dict:
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def outdated_npm(state: UpdateState) -> set[str]:
+    if state.npm_outdated is None:
+        state.npm_outdated = set(json_object(raw(["npm", "outdated", "-g", "--json"], ok_codes=(0, 1))))
+    return state.npm_outdated
+
+
+def upgrade_npm(log, dry: bool, package: str) -> None:
+    act(log, dry, f"{package} upgrade (npm)", ["npm", "install", "-g", f"{package}@latest"])
+
+
+def update_clis(log, cfg, dry: bool = False, *, state: UpdateState | None = None) -> None:
     """Each CLI: its Homebrew cask when installed that way, otherwise its own updater (`claude update`,
     `cursor-agent update`, `codex update`). `cli_commands` in the config replaces the command for a tool."""
     brew = shutil.which("brew", path=PATH)
-    brew_updated = False
+    state = state or UpdateState()
     for agent in TOOLS.values():
         tool, cmd = agent.id, agent.command
         if not cfg.wants_cli(tool):
@@ -142,10 +193,8 @@ def update_clis(log, cfg, dry: bool = False) -> None:
                         "update it from that account")
             continue
         elif prefix:
-            if brew and not brew_updated and not dry:
-                code, out = sh(["brew", "update", "-q"])
-                log("ok" if code == 0 else "FAIL", f"brew update{': ' + out if code else ''}")
-                brew_updated = True
+            if brew:
+                refresh_brew(log, dry, state)
             greedy = ["--greedy"] if kind == "cask" else []
             outdated = sh(["brew", "outdated", f"--{kind}", *greedy, name], timeout=300)[1]
             if name in outdated:
@@ -161,24 +210,122 @@ def update_clis(log, cfg, dry: bool = False) -> None:
 PREREQUISITES = ("git", "node")
 
 
-def update_prerequisites(log, dry: bool = False) -> None:
-    """git and Node (npx runs the skills tool), when Homebrew installed them and a newer version is out. A copy from
-    elsewhere (the Command Line Tools' git, a Node installer) is left to whatever installed it."""
+def update_prerequisites(log, dry: bool = False, *, state: UpdateState | None = None) -> None:
+    """Update Homebrew git and Node, and npm if installed as a global package."""
+    state = state or UpdateState()
     brew = shutil.which("brew", path=PATH)
-    if not brew:
-        return
-    prefix = Path(os.path.realpath(brew)).parents[1]
-    if not brew_writable(prefix):
-        log("skip", f"git and Node come from Homebrew in {prefix}, which another account owns; update them there")
-        return
-    if not dry:
-        code, out = sh(["brew", "update", "-q"])
-        if code:
-            log("FAIL", f"brew update: {out}")
-    outdated = set(raw(["brew", "outdated", "--formula", "--quiet"], timeout=300).split())
-    for formula in PREREQUISITES:
-        if formula in outdated:
-            act(log, dry, f"{formula} upgrade (Homebrew)", ["brew", "upgrade", "--formula", formula])
+    if brew:
+        prefix = Path(os.path.realpath(brew)).parents[1]
+        if brew_writable(prefix):
+            refresh_brew(log, dry, state, quiet=True)
+            outdated = set(raw(["brew", "outdated", "--formula", "--quiet"], timeout=300).split())
+            for formula in PREREQUISITES:
+                if formula in outdated:
+                    act(log, dry, f"{formula} upgrade (Homebrew)", ["brew", "upgrade", "--formula", formula])
+        else:
+            log("skip", f"git and Node come from Homebrew in {prefix}, which another account owns; update them there")
+    if shutil.which("npm", path=PATH) and "npm" in outdated_npm(state):
+        upgrade_npm(log, dry, "npm")
+
+
+MCP_RUNNERS = {"npx", "npm", "pnpm", "bunx", "bun", "uvx", "uv", "node", "python", "python3", "deno", "docker"}
+
+
+def mcp_commands(cfg):
+    """Yield the name and resolved executable of each stdio server."""
+    skip = MCP_RUNNERS | {tool.command for tool in TOOLS.values()}
+    for readers in registry.grouped_paths(registry.paths(cfg.home, cfg.agents, "mcp")).values():
+        try:
+            servers = mcp.read(cfg.home, readers[0])
+        except (OSError, ValueError, AttributeError):
+            continue
+        if not isinstance(servers, dict):
+            continue
+        for name, server in servers.items():
+            cmd = server.get("command") if isinstance(server, dict) and not server.get("url") else None
+            if not isinstance(cmd, str) or not cmd or Path(cmd).name in skip:
+                continue
+            found = shutil.which(cmd, path=PATH)
+            if not found:
+                continue
+            executable, real = Path(found), Path(os.path.realpath(found))
+            if real.name in skip or any(part.lower().endswith(".app")
+                                        for part in (*executable.parts[:-1], *real.parts[:-1])):
+                continue
+            yield name, executable, real
+
+
+def package_under(real: Path, root: Path | None, manager: str) -> tuple[str, str, None] | None:
+    if root is None or not real.is_relative_to(root):
+        return None
+    parts = real.relative_to(root).parts
+    size = 2 if manager == "npm" and parts and parts[0].startswith("@") else 1
+    return (manager, "/".join(parts[:size]), None) if len(parts) > size else None
+
+
+def update_own_program(log, dry: bool, name: str, cmd: Path) -> None:
+    help_text = raw([str(cmd), "--help"], timeout=30)
+    match = re.search(rf"^\s*{re.escape(cmd.name)} ((?:self-)?update)\b", help_text, re.MULTILINE)
+    if match:
+        act(log, dry, f"{cmd.name} update (MCP server {name})", [str(cmd), match[1]])
+
+
+def update_mcp_programs(log, cfg, dry: bool, *, state: UpdateState | None = None) -> None:
+    """Update installed executables used by enabled agents' stdio servers."""
+    state = state or UpdateState()
+    pipx = (Path(os.environ.get("PIPX_HOME") or cfg.home / ".local/pipx") / "venvs").resolve()
+    uv = (cfg.home / ".local/share/uv/tools").resolve()
+
+    @cache
+    def npm_root() -> Path | None:
+        if not shutil.which("npm", path=PATH):
+            return None
+        root = raw(["npm", "root", "-g"]).strip()
+        return Path(os.path.realpath(root)) if root else None
+
+    @cache
+    def brew_outdated(kind: str) -> dict[str, str]:
+        greedy = ["--greedy"] if kind == "cask" else []
+        names = raw(["brew", "outdated", f"--{kind}", *greedy, "--quiet"], timeout=300).split()
+        return {name.rsplit("/", 1)[-1]: name for name in names}
+
+    package_resolvers = (
+        brew_package,
+        lambda real: package_under(real, npm_root(), "npm"),
+        lambda real: package_under(real, pipx, "pipx"),
+        lambda real: package_under(real, uv, "uv"),
+    )
+    seen_paths: set[Path] = set()
+    seen_packages: set[tuple[str, str]] = set()
+    for name, cmd, real in mcp_commands(cfg):
+        if real in seen_paths:
+            continue
+        seen_paths.add(real)
+        managed = next((match for resolve in package_resolvers if (match := resolve(real))), None)
+        if managed is None:
+            if real.is_file():
+                update_own_program(log, dry, name, cmd)
+            continue
+        kind, package, prefix = managed
+        key = (kind, package)
+        if key in seen_packages:
+            continue
+        seen_packages.add(key)
+        if prefix:
+            if not brew_writable(prefix):
+                log("skip", f"{cmd.name} comes from Homebrew in {prefix}, which another account owns; "
+                            "update it from that account")
+                continue
+            refresh_brew(log, dry, state, quiet=True)
+            if full_name := brew_outdated(kind).get(package):
+                act(log, dry, f"{package} upgrade (Homebrew, for MCP server {name})",
+                    ["brew", "upgrade", f"--{kind}", full_name])
+        elif kind == "npm":
+            if package in outdated_npm(state):
+                upgrade_npm(log, dry, package)
+        else:
+            upgrade = ["uv", "tool", "upgrade"] if kind == "uv" else ["pipx", "upgrade"]
+            act(log, dry, f"{package} upgrade ({kind}, for MCP server {name})", [*upgrade, package])
 
 
 def how_installed(prefix: str | None = None) -> tuple[str, str]:
@@ -209,7 +356,7 @@ def latest_release(url: str) -> str | None:
     return max(found)[1] if found else None
 
 
-def update_self(log, dry: bool = False, home: Path | None = None) -> bool:
+def update_self(log, dry: bool = False, home: Path | None = None, *, state: UpdateState | None = None) -> bool:
     """Update agent-sync the way it was installed. Returns True when a new version was installed."""
     kind, where = how_installed()
     before = __version__
@@ -217,9 +364,7 @@ def update_self(log, dry: bool = False, home: Path | None = None) -> bool:
         if not brew_writable(Path(where)):
             log("skip", f"agent-sync comes from Homebrew in {where}, which another account owns; update it there")
             return False
-        if not dry:
-            code, out = sh(["brew", "update", "-q"])
-            log("ok" if code == 0 else "FAIL", f"brew update{': ' + out if code else ''}")
+        refresh_brew(log, dry, state or UpdateState())
         if "agent-sync" not in sh(["brew", "outdated", "--formula", "agent-sync"], timeout=300)[1]:
             log("ok", f"agent-sync {before} is current (Homebrew)")
             return False
@@ -247,6 +392,54 @@ def update_self(log, dry: bool = False, home: Path | None = None) -> bool:
         log("info", f"agent-sync: {before} -> {after.split()[-1]}")
         return True
     return False
+
+
+def read_json_object(path: Path) -> dict:
+    try:
+        return json_object(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def version_triplet(version: object) -> tuple[int, ...]:
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version) if isinstance(version, str) else None
+    return tuple(map(int, match.groups())) if match else ()
+
+
+def update_antigravity_plugins(log, dry: bool, home: Path) -> None:
+    """Install newer versions from Antigravity's cached marketplaces."""
+    config = read_json_object(home / ".gemini/config/config.json")
+    installed = config.get("plugins")
+    if not isinstance(installed, dict):
+        return
+
+    @cache
+    def catalog(marketplace: str) -> dict:
+        path = home / ".gemini/antigravity-cli/cache/marketplaces" / marketplace / "marketplace.json"
+        entries = read_json_object(path).get("plugins")
+        if not isinstance(entries, list):
+            return {}
+        return {entry["name"]: entry.get("version") for entry in entries
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str)}
+
+    current = 0
+    for name, plugin in installed.items():
+        source = plugin.get("installedFrom") if isinstance(plugin, dict) else None
+        if not isinstance(source, dict):
+            continue
+        marketplace, version = source.get("marketplace"), source.get("version")
+        if not isinstance(marketplace, str) or not marketplace:
+            continue
+        latest = catalog(marketplace).get(name)
+        old, new = version_triplet(version), version_triplet(latest)
+        if not old or not new:
+            continue
+        if latest == version:
+            current += 1
+        elif new >= old:
+            act(log, dry, f"Antigravity plugin {name}", ["agy", "plugin", "install", f"{name}@{marketplace}"])
+    if current:
+        log("ok", f"Antigravity plugins are current ({current})")
 
 
 def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=DEFAULT_AGENTS) -> None:
@@ -279,6 +472,8 @@ def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=
                     ["cursor-agent", "plugin", "marketplace", "update", parts[0]])
     if usable("gemini"):
         act(log, dry, f'{TOOLS["gemini"].name} extensions', [TOOLS["gemini"].command, "extensions", "update", "--all"])
+    if "antigravity" in enabled and shutil.which(TOOLS["antigravity"].command, path=PATH):
+        update_antigravity_plugins(log, dry, home)
 
 
 def extra_steps(log, steps: list[dict], dry: bool = False) -> None:
