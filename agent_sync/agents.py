@@ -17,10 +17,30 @@ from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths
 from .tomledit import basic_string
 
 
+def description(front: str) -> tuple[str, str]:
+    """The description in YAML front matter: (its text, the value to write after `description:`). A block value
+    (`description: >` folds lines, `|` keeps them) becomes one quoted string; an inline one is kept as written."""
+    found = re.search(r"^description:[ \t]*(.*)$", front, re.M)
+    if not found:
+        return "", ""
+    head = found.group(1).strip()
+    if not re.fullmatch(r"[>|][+-]?", head):
+        return head, head
+    block = []
+    for line in front[found.end():].splitlines()[1:]:
+        if line.strip() and not line[:1].isspace():
+            break
+        block.append(line.strip())
+    text = "\n".join(block)
+    text = (text if head[0] == "|" else re.sub(r"[ \t]*\n(?!\n)[ \t]*", " ", text)).strip()
+    return text, json.dumps(text, ensure_ascii=False)       # JSON's quoted string is a YAML quoted string
+
+
 @dataclass
 class Agent:
     name: str
     description: str
+    description_yaml: str   # the description as written after `description:` in front matter
     front: list[str]        # front-matter lines without `model:`
     pins_model: bool
     body: str
@@ -32,14 +52,14 @@ class Agent:
             raise ValueError("no YAML front matter")
         front, body = m.group(1), m.group(2)
         name = re.search(r"^name:\s*(.+)$", front, re.M)
-        desc = re.search(r"^description:\s*(.+)$", front, re.M)
+        desc, desc_yaml = description(front)
         if not name or not desc:
             raise ValueError("front matter needs name and description")
         value = name.group(1).strip()
         if not value or value in (".", "..") or "/" in value or "\\" in value:
             raise ValueError(f"invalid agent name: {value!r}")
         lines = [l for l in front.splitlines() if not l.startswith("model:")]
-        return cls(value, desc.group(1).strip(), lines,
+        return cls(value, desc, desc_yaml, lines,
                    re.search(r"^model:", front, re.M) is not None, body.rstrip() + "\n")
 
     def markdown(self, model: str) -> str:
@@ -63,14 +83,14 @@ def write_if_changed(path: Path, text: str, dry: bool = False) -> bool:
 
 
 def gemini_markdown(agent: Agent, models: AgentModels) -> str:
-    front = [f"name: {agent.name}", f"description: {agent.description}"]
+    front = [f"name: {agent.name}", f"description: {agent.description_yaml}"]
     if models.gemini:
         front.append(f"model: {models.gemini}")
     return "---\n" + "\n".join(front) + "\n---\n" + agent.body
 
 
 def antigravity_markdown(agent: Agent, models: AgentModels) -> str:
-    return (f"---\nname: {agent.name}\ndescription: {agent.description}\nsubagent: true\nmainAgent: false\n"
+    return (f"---\nname: {agent.name}\ndescription: {agent.description_yaml}\nsubagent: true\nmainAgent: false\n"
             "tools: [read_file, edit_file, write_file, run_command, manage_task, search_web]\n---\n" + agent.body)
 
 
