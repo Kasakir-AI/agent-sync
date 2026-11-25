@@ -11,27 +11,31 @@ your files before it changes them, and asks your approval before removing instal
   for), its MCP servers (from its settings or from a plugin, with pinned package versions and newer ones), the
   number of skills it loads, and every problem found. It changes nothing.
 - Codex online-catalog plugins now count: Codex loads them, so their skills and MCP servers are checked for
-  duplicates. Antigravity plugins and Gemini CLI extensions count too.
+  duplicates. Antigravity plugins and Gemini CLI extensions count too. Claude Code plugin skill directories
+  and their `SKILL.md` files must both resolve inside the plugin. Shared skill removal requires each reader
+  to load an identical copy elsewhere, including Codex when the shared copy is disabled there.
 - An MCP server a tool's settings list and one of its plugins also brings is loaded twice. When the settings
   entry is an exact copy, upkeep asks you to approve removing it. Otherwise it warns. The source tool's settings
   are never changed this way, because the other tools copy from them.
 - A plugin installed twice in one tool, from two catalogs, is reported. When you have a choice waiting, the skill
   duplicates for that plugin pair appear as information.
 - Codex uses a plugin made for Codex in place of a Claude Code-format copy when the Codex one is not older and keeps
-  every skill, MCP server, command, agent and hook. Otherwise both stay and the run says why.
+  every skill, MCP server, command, agent and hook invocation. Otherwise both stay and the run says why.
 
 **Kept up to date**
 
 - Every installed skill is updated, whichever repository it came from, not only the packages in `skill_packages`.
-- Global skill updates back up only the skills with updates. Gemini CLI extension updates back up only eligible
-  extension folders and discard unchanged copies.
+- Global skill updates read both named and Skills CLI 1.4.x update reports. For bulk updates or an unreadable
+  update list, upkeep backs up every locked skill. Gemini CLI extension updates back up only eligible extension
+  folders and discard unchanged copies.
 - Antigravity plugins are reinstalled when its catalog has a newer version. A release never moves to a prerelease.
 - Programs that MCP servers run are upgraded the way they were installed: Homebrew, npm, pipx or uv
   (`update_mcp_programs`). A program with its own updater runs it only when you list it in `program_updates`.
   Interpreters such as `python3` or `node` are never upgraded on an MCP server's behalf.
 - A pinned package in an MCP server (`npx -y name@1.2.3`) moves to the newest release in the same major version
   once that release is at least 2 days old. `mcp_major_updates = true` allows new major versions.
-  `keep_mcp_versions` holds a server's pin.
+  `keep_mcp_versions` holds a server's pin. A matching plugin suppresses a pin update only when the structured
+  server settings match apart from the package version.
 - npm itself is updated when it is installed globally. `update_global_tools` (off by default) also updates your
   other global npm, pipx and uv tools, and Homebrew packages when you list `"homebrew"`.
 - Homebrew refreshes once per run instead of once per step.
@@ -41,10 +45,9 @@ your files before it changes them, and asks your approval before removing instal
 - With `mirror_instructions = true`, every agent's instruction file contributes: a line added in any of them
   reaches the others, next to the lines around it. A rewording in the source tool's file reaches the others too.
 - When another tool drops or rewords a shared line, the other tools keep it until you choose in `agent-sync review`.
-  A line moved intact into a local, private, or memory section stays local to that file and remains in the other
-  tools. Source deletions over 10% of the shared lines need approval for the exact batch. A single deletion is
-  considered individually when fewer than five lines are shared. Unrelated edits still spread while a batch waits.
-  A missing, empty, or unreadable source holds instruction mirroring.
+  A shared line moved into a local, private, or memory section that did not already contain it stays in the other
+  tools. Every source deletion pauses all instruction mirroring until you approve or keep the exact batch.
+  Repeated lines count by occurrence. A missing or unreadable source holds instruction mirroring.
 - Fenced code spreads as one block, including comments inside the fence. Repeated standalone lines spread too.
 - Lines between `<!-- agent-sync: local -->` and `<!-- agent-sync: end local -->` stay in their file. So do lines
   between `<!-- agent-sync: private -->` and `<!-- agent-sync: end private -->`.
@@ -72,7 +75,7 @@ your files before it changes them, and asks your approval before removing instal
   where you pick what may go. In a terminal it asks yes or no. Your Plannotator Inbox gets buttons to approve or
   keep each removal, when Plannotator is installed. `agent-sync pending` lists what waits and takes
   `--approve`, `--keep` and `--ack`. `keep_installed` keeps an item for good. A completed step expires approvals
-  for items it confirms are gone, even if another step failed.
+  for items it confirms are gone. MCP duplicate approvals expire per settings file.
 - New warnings appear in a macOS alert that stays until you click **OK**, and in the Inbox. A warning you
   acknowledge stays quiet for 30 days unless it changes. `notify = false` turns off desktop windows and Inbox
   messages.

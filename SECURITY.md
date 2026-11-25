@@ -23,9 +23,10 @@ agent-sync runs on your own machine with your permissions. Things to know:
 - **Upkeep backs up your files and asks before removing installed items.** Backups of changed files live in
   `~/.local/state/agent-sync/backups/` and can hold settings that contain tokens. New backup folders and MCP
   settings files are readable only by you. Retention removes expired backups, obsolete package checkouts, and
-  old records that agent-sync owns. It skips symlinked backup folders and entries and warns you. Approval for a
-  batch of instruction deletions applies to the exact lines shown. An approval expires when the owning step
-  confirms the original item is gone.
+  old records that agent-sync owns. It skips symlinked backup folders and entries and warns you. All instruction
+  edits wait for approval or a keep decision on the exact deletion batch, including the count of each repeated
+  line. The instruction baseline records hidden section lines as fingerprints. MCP duplicate approvals expire
+  when upkeep confirms the original item is gone from its own settings file.
 
 Please report a vulnerability privately through GitHub's "Report a vulnerability" (Security tab) rather than in a
 public issue.

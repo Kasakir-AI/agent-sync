@@ -15,14 +15,14 @@ share.
   the other tool is never touched. With Gemini CLI as the source, skills only in `~/.gemini/skills` reach
   Antigravity but not Codex or Cursor, which share Gemini CLI's other folder (`~/.agents/skills`): keep a skill
   there to share it with them.
-- **Loaded once**: a copy is left out when a tool that would read it already loads the same skill. Every upkeep
+- **Loaded once**: a shared copy is left out only when every tool that reads its folder loads an identical skill elsewhere. Every upkeep
   checks each tool for a skill name it loads from two places, a plugin installed twice from two catalogs, and an
   MCP server it loads twice (from its settings and from a plugin), and names both places. Codex online-catalog
   plugins, Antigravity plugins and Gemini CLI extensions count. Codex skills you switched off and plugins you
   disabled don't. Cursor reads Claude Code's skills and plugins too unless you turned off its third-party setting.
   Skills you keep twice on purpose go in `allow_duplicate_skills`.
 - **Each tool's own version**: Codex uses a plugin made for Codex in place of a Claude Code-format copy when the
-  Codex one is not older and keeps every skill, MCP server, command, agent and hook. Otherwise both stay and the
+  Codex one is not older and keeps every skill, MCP server, command, agent and hook invocation. Otherwise both stay and the
   run says why.
 - **pstack model roles** (`feature, refactoring: <model>` and the rest) are copied from the source tool's
   `pstack-models` file to the others, and each tool keeps its own notes on how to run each model.
@@ -31,10 +31,11 @@ share.
   Environment values that look like secrets are not copied: the run tells you which variable to set. Every copy
   follows the newest version of a server an app rewrites on its updates (Codex's `node_repl`). A pinned package
   (`npx -y name@1.2.3`) moves to the newest release in the same major version once it is at least 2 days old.
+  A plugin suppresses a pin update only when its server settings match apart from the pin version.
 - **Global instructions** (optional, `mirror_instructions`) are shared by every enabled agent. A line added in any
-  agent's file reaches the others. A line is never deleted from another tool on its own: when a tool drops or
-  rewords a shared line, the others keep it and the run warns until you choose in `agent-sync review`. Gemini CLI
-  and Antigravity share `~/.gemini/GEMINI.md`. Cursor receives an always-applied rule.
+  agent's file reaches the others. A deletion in the source file pauses mirroring until you choose in
+  `agent-sync pending`. If another tool drops or rewords a shared line, the other copies stay until you choose in
+  `agent-sync review`. Gemini CLI and Antigravity share `~/.gemini/GEMINI.md`. Cursor receives an always-applied rule.
 - **Memory**: you choose whether to share Claude Code's memory notes with the other agents. Notes about
   credentials, keys or personal details stay in Claude Code by default. See [Memory and privacy](#memory-and-privacy).
 - **Plugins and extensions** are updated for enabled agents: Claude Code's plugins and marketplaces, Git plugin
@@ -112,8 +113,9 @@ duplicate skill from two plugins awaiting a replacement approval appears as an i
 Before a run changes a file in your setup, it saves the original in
 `~/.local/state/agent-sync/backups/run-<date-time>/`. Backups use paths relative to your resolved home folder.
 Files outside your home go under `_outside/`. On macOS, upkeep uses APFS clones for folders when it can.
-Global skill updates back up only the skills that have an update. A standalone update from `program_updates`
-backs up the resolved executable and its dedicated install folder under `~/.local` or `/usr/local/opt`, if present.
+Global skill updates back up the skills with reported updates. When the Skills CLI updates only in bulk or
+upkeep cannot read the update list, upkeep backs up every locked skill before updating.
+A standalone update from `program_updates` backs up the resolved executable and its dedicated install folder under `~/.local` or `/usr/local/opt`, if present.
 Upkeep prunes unchanged copies at the end of the run. A run with no changed originals leaves no backup folder.
 
 Every `agent-sync run` checks retention, even when upkeep is skipped, offline, or fails. Backups expire after
@@ -128,7 +130,7 @@ and Git origin before deleting a folder. Warning acknowledgements and Inbox noti
 
 A run never removes something you or another program installed until you approve it. This covers an MCP settings
 entry that a plugin already brings, a Codex plugin replaced by Codex's own version, a skill a package dropped, an
-edited skill or memory copy, a large deletion in your instructions, and replacing your own status line.
+edited skill or memory copy, a deletion from your source instructions, and replacing your own status line.
 
 - **Scheduled run (macOS):** a window lists what is waiting. Select what may go and click **Remove selected**, or
   click **Keep all for now**. Anything you don't select is asked about again at the next run.
@@ -138,10 +140,14 @@ edited skill or memory copy, a large deletion in your instructions, and replacin
 - **Any time:** `agent-sync pending` lists what is waiting. `agent-sync pending --approve <key>` lets the next run
   remove it. `agent-sync pending --keep <key>` adds it to `keep_installed`, which keeps it for good.
 
-Approvals expire when the step responsible for the item confirms it is gone. A skipped or failed step preserves its
-pending choices. Approval of a large instruction deletion applies to the exact batch shown. Other instruction
-changes can proceed when they leave held lines intact. Add `"instructions"` to `keep_installed` to hold every
-deletion batch.
+Approvals expire when upkeep confirms the item is gone. For MCP duplicates, upkeep checks each settings file
+independently. A skipped step or an unreadable file preserves the approvals it could not check.
+
+Each batch of deletions from the source instructions gets one `instructions:<digest>` key. Removing one of two
+identical lines counts as one deletion. All instruction edits wait for that batch to be decided. Approve to apply
+the deletion and share the other edits on the next run. Keep to restore the shared lines and resume sharing. Add
+`"instructions"` to `keep_installed` to keep the lines in every deletion batch. Moving a shared line into a local,
+private, or memory section that did not already contain it leaves the other tools' copies in place.
 
 New warnings appear in a macOS alert that stays until you click **OK** (in a terminal, until you press Enter), and in
 the Inbox. A warning you acknowledge stays quiet for 30 days unless its text changes. `agent-sync pending --ack`
