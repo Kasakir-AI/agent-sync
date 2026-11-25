@@ -262,14 +262,15 @@ def test_pin_updates_package_flag_only_and_skips_only_equivalent_plugin_endpoint
     from tests.test_inventory import write
 
     old, new = "--package=pack@1.0.0", "--package=pack@1.1.0"
+    env = {"MODE": "production", "REGION": "us"}
     write(tmp_path, ".cursor/plugins/local/pack/mcp.json", {
-        "same": {"command": "npx", "args": ["--package=pack@1.0.1", "start", "a b", old]},
+        "same": {"command": "npx", "args": ["--package=pack@1.0.1", "start", "a b", old], "env": env},
     })
     same = ["--package=pack@1.0.0", "start", "a b", old]
     different = [old, "start", "a", "b", old]
     write(tmp_path, ".cursor/mcp.json", {"mcpServers": {
-        "same": {"command": "npx", "args": same},
-        "different": {"command": "npx", "args": different},
+        "same": {"command": "npx", "args": same, "env": {"REGION": "us", "MODE": "production"}},
+        "different": {"command": "npx", "args": different, "env": env},
     }})
     toml = write(tmp_path, ".codex/config.toml", f'[mcp_servers.pack]\ncommand = "npx"\nargs = ["{old}", "start"]\n')
     lines = mcp.pins(tmp_path, False, enabled=("cursor", "codex"), keep=[], latest=lambda _: "1.1.0",
@@ -279,6 +280,26 @@ def test_pin_updates_package_flag_only_and_skips_only_equivalent_plugin_endpoint
     assert servers["same"]["args"] == same
     assert servers["different"]["args"] == [new, "start", "a", "b", old]
     assert tomllib.loads(toml.read_text())["mcp_servers"]["pack"]["args"] == [new, "start"]
+
+
+@pytest.mark.parametrize(("plugin", "setting_fields"), [
+    ({"command": "npx", "args": ["pack@1.0.1"], "env": {"MODE": "staging"}}, {"env": {"MODE": "production"}}),
+    ({"url": "https://prod.example/mcp"}, {"url": "https://prod.example/mcp"}),
+    ({"command": "npx", "args": ["pack@1.0.1"], "url": "https://staging.example/mcp"},
+     {"url": "https://prod.example/mcp"}),
+    ({"command": "npx", "args": ["pack@1.0.1"], "cwd": "/staging"}, {"cwd": "/production"}),
+])
+def test_pin_update_is_not_suppressed_by_a_plugin_with_different_settings(tmp_path, plugin, setting_fields):
+    from tests.test_inventory import write
+
+    server = {"command": "npx", "args": ["pack@1.0.0"], **setting_fields}
+    write(tmp_path, ".cursor/plugins/local/pack/mcp.json", {"pack": plugin})
+    write(tmp_path, ".cursor/mcp.json", {"mcpServers": {"pack": server}})
+
+    mcp.pins(tmp_path, False, enabled=("cursor",), keep=[], latest=lambda _: "1.1.0",
+             released=lambda _: {"1.1.0": "2020-01-01T00:00:00Z"})
+
+    assert mcp.read(tmp_path, "cursor") == {"pack": {**server, "args": ["pack@1.1.0"]}}
 
 
 def test_shared_settings_use_plugins_from_every_reader(tmp_path, monkeypatch):

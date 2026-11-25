@@ -454,6 +454,16 @@ def settled(released: str | None, now: float) -> bool:
     return stamp is not None and now - stamp >= SETTLE_DAYS * 86400
 
 
+def pin_server(server: dict) -> dict | None:
+    endpoint = inventory.endpoint({key: server[key] for key in ("command", "args") if key in server})
+    if not isinstance(endpoint, tuple):
+        return None
+    normalized = {**server, "args": endpoint[1]}
+    if normalized.get("env") in (None, {}):
+        normalized.pop("env", None)
+    return normalized
+
+
 def pins(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, keep: list[str], latest=npm_latest,
          released=npm_released, major: bool = False, now: float | None = None) -> list[str]:
     """Move each pinned npm package of a stdio server to its newest release: not across a major version (unless
@@ -486,8 +496,8 @@ def pins(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, keep: list[str], late
         if movable:
             wanted[package] = (available, movable)
     for path, readers, codex, _, _ in files:
-        brought = {inventory.endpoint(server) for plugin in reader_plugins(loaded, readers)
-                   for _, server in plugin.servers}
+        brought = [normalized for plugin in reader_plugins(loaded, readers)
+                   for _, server in plugin.servers if (normalized := pin_server(server)) is not None]
         found: list[str] = []
 
         def bump(text: str, path=path, readers=readers, codex=codex, brought=brought, found=found) -> str:
@@ -495,7 +505,7 @@ def pins(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, keep: list[str], late
             entries = codex_entries(text) if codex else json_servers(text)
             updated = text
             for name, server in entries.items():
-                if name in keep or not isinstance(server, dict) or inventory.endpoint(server) in brought:
+                if name in keep or not isinstance(server, dict) or pin_server(server) in brought:
                     continue
                 for index, package, version in npm_pins(server):
                     available, movable = wanted.get(package, ("", ()))
