@@ -290,6 +290,7 @@ def test_malformed_mcp_file_preserves_only_its_own_stale_approval(upkeep, monkey
 def test_launcher_and_npm_cache_failures_leave_later_steps_running(upkeep, monkeypatch):
     upkeep.launcher = True
     upkeep.mirror_mcp = True
+    monkeypatch.setattr(Config, "macos", property(lambda _: True))
 
     def unavailable(*args):
         raise OSError("read-only filesystem")
