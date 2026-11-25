@@ -32,3 +32,25 @@ def test_plugins_update_before_the_checks_and_one_snapshot_serves_them(tmp_path,
     assert cli.run(force=True, echo=False) == 0
     assert order == ["update plugins", "duplicate check"]
     assert described.count(("codex", "fresh@remote")) == 1           # read once, after the update
+
+
+def test_inventory_uses_one_snapshot_for_loaded_disabled_and_duplicate_plugins(tmp_path, monkeypatch, capsys):
+    cfg = Config(home=tmp_path, agents=["codex"])
+    monkeypatch.setattr(cli, "load", lambda: cfg)
+    codex_plugin(tmp_path, "fresh@remote", "1.0.0", remote=True)
+    codex_plugin(tmp_path, "disabled@local", "1.0.0")
+    (tmp_path / ".codex/config.toml").write_text(
+        '[plugins."fresh@remote"]\nenabled = true\n[plugins."disabled@local"]\nenabled = false\n')
+    read = inventory.READERS["codex"]
+    traversals = []
+
+    def counted(home):
+        traversals.append(home)
+        yield from read(home)
+
+    monkeypatch.setitem(inventory.READERS, "codex", counted)
+    assert cli.show_inventory() == 0
+    output = capsys.readouterr().out
+    assert "fresh@remote" in output and "disabled@local" in output and "(not loaded)" in output
+    assert "Problems found" in output
+    assert traversals == [tmp_path]

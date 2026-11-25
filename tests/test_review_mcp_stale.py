@@ -148,3 +148,40 @@ def test_addresses_are_never_taken_for_versions(tmp_path):
     assert writes.repair_mcp(tmp_path, cfg) == []
     group, = review.scan(tmp_path, cfg).groups
     assert review.newest(group.versions) is None
+
+
+def test_repair_replans_instead_of_overwriting_a_concurrent_server_edit(tmp_path, monkeypatch):
+    old, new = versioned(tmp_path, "1.0", exists=False), versioned(tmp_path, "2.0")
+    setup(tmp_path, old, new)
+    claude = tmp_path / ".claude.json"
+    initial_edits = writes.edits
+    edited = False
+
+    def concurrent_edit(steps):
+        nonlocal edited
+        if not edited:
+            edited = True
+            claude.write_text(json.dumps({"mcpServers": {"repl": {"url": "https://local.example/mcp"}}}))
+        return initial_edits(steps)
+
+    monkeypatch.setattr(writes, "edits", concurrent_edit)
+    assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+    assert json.loads(claude.read_text())["mcpServers"]["repl"] == {"url": "https://local.example/mcp"}
+
+
+def test_review_and_repair_warn_and_skip_malformed_mcp_settings(tmp_path, monkeypatch, capsys):
+    from agent_sync import cli
+
+    old, new = versioned(tmp_path, "1.0", exists=False), versioned(tmp_path, "2.0")
+    setup(tmp_path, old, new, cursor_dir=old)
+    cursor = tmp_path / ".cursor/mcp.json"
+    cursor.write_text('{"mcpServers":[]}')
+    config = Config(home=tmp_path)
+    monkeypatch.setattr(cli, "load", lambda: config)
+    assert cli.main(["review", "--list"]) == 0
+    assert "WARN  MCP servers" in capsys.readouterr().err
+
+    lines = writes.repair_mcp(tmp_path, config)
+    assert any(line.startswith("WARN") and str(cursor) in line for line in lines)
+    assert any("updated ~/.claude.json" in line for line in lines)
+    assert cursor.read_text() == '{"mcpServers":[]}'

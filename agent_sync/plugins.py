@@ -102,7 +102,9 @@ def parts_problem(old: inventory.Plugin, candidate: inventory.Plugin) -> str:
     missing = sorted(old.parts - candidate.parts)
     if not missing:
         return ""
-    names = ", ".join(part.replace(":", " ") for part in missing[:8]) + (", ..." if len(missing) > 8 else "")
+    names = ", ".join(" ".join(part.split(":", 2)[:2]) for part in missing[:8])
+    if len(missing) > 8:
+        names += ", ..."
     return f"it lacks {'one' if len(missing) == 1 else len(missing)} of its commands, agents or hooks ({names})"
 
 
@@ -165,6 +167,8 @@ def own_versions(home: Path, dry: bool, log, *, enabled=DEFAULT_AGENTS, state_di
                 pending.removed(key)
                 log("ok", f"switched Codex from {label(old)} to its own {label(candidate)}")
         elif not pending.keeps(key):
+            if pending.asked(key):
+                pending.plugin_replacement("codex", old.id, candidate.id)
             log("info", f"Codex has both {label(old)} and {label(candidate)} installed")
 
     for old in loaded:

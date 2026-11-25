@@ -107,6 +107,7 @@ def test_package_skill_removals_require_approval_and_save_the_originals(tmp_path
 
     monkeypatch.setattr(tools, "checkout", checkout)
     monkeypatch.setattr(tools, "sh", run)
+    monkeypatch.setattr(tools, "raw", lambda *args, **kwargs: "Checking for skill updates…\n")
     start = 1_000_000
     now = start
     original_during = pending.during
@@ -137,3 +138,14 @@ def test_package_skill_removals_require_approval_and_save_the_originals(tmp_path
     for path, content in before.items():
         assert (saved / path.relative_to(tmp_path)).read_bytes() == content
     assert json.loads((cfg.state_dir / pending.FILENAME).read_text()) == {}
+
+
+def test_keep_matches_exact_key_last_segment_and_colon_delimited_prefix(tmp_path):
+    key = "instructions:0123456789ab"
+    for keep in (key, "0123456789ab", "instructions", "instructions:"):
+        with pending.during(tmp_path, [keep], lambda *_: None, True) as run:
+            assert not pending.due(key, "deletion batch")
+            assert run.questions() == {}
+    with pending.during(tmp_path, ["instruction"], lambda *_: None, True) as run:
+        assert not pending.due(key, "deletion batch")
+        assert run.questions() == {key: "deletion batch"}

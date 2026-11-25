@@ -130,7 +130,7 @@ def upkeep(cfg: Config, log: Log, work: Path, force: bool, dry: bool, stack: Exi
             if not online():
                 log("skip", "no network; will try again at the next scheduled check")
             else:
-                removals = stack.enter_context(pending.during(cfg.state_dir, cfg.keep_installed, log, dry))
+                removals = stack.enter_context(pending.during(cfg.state_dir, cfg.keep_installed, log, dry, scoped=True))
                 log("start", f"agent-sync {__version__}, source of truth: {cfg.source}"
                     + ("  (dry run: nothing is changed)" if dry else ""))
                 log("info", f"skills tool: {tools.skills(cfg.skills_cli, '--version')[1]}")
@@ -162,7 +162,6 @@ def upkeep(cfg: Config, log: Log, work: Path, force: bool, dry: bool, stack: Exi
     if removals is not None:
         for key in approved:
             removals.seen[key]["approved"] = True
-        removals.complete = not log.problems
         stamp.touch()
         summary = f", backups: {saved.folder}" if saved and saved.folder else ""
         log("done", f"agent-sync finished: {log.summary()}{summary}")
@@ -204,14 +203,22 @@ def ask_to_share_memory(cfg: Config, log: Log, dry: bool, stack: ExitStack) -> N
     cfg.mirror_memory = answer
 
 
-def guarded(log: Log, label: str, action: Callable[[], object]) -> None:
+def guarded(log: Log, label: str, action: Callable[[], object], *owners: str) -> None:
     """Run one step; a step that fails logs FAIL and the run goes on with the next."""
+    run = pending.current.get() if owners else None
+    before = log.problems, log.kinds["skip"]
+    if run is not None:
+        run.step_incomplete = False
     try:
         action()
     except writes.Raced as raced:
         log("WARN", str(raced))
     except GUARDED as error:
         log("FAIL", f"{label}: {error}")
+    else:
+        if (run is not None and run.completed is not None and not run.step_incomplete
+                and before == (log.problems, log.kinds["skip"])):
+            run.completed.update(owners)
 
 
 def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateState, removals: pending.Run,
@@ -221,7 +228,7 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
     if cfg.launcher and cfg.macos:
         guarded(log, "Desktop launcher",
                 lambda: log.lines(filter(None, [schedule.refresh_launcher(home, dry, tools.PATH)])))
-    guarded(log, "skill packages", lambda: sync_packages(cfg, log, work, dry))
+    guarded(log, "skill packages", lambda: sync_packages(cfg, log, work, dry), "skill", "agent")
     guarded(log, "skills update", lambda: tools.update_skills(log, dry, cfg.skills_cli, home=home, enabled=enabled))
     if cfg.plugin_skills:
         log("WARN", "plugin_skills is no longer used: Cursor loads Claude Code plugins' skills itself, so copies "
@@ -232,14 +239,14 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
         if ("codex" in enabled and shutil.which("codex", path=tools.PATH)
                 and (not dry or tools.started("codex", home))):
             guarded(log, "Codex's own plugins",
-                    lambda: plugins.own_versions(home, dry, log, enabled=enabled, state_dir=cfg.state_dir))
+                    lambda: plugins.own_versions(home, dry, log, enabled=enabled, state_dir=cfg.state_dir), "plugin")
     stack.enter_context(inventory.snapshot())
 
     if cfg.mirror_skills:
         def mirror_skills() -> None:
             log.lines(skills.mirror(home, cfg.source, cfg.skip_skills, dry, enabled=enabled))
             log("ok", "your own skills mirrored")
-        guarded(log, "your own skills", mirror_skills)
+        guarded(log, "your own skills", mirror_skills, "skill-copy")
 
     def duplicate_skills() -> None:
         found = duplicates.report(home, cfg.allow_duplicate_skills, enabled=enabled)
@@ -254,16 +261,17 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
             log("ok", "model roles mirrored")
         guarded(log, "model roles", mirror_roles)
     if cfg.mirror_mcp:
-        npm, failed = mcp.NpmLookup(), log.problems
-        for label, action in (
-            ("MCP repair", lambda: writes.repair_mcp(home, cfg, dry)),
-            ("MCP duplicates", lambda: mcp.dedupe(home, dry, enabled=enabled, source=cfg.source)),
-            ("MCP versions", lambda: mcp.pins(home, dry, enabled=enabled, keep=cfg.keep_mcp_versions,
-                                              latest=npm.latest, released=npm.released,
-                                              major=cfg.mcp_major_updates)),
-            ("MCP servers", lambda: mcp.mirror(home, cfg.source, dry, enabled=enabled)),
-        ):
-            guarded(log, label, lambda action=action: log.lines(action()))
+        def mcp_versions() -> None:
+            npm = mcp.NpmLookup()
+            log.lines(mcp.pins(home, dry, enabled=enabled, keep=cfg.keep_mcp_versions,
+                               latest=npm.latest, released=npm.released, major=cfg.mcp_major_updates))
+
+        failed = log.problems
+        guarded(log, "MCP repair", lambda: log.lines(writes.repair_mcp(home, cfg, dry)))
+        guarded(log, "MCP duplicates", lambda: log.lines(mcp.dedupe(home, dry, enabled=enabled, source=cfg.source)),
+                *(f"mcp:{readers[0]}" for readers in mcp.groups(home, enabled).values() if cfg.source not in readers))
+        guarded(log, "MCP versions", mcp_versions)
+        guarded(log, "MCP servers", lambda: log.lines(mcp.mirror(home, cfg.source, dry, enabled=enabled)))
         guarded(log, "MCP servers", lambda: log.lines(mcp.same_server_twice(home, enabled=enabled), "WARN"))
         if log.problems == failed:
             log("ok", "MCP servers mirrored")
@@ -271,11 +279,13 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
         def mirror_instructions() -> None:
             log.lines(instructions.mirror(home, cfg.source, dry, review.baseline_file(cfg), enabled=enabled))
             log("ok", "global instructions mirrored")
-        guarded(log, "global instructions", mirror_instructions)
+        guarded(log, "global instructions", mirror_instructions, "instructions", "instruction")
     if cfg.mirror_memory:
         guarded(log, "shared memory", lambda: log.lines(memory.mirror(
-            home, dry, enabled=enabled, private_memory=cfg.private_memory, share_memory=cfg.share_memory)))
-    guarded(log, "status line", lambda: log.lines(statuslines.apply(home, dry, cfg, removals)))
+            home, dry, enabled=enabled, private_memory=cfg.private_memory, share_memory=cfg.share_memory)), "memory")
+    if cfg.status_line:
+        guarded(log, "status line", lambda: log.lines(statuslines.apply(home, dry, cfg, removals)),
+                *(f"statusline:{tool}" for tool in enabled if tool != "gemini"))
     log_review(cfg, log)
     if cfg.update_mcp_programs:
         guarded(log, "MCP programs", lambda: tools.update_mcp_programs(log, cfg, dry, state=updates))
@@ -299,13 +309,15 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
 
 def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
     root = work / "packages"
-    if root.is_symlink():
+    if root.is_symlink() or not cfg.skill_packages:
+        pending.incomplete()
         return
     taken: set[str] = set()
     packages = []
     for package in cfg.skill_packages:
         checkout = root / cleanup.checkout_name(package)
         if checkout.is_symlink():
+            pending.incomplete()
             continue
         code, out = tools.checkout(package, checkout)
         log("ok" if code == 0 else "FAIL", f"fetch {package}{': ' + out if code else ''}")
@@ -350,10 +362,12 @@ def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
 
 def log_review(cfg: Config, log: Log) -> None:
     try:
-        counts = Counter(group.status for group in review.scan(cfg.home, cfg).groups)
+        scan = review.scan(cfg.home, cfg)
+        counts = Counter(group.status for group in scan.groups)
     except Exception as e:
         log("WARN", f"could not compare settings for review: {e}")
         return
+    log.lines(scan.problems)
     differ, check, missing = counts["differ"], counts["check"], counts["missing"]
     if differ or check or missing:
         different = "1 setting differs" if differ == 1 else f"{differ} settings differ"
@@ -368,7 +382,10 @@ def review_settings(list_only: bool, no_open: bool) -> int:
     if not list_only:
         from . import reviewpage
         return reviewpage.serve(cfg.home, cfg, open_browser=not no_open)
-    groups = review.scan(cfg.home, cfg).groups
+    scan = review.scan(cfg.home, cfg)
+    for problem in scan.problems:
+        print(problem, file=sys.stderr)
+    groups = scan.groups
     counts = Counter(group.status for group in groups)
     print(f"{counts['differ']} differ, {counts['check']} to check once, "
           f"{counts['missing'] + counts['local']} only in one tool, "
@@ -438,12 +455,17 @@ def put_launcher() -> int:
 
 
 def show_inventory() -> int:
-    cfg = load()
+    with inventory.snapshot():
+        return print_inventory(load())
+
+
+def print_inventory(cfg: Config) -> int:
     home, enabled = cfg.home, cfg.agents
     npm = mcp.NpmLookup()
     latest = npm.latest
     seen = duplicates.views(home, enabled=enabled)
-    settings = {tool: entries for _, readers, _, _, entries in mcp.settings_files(home, enabled)
+    problems: list[str] = []
+    settings = {tool: entries for _, readers, _, _, entries in mcp.settings_files(home, enabled, problems)
                 for tool in readers}
     for tool, found in inventory.plugins(home, enabled, include_disabled=True).items():
         print(TOOLS[tool].name)
@@ -471,7 +493,7 @@ def show_inventory() -> int:
         print()
 
     print("Problems found")
-    problems = (duplicates.report(home, cfg.allow_duplicate_skills, enabled=enabled)
+    problems += (duplicates.report(home, cfg.allow_duplicate_skills, enabled=enabled)
                 + plugins.twice(home, enabled=enabled)
                 + mcp.same_server_twice(home, enabled=enabled)
                 + mcp.pins(home, True, enabled=enabled, keep=cfg.keep_mcp_versions, latest=latest,
@@ -479,7 +501,7 @@ def show_inventory() -> int:
     with pending.during(cfg.state_dir, cfg.keep_installed, lambda _, text: problems.append(text), True) as removals:
         problems.extend(mcp.dedupe(home, True, enabled=enabled, source=cfg.source))
         problems.extend(f"approval required to remove {what}" for what in removals.questions().values())
-    for line in problems or ["None"]:
+    for line in dict.fromkeys(problems or ["None"]):
         print(f"  {line}")
     return 0
 

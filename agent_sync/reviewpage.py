@@ -118,6 +118,7 @@ def _scan_data(home: Path, cfg: Config, scan: review.Scan) -> dict:
         "plugins": {name: {tool: [asdict(plugin) for plugin in entries] for tool, entries in tools.items()}
                     for name, tools in scan.plugins.items()},
         "managed": scan.managed, "tools": {tool: TOOLS[tool].name for tool in cfg.agents},
+        "problems": scan.problems,
     }
 
 

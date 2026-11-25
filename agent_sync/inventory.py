@@ -7,14 +7,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from fnmatch import fnmatch
 from pathlib import Path
 
 from . import duplicates, mcp, skills
 from .registry import DEFAULT_AGENTS, inside
 
-NPM_SPEC = re.compile(r"(?P<package>(?:@[\w.-]+/)?[\w][\w.-]*)@(?P<version>\d+\.\d+\.\d+"
-                      r"(?:-[\w.-]+)?)")
 MANIFESTS = {
     "codex": ".codex-plugin/plugin.json",
     "claude": ".claude-plugin/plugin.json",
@@ -23,6 +20,7 @@ MANIFESTS = {
     "gemini": "gemini-extension.json",
 }
 MCP_FILES = (".mcp.json", "mcp.json", "mcp_config.json")
+Endpoint = str | tuple[str, tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -41,15 +39,41 @@ class Plugin:
     skills: int
     skill_dirs: tuple[Path, ...] = ()
     server_files: tuple[Path, ...] = ()
-    parts: frozenset[str] = frozenset()   # its commands, agents and hooks: "command:x", "agent:y", "hooks"
+    parts: frozenset[str] = frozenset()
 
 
-def plugin_parts(root: Path, manifest: dict) -> frozenset[str]:
-    """What a plugin brings besides skills and MCP servers: commands/*.md, agents/*.md|.toml and hooks."""
+def hook_parts(root: Path, manifest: dict, made_for: str | None) -> Iterator[str]:
+    extensions = manifest.get("extensions")
+    openai = extensions.get("com.openai") if isinstance(extensions, dict) else None
+    declared = (openai if made_for == "codex" and isinstance(openai, dict) else manifest).get("hooks")
+    sources = list(declared) if isinstance(declared, list) else [declared] if declared is not None else []
+    if declared is None or made_for == "claude":
+        default = root / "hooks/hooks.json"
+        if default.is_file():
+            sources.append("hooks/hooks.json")
+    for source in sources:
+        if isinstance(source, str):
+            path = root / source
+            if not inside(root, path):
+                continue
+            events = settings(path).get("hooks")
+        else:
+            events = source
+        if not isinstance(events, dict):
+            continue
+        for event, groups in events.items():
+            for group in groups if isinstance(groups, list) else ():
+                actions = group.get("hooks") if isinstance(group, dict) else None
+                for action in actions if isinstance(actions, list) else ():
+                    if isinstance(action, dict):
+                        definition = json.dumps([group.get("matcher", ""), action], sort_keys=True)
+                        yield f"hook:{event}:{definition}"
+
+
+def plugin_parts(root: Path, manifest: dict, made_for: str | None) -> frozenset[str]:
     found = {f"command:{path.stem}" for path in root.glob("commands/*.md")}
     found |= {f"agent:{path.stem}" for path in root.glob("agents/*") if path.suffix in (".md", ".toml")}
-    if manifest.get("hooks") or (root / "hooks/hooks.json").is_file():
-        found.add("hooks")
+    found.update(hook_parts(root, manifest, made_for))
     return frozenset(found)
 
 
@@ -57,14 +81,20 @@ def family(name: str) -> str:
     return re.sub(r"(?:-plugin|-skills)$", "", name.strip().lower())
 
 
-def endpoint(server: dict) -> str:
+def endpoint(server: dict) -> Endpoint | None:
     for key in ("url", "httpUrl", "serverUrl"):
         if isinstance(url := server.get(key), str) and url:
             return url.rstrip("/")
-    command, args = server.get("command"), server.get("args") or []
-    if not isinstance(command, str) or not isinstance(args, list) or not all(isinstance(a, str) for a in args):
-        return ""
-    return " ".join([command, *(spec["package"] if (spec := NPM_SPEC.fullmatch(arg)) else arg for arg in args)])
+    command, args = server.get("command"), server.get("args")
+    args = [] if args is None else args
+    if not isinstance(command, str) or not command or not isinstance(args, list):
+        return None
+    if not all(isinstance(arg, str) for arg in args):
+        return None
+    normalized = args.copy()
+    for index, _, version in mcp.npm_pins(server):
+        normalized[index] = normalized[index].removesuffix(f"@{version}")
+    return command, tuple(normalized)
 
 
 def object_at(path: Path) -> dict:
@@ -85,11 +115,13 @@ def plugin_servers(root: Path, manifest: dict, manifest_path: Path) -> Iterator[
     """Each MCP server a plugin brings. A server file that is missing, malformed or outside the plugin is skipped."""
     declared = manifest.get("mcpServers")
     sources = {root / file: None for file in MCP_FILES if (root / file).is_file()}
-    if isinstance(declared, str) and inside(root, root / declared):
+    if isinstance(declared, str):
         sources[root / declared] = None
     if isinstance(declared, dict):
         sources[manifest_path] = declared
     for path, data in sources.items():
+        if not inside(root, path):
+            continue
         if data is None:
             try:
                 data = object_at(path)
@@ -117,7 +149,7 @@ def describe(tool: str, pid: str, root: Path, version: str, loads: bool) -> Plug
         if isinstance(apps, dict):
             display = next(iter(apps), None)
     display = display or manifest.get("name") or name
-    standard = duplicates.walk(root / "skills") if tool != "claude" else []
+    standard = duplicates.walk(root / "skills", within=root) if tool != "claude" else ()
     extra = skills.plugin_skill_dirs(root).values() if made_for == "claude" or tool == "claude" else ()
     dirs = tuple({d.resolve(): d for d in (*extra, *standard)}.values())
     servers = {}
@@ -130,7 +162,7 @@ def describe(tool: str, pid: str, root: Path, version: str, loads: bool) -> Plug
     return Plugin(tool, pid, name, market, str(version), root, family(str(display)),
                   frozenset(duplicates.skill_name(d) for d in dirs), loads, made_for,
                   tuple((n, v) for n, (_, v) in servers.items()), len(dirs), dirs,
-                  tuple(file for file, _ in servers.values()), plugin_parts(root, manifest))
+                  tuple(file for file, _ in servers.values()), plugin_parts(root, manifest, made_for))
 
 
 def claude_plugins(home: Path) -> Iterator[tuple[str, Path, str, bool]]:
@@ -186,13 +218,14 @@ def antigravity_plugins(home: Path) -> Iterator[tuple[str, Path, str, bool]]:
 def gemini_enabled(rules: object, home: Path) -> bool:
     """Gemini CLI's extension-enablement.json: overrides are path globs, a "!" one switches the extension off there,
     and the last that matches wins. agent-sync works at user level, so it asks about the home folder."""
-    loads = True
-    for rule in rules if isinstance(rules, list) else ():
+    location = str(home).replace("\\", "/").rstrip("/") + "/"
+    for rule in reversed(rules) if isinstance(rules, list) else ():
         if isinstance(rule, str):
             pattern = rule.removeprefix("!")
-            if fnmatch(f"{home}/", pattern) or fnmatch(str(home), pattern):
-                loads = not rule.startswith("!")
-    return loads
+            pattern = re.sub(r"(/?)\\\*", r"(?:\1.*)?", re.escape(pattern))
+            if re.fullmatch(pattern, location):
+                return not rule.startswith("!")
+    return True
 
 
 def gemini_plugins(home: Path) -> Iterator[tuple[str, Path, str, bool]]:

@@ -194,6 +194,7 @@ def test_expired_warning_acknowledgement_is_removed(upkeep, monkeypatch, capsys)
 def test_a_failing_step_is_logged_the_run_goes_on_and_pending_items_stay(upkeep, monkeypatch, capsys):
     cfg = upkeep
     cfg.mirror_roles = True
+    cfg.mirror_memory = True
     with pending.during(cfg.state_dir, [], lambda *_: None, False, now=time.time()):
         assert not pending.due("memory:old.md", "memory copy old.md")
 
@@ -201,6 +202,7 @@ def test_a_failing_step_is_logged_the_run_goes_on_and_pending_items_stay(upkeep,
         raise json.JSONDecodeError("bad", "{", 0)
 
     monkeypatch.setattr(cli.roles, "mirror", broken)
+    monkeypatch.setattr(cli.memory, "mirror", broken)
     monkeypatch.setattr(cli.notify, "deliver", lambda *args: (set(), False))
     assert cli.main(["run", "--force", "--echo"]) == 1
     output = capsys.readouterr().out
@@ -210,5 +212,56 @@ def test_a_failing_step_is_logged_the_run_goes_on_and_pending_items_stay(upkeep,
     assert "memory:old.md" in pending.load(cfg.state_dir)            # its owner may not have run: kept
 
     monkeypatch.setattr(cli.roles, "mirror", lambda *args, **kwargs: [])
+    monkeypatch.setattr(cli.memory, "mirror", lambda *args, **kwargs: [])
     assert cli.main(["run", "--force", "--echo"]) == 0
     assert "memory:old.md" not in pending.load(cfg.state_dir)        # a clean run asked nothing about it
+
+
+def test_disabled_step_retains_approval_and_completed_owner_expires_it(upkeep, monkeypatch):
+    cfg = upkeep
+    key = "memory:old.md"
+    old = cfg.home / "old.md"
+    old.write_text("old")
+    monkeypatch.setattr(notify, "deliver", lambda *args: (set(), False))
+
+    def mirror(*args, **kwargs):
+        if old.exists() and pending.due(key, "memory copy old.md"):
+            old.unlink()
+            pending.removed(key)
+        return []
+
+    monkeypatch.setattr(cli.memory, "mirror", mirror)
+    cfg.mirror_memory = True
+    assert cli.main(["run", "--force"]) == 0
+    assert cli.main(["pending", "--approve", key]) == 0
+    old.unlink()
+
+    cfg.mirror_memory = False
+    assert cli.main(["run", "--force"]) == 0
+    assert pending.load(cfg.state_dir)[key]["approved"]
+
+    cfg.mirror_memory = True
+    monkeypatch.setattr(cli.tools, "extra_steps", lambda log, *args: log("FAIL", "unrelated failure"))
+    assert cli.main(["run", "--force"]) == 1
+    assert key not in pending.load(cfg.state_dir)
+    old.write_text("new copy")
+    assert cli.main(["run", "--force"]) == 1
+    assert old.read_text() == "new copy"
+    assert not pending.load(cfg.state_dir)[key]["approved"]
+
+
+def test_launcher_and_npm_cache_failures_leave_later_steps_running(upkeep, monkeypatch):
+    upkeep.launcher = True
+    upkeep.mirror_mcp = True
+
+    def unavailable(*args):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(cli.schedule, "refresh_launcher", unavailable)
+    monkeypatch.setattr(cli.mcp, "NpmLookup", unavailable)
+    monkeypatch.setattr(notify, "deliver", lambda *args: (set(), False))
+    assert cli.main(["run", "--force"]) == 1
+    log = upkeep.log_file.read_text()
+    assert "FAIL  Desktop launcher: read-only filesystem" in log
+    assert "FAIL  MCP versions: read-only filesystem" in log
+    assert (upkeep.home / ".claude/settings.json").is_file()

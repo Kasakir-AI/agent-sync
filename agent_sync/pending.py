@@ -38,18 +38,23 @@ class Run:
     previous: dict[str, Removal]
     seen: dict[str, Removal] = field(default_factory=dict)
     removed: set[str] = field(default_factory=set)
-    complete: bool = True   # False when a step failed: it may not have asked about its items, so none are dropped
+    completed: set[str] | None = None
+    step_incomplete: bool = False
+    plugin_pairs: set[tuple[str, frozenset[str]]] = field(default_factory=set)
 
     def entries(self) -> dict[str, Removal]:
-        """What to remember: the items asked about this run, plus, after a run where a step failed, every earlier
-        item not removed since (the failed step owns some of them)."""
-        if self.complete:
+        """Keep unobserved items until their owning step has completed."""
+        if self.completed is None:
             return self.seen
-        kept = {key: item for key, item in self.previous.items() if key not in self.removed}
+        kept = {key: item for key, item in self.previous.items()
+                if key not in self.removed
+                and not any(key == owner or key.startswith(f"{owner}:") for owner in self.completed)}
         return {**kept, **self.seen}
 
     def keeps(self, key: str) -> bool:
-        return key in self.keep or key.rsplit(":", 1)[-1] in self.keep
+        return (key in self.keep or key.rsplit(":", 1)[-1] in self.keep
+                or any(prefix and key.startswith(prefix if prefix.endswith(":") else f"{prefix}:")
+                       for prefix in self.keep))
 
     def due(self, key: str, what: str) -> bool:
         if self.keeps(key) or key in self.removed:
@@ -69,6 +74,23 @@ class Run:
 
 
 current: ContextVar[Run | None] = ContextVar("pending", default=None)
+
+
+def incomplete() -> None:
+    if (run := current.get()) is not None:
+        run.step_incomplete = True
+
+
+def retry(*namespaces: str) -> None:
+    if (run := current.get()) is not None:
+        for key in list(run.seen):
+            if key.partition(":")[0] in namespaces:
+                del run.seen[key]
+
+
+def plugin_replacement(tool: str, old: str, candidate: str) -> None:
+    if (run := current.get()) is not None:
+        run.plugin_pairs.add((tool, frozenset((old, candidate))))
 
 
 def keeps(key: str) -> bool:
@@ -94,8 +116,10 @@ def removed(key: str) -> None:
 
 
 @contextmanager
-def during(state_dir: Path, keep: list[str], log, dry: bool, *, now: float | None = None):
+def during(state_dir: Path, keep: list[str], log, dry: bool, *, now: float | None = None, scoped: bool = False):
     run = Run(log, dry, time.time() if now is None else now, frozenset(keep), load(state_dir))
+    if scoped:
+        run.completed = set()
     token = current.set(run)
     try:
         yield run

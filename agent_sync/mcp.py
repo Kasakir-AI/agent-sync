@@ -24,14 +24,35 @@ from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
 from .tomledit import PART, basic_string, key_text
 
 
+class InvalidSettings(ValueError):
+    pass
+
+
+def server_table(data: dict, key: str) -> dict:
+    servers = data.get(key, {})
+    if not isinstance(servers, dict):
+        raise InvalidSettings(f"{key} must be an object")
+    return servers
+
+
+def json_settings(text: str) -> dict:
+    data = json.loads(text) if text.strip() else {}
+    if not isinstance(data, dict):
+        raise InvalidSettings("settings must be a JSON object")
+    return data
+
+
 def json_servers(text: str) -> dict[str, dict]:
-    return (json.loads(text).get("mcpServers") or {}) if text.strip() else {}   # an app may leave the file empty
+    return server_table(json_settings(text), "mcpServers")
+
+
+def codex_entries(text: str) -> dict:
+    return server_table(tomllib.loads(text), "mcp_servers")
 
 
 def codex_servers(text: str) -> dict[str, dict]:
-    servers = tomllib.loads(text).get("mcp_servers") or {}
     return {name: {key: value for key, value in entry.items() if key in ("command", "args", "env", "url")}
-            for name, entry in servers.items() if isinstance(entry, dict)}
+            for name, entry in codex_entries(text).items() if isinstance(entry, dict)}
 
 
 def read_gemini(text: str) -> dict[str, dict]:
@@ -63,18 +84,29 @@ def read(home: Path, tool: str) -> dict[str, dict]:
     return READERS[agent.mcp_format](path.read_text()) if path.exists() else {}
 
 
+def settings_problem(path: Path, error: Exception) -> str:
+    level = "WARN" if isinstance(error, InvalidSettings) else "FAIL"
+    return f"{level}  MCP servers in {path}: {error}"
+
+
 def portable(server: dict) -> dict | None:
     """The part every tool understands: a stdio command (command/args/env) or a remote url."""
     if not isinstance(server, dict):
         return None
-    if server.get("command"):
-        out = {"command": server["command"], "args": list(server.get("args") or [])}
-        if server.get("env"):
-            out["env"] = dict(server["env"])
+    if command := server.get("command"):
+        args, env = server.get("args"), server.get("env")
+        args = [] if args is None else args
+        if not isinstance(command, str) or not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+            return None
+        if env is not None and not isinstance(env, dict):
+            return None
+        out = {"command": command, "args": args.copy()}
+        if env:
+            out["env"] = env.copy()
         return out
     for key in ("url", "httpUrl", "serverUrl"):
-        if server.get(key):
-            return {"url": server[key]}
+        if isinstance(url := server.get(key), str) and url:
+            return {"url": url}
     return None
 
 
@@ -105,8 +137,8 @@ def add_codex(text: str, missing: dict[str, dict]) -> str:
 
 
 def add_json(text: str, missing: dict[str, dict]) -> str:
-    data = json.loads(text) if text.strip() else {}
-    data["mcpServers"] = {**(data.get("mcpServers") or {}), **missing}
+    data = json_settings(text)
+    data["mcpServers"] = {**server_table(data, "mcpServers"), **missing}
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -142,7 +174,10 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
     from . import writes  # writes builds on this module
 
     enabled = tuple(enabled)
-    wanted = {k: p for k, v in read(home, source).items() if (p := portable(v))}
+    try:
+        wanted = {k: p for k, v in read(home, source).items() if (p := portable(v))}
+    except (OSError, ValueError) as error:
+        return [settings_problem(home / TOOLS[source].mcp, error)]
     locations = paths(home, enabled, "mcp")
     loaded = inventory.plugins(home, enabled)
     changes = []
@@ -150,9 +185,11 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
         if path == locations.get(source):
             continue
         tool = readers[0]
-        brought = {name: inventory.endpoint(server) for plugin in reader_plugins(loaded, readers)
-                   for name, server in plugin.servers}
-        endpoints = set(brought.values())
+        servers = [entry for plugin in reader_plugins(loaded, readers) for entry in plugin.servers]
+        brought: dict[str, set[inventory.Endpoint | None]] = {}
+        for name, server in servers:
+            brought.setdefault(name, set()).add(inventory.endpoint(server))
+        endpoints = {endpoint for choices in brought.values() for endpoint in choices if endpoint is not None}
         found: list[str] = []
 
         def add(text: str, tool=tool, readers=readers, brought=brought, endpoints=endpoints, found=found) -> str:
@@ -160,11 +197,14 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
             found.clear()
             missing = {}
             for name, server in wanted.items():
-                if name in have or inventory.endpoint(server) in endpoints:
+                if name in have:
                     continue
-                if name in brought:
+                endpoint = inventory.endpoint(server)
+                if any(other != endpoint for other in brought.get(name, ())):
                     found.append(f"WARN  MCP server {name} not added to {tool_names(readers)}: a plugin there brings "
                                  "a different server of that name. Rename one of them to load both.")
+                    continue
+                if endpoint in endpoints:
                     continue
                 server, unset = without_secrets(server)
                 found += [f"WARN  MCP server {name} in {tool_names(readers)} needs {var} set: agent-sync does not "
@@ -182,7 +222,7 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
             changes.append(f"WARN  {raced}")
             continue
         except (OSError, ValueError) as error:
-            changes.append(f"FAIL  MCP servers in {path}: {error}")
+            changes.append(settings_problem(path, error))
             continue
         changes += found
     return changes
@@ -196,21 +236,24 @@ def tool_names(readers: tuple[str, ...]) -> str:
     return ", ".join(TOOLS[tool].name for tool in readers)
 
 
+def groups(home: Path, enabled) -> dict[Path, tuple[str, ...]]:
+    return grouped_paths(paths(home, enabled, "mcp"))
+
+
 def settings_files(home: Path, enabled, failed: list[str] | None = None):
     """The original text and raw server entries in each settings file. A file that can't be read is skipped (and
     named in `failed`, when given)."""
-    for path, readers in grouped_paths(paths(home, enabled, "mcp")).items():
-        if not path.is_file():
-            continue
+    for path, readers in groups(home, enabled).items():
         try:
             text, codex = path.read_bytes().decode(), TOOLS[readers[0]].mcp_format == "codex-toml"
-            entries = tomllib.loads(text).get("mcp_servers", {}) if codex else json_servers(text)
-        except (OSError, ValueError, AttributeError) as error:
-            if failed is not None:
-                failed.append(f"FAIL  MCP servers in {path}: {error}")
+            entries = codex_entries(text) if codex else json_servers(text)
+        except FileNotFoundError:
             continue
-        if isinstance(entries, dict):
-            yield path, readers, codex, text, {k: v for k, v in entries.items() if isinstance(v, dict)}
+        except (OSError, ValueError) as error:
+            if failed is not None:
+                failed.append(settings_problem(path, error))
+            continue
+        yield path, readers, codex, text, {k: v for k, v in entries.items() if isinstance(v, dict)}
 
 
 COPY_KEYS = {"command", "args", "env", "url", "httpUrl", "serverUrl", "type", "enabled"}
@@ -224,7 +267,10 @@ def dedupe(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, source: str | None 
     enabled = tuple(enabled)
     loaded = inventory.plugins(home, enabled)
     lines: list[str] = []
-    for path, readers, codex, _, _ in settings_files(home, enabled, lines):
+    files = list(settings_files(home, enabled, lines))
+    if lines:
+        pending.incomplete()
+    for path, readers, codex, _, _ in files:
         if source in readers:
             continue
         providers = {}
@@ -240,7 +286,7 @@ def dedupe(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, source: str | None 
                    removed=removed) -> str:
             found.clear()
             removed.clear()
-            entries = tomllib.loads(text).get("mcp_servers", {}) if codex else json_servers(text)
+            entries = codex_entries(text) if codex else json_servers(text)
             updated = text
             for name, server in entries.items():
                 key = f"mcp:{readers[0]}:{name}"
@@ -276,10 +322,12 @@ def dedupe(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, source: str | None 
             else:
                 writes.update_text(path, remove)
         except writes.Raced as raced:
+            pending.incomplete()
             lines.append(f"WARN  {raced}")
             continue
         except (OSError, ValueError) as error:
-            lines.append(f"FAIL  MCP servers in {path}: {error}")
+            pending.incomplete()
+            lines.append(settings_problem(path, error))
             continue
         lines += found
         for key in removed:
@@ -289,8 +337,8 @@ def dedupe(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, source: str | None 
 
 def same_server_twice(home: Path, *, enabled=DEFAULT_AGENTS) -> list[str]:
     lines = []
-    for _, readers, _, _, entries in settings_files(home, enabled):
-        names: dict[str, list[str]] = {}
+    for _, readers, _, _, entries in settings_files(home, enabled, lines):
+        names: dict[inventory.Endpoint, list[str]] = {}
         for name, server in entries.items():
             if identity := inventory.endpoint(server):
                 names.setdefault(identity, []).append(name)
@@ -316,6 +364,8 @@ def npm_released(package: str) -> dict[str, str]:
 
 RUNNERS = {"npx": (), "bunx": (), "pnpm": ("dlx",), "npm": ("exec", "x")}
 PACKAGE_FLAGS = ("-p", "--package")
+NPM_SPEC = re.compile(r"(?P<package>(?:@[\w.-]+/)?[\w][\w.-]*)@(?P<version>\d+\.\d+\.\d+"
+                      r"(?:-[\w.-]+)?)")
 
 
 def npm_pins(server: dict):
@@ -346,9 +396,9 @@ def npm_pins(server: dict):
             operand = arg.partition("=")[2]
         elif not arg.startswith("-"):
             operand = arg
-        if isinstance(operand, str) and (spec := inventory.NPM_SPEC.fullmatch(operand)):
+        if isinstance(operand, str) and (spec := NPM_SPEC.fullmatch(operand)):
             yield index, spec["package"], spec["version"]
-        if operand is arg:
+        if not arg.startswith("-"):
             return
         index += 1
 
@@ -442,7 +492,7 @@ def pins(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, keep: list[str], late
 
         def bump(text: str, path=path, readers=readers, codex=codex, brought=brought, found=found) -> str:
             found.clear()
-            entries = tomllib.loads(text).get("mcp_servers", {}) if codex else json_servers(text)
+            entries = codex_entries(text) if codex else json_servers(text)
             updated = text
             for name, server in entries.items():
                 if name in keep or not isinstance(server, dict) or inventory.endpoint(server) in brought:
@@ -452,8 +502,8 @@ def pins(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, keep: list[str], late
                     if version not in movable:
                         continue
                     try:
-                        updated = pin_text(updated, codex, name, index, f"{package}@{version}",
-                                           f"{package}@{available}")
+                        arg = server["args"][index]
+                        updated = pin_text(updated, codex, name, index, arg, arg.removesuffix(version) + available)
                     except (ValueError, KeyError, TypeError):
                         found.append(f"WARN  could not update MCP server {name} in {path}: its entry is written in a "
                                      "form agent-sync does not edit")
@@ -471,7 +521,7 @@ def pins(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, keep: list[str], late
             lines.append(f"WARN  {raced}")
             continue
         except (OSError, ValueError) as error:
-            lines.append(f"FAIL  MCP servers in {path}: {error}")
+            lines.append(settings_problem(path, error))
             continue
         lines += found
     return lines + list(dict.fromkeys(notes))

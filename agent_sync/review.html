@@ -688,6 +688,14 @@ function showManaged() {
 
 function render() {
   content.replaceChildren();
+  if (scan.problems?.length) {
+    const panel = el("section", undefined, "panel");
+    panel.append(el("h2", "MCP settings skipped"));
+    const list = el("ul");
+    for (const problem of scan.problems) list.append(el("li", problem));
+    panel.append(list);
+    content.append(panel);
+  }
   if (filter === "plugins") showPlugins();
   else if (filter === "managed") showManaged();
   else {

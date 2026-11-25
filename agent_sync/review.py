@@ -104,6 +104,8 @@ class Scan:
     groups: list[Group]
     plugins: dict[str, dict[str, list[Plugin]]]
     managed: dict[str, int]
+    problems: list[str] = field(default_factory=list)
+    mcp_originals: dict[Path, tuple[Path, bytes | None]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -368,9 +370,27 @@ def first_version(newer: Version, older: Version) -> str:
     return next(a for a, b in zip(app_versions(newer)[1], app_versions(older)[1], strict=True) if a != b)
 
 
-def scan_mcp(home: Path, cfg: Config, locked: dict) -> Iterator[tuple[str, Version]]:
-    for path, readers in grouped_paths(paths(home, cfg.agents, "mcp")).items():
-        for name, server in sorted(mcp.read(home, readers[0]).items()):
+def mcp_settings(home: Path, enabled, problems: list[str]):
+    configured, originals = {}, {}
+    for path, readers in mcp.groups(home, enabled).items():
+        try:
+            target = path.resolve()
+            try:
+                raw = target.read_bytes()
+            except FileNotFoundError:
+                raw = None
+            entries = mcp.READERS[TOOLS[readers[0]].mcp_format](raw.decode()) if raw is not None else {}
+        except (OSError, ValueError, RuntimeError) as error:
+            problems.append(mcp.settings_problem(path, error))
+            continue
+        originals[path] = target, raw
+        configured.update(dict.fromkeys(readers, entries))
+    return configured, originals
+
+
+def scan_mcp(home: Path, cfg: Config, configured: dict) -> Iterator[tuple[str, Version]]:
+    for path, readers in mcp.groups(home, cfg.agents).items():
+        for name, server in sorted(configured.get(readers[0], {}).items()):
             if (value := portable(server)) is not None:
                 body = json.dumps(value, indent=2, sort_keys=True)
                 yield name, make_version("mcp", name, readers, path, body, Origin.SETTINGS, key=name,
@@ -696,11 +716,13 @@ def scan_plugins(home: Path, cfg: Config) -> dict[str, dict[str, list[Plugin]]]:
 def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
     """Read the user settings (all kinds, or the ones named) and count the files kept in step by package updates."""
     locked = skills.locked(home)
-    groups = []
-    for kind in kinds or KINDS:
+    groups, problems = [], []
+    kinds = tuple(kinds or KINDS)
+    configured_mcp, mcp_originals = mcp_settings(home, cfg.agents, problems) if "mcp" in kinds else ({}, {})
+    for kind in kinds:
         entry = KINDS[kind]
         by_name: dict[tuple[str, str], list[Version]] = {}
-        for name, version in entry.scan(home, cfg, locked):
+        for name, version in entry.scan(home, cfg, configured_mcp if kind == "mcp" else locked):
             by_name.setdefault((name, version.id if version.scoped_rule else ""), []).append(version)
         groups.extend(Group(kind, name, versions, ()) for (name, _), versions in sorted(by_name.items()))
     pair_similar(groups)
@@ -711,7 +733,7 @@ def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
         group.confirmed = {name: frozenset(lines) for name, lines in (kept or {}).items()
                            if isinstance(lines, list) and all(isinstance(line, str) for line in lines)}
     managed = Counter(meta.get("source") or "Unknown package" for meta in locked.values())
-    plugin_endpoints: dict[str, set[str]] = {}
+    plugin_endpoints: dict[inventory.Endpoint, set[str]] = {}
     for group in groups:
         for version in group.versions:
             if fixed(version) and (identity := inventory.endpoint(json.loads(version.body))):
@@ -723,8 +745,6 @@ def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
     installers |= {str(meta.get("source") or "").rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
                    for meta in locked.values()}
     installers.discard("")
-    configured_mcp = {tool: mcp.read(home, tool) for tool in cfg.agents} if any(
-        group.kind == "mcp" for group in groups) else {}
     for group in groups:
         have = group_tools(group)
         if group.kind == "mcp":
@@ -733,7 +753,8 @@ def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
                 have.update(plugin_endpoints.get(inventory.endpoint(json.loads(version.body)), ()))
         location = KINDS[group.kind].location
         if not group.scoped_rule:
-            group.missing = tuple(tool for tool in cfg.agents if tool not in have and location(home, group.name, tool))
+            group.missing = tuple(tool for tool in cfg.agents if tool not in have and location(home, group.name, tool)
+                                  and (group.kind != "mcp" or tool in configured_mcp))
         if group.kind == "rule" and len(have) == 1 and not group.missing:
             group.status = "local"
             group.note = ("This rule stays in the tool that defines when it applies." if group.scoped_rule
@@ -746,7 +767,7 @@ def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
         count = sum(path.is_file() for path in home.glob(pattern)) if pattern else 0
         if count:
             managed[f"{TOOLS[tool].name} agents"] = count
-    return Scan(groups, scan_plugins(home, cfg), dict(sorted(managed.items())))
+    return Scan(groups, scan_plugins(home, cfg), dict(sorted(managed.items())), problems, mcp_originals)
 
 
 def preferred(versions: list[Version], source: str) -> Version:

@@ -109,3 +109,40 @@ def test_antigravity_and_gemini_plugin_skills_count_in_duplicate_checks(tmp_path
     assert duplicates.doubled(tmp_path, views, native, "notes", native / "notes", readers=("antigravity",)) == [
         "antigravity"]
     assert duplicates.doubled(tmp_path, views, shared, "notes", shared / "notes", readers=("gemini",)) == ["gemini"]
+
+
+def test_a_switched_off_codex_copy_requires_coverage(tmp_path):
+    claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    native = tmp_path / ".codex/skills"
+    make_skill(claude, "notes", "same skill")
+    make_skill(shared, "notes", "same skill")
+    codex_config(tmp_path, f'[[skills.config]]\npath = "{shared}/notes/SKILL.md"\nenabled = false\n')
+    readers = ("codex",)
+    assert duplicates.elsewhere(tmp_path, duplicates.views(tmp_path, enabled=readers), shared, "notes",
+                                claude / "notes", readers=readers) == []
+
+    make_skill(native, "notes", "same skill")
+    assert duplicates.elsewhere(tmp_path, duplicates.views(tmp_path, enabled=readers), shared, "notes",
+                                claude / "notes", readers=readers) == ["Codex: ~/.codex/skills"]
+
+    readers = ("codex", "gemini")
+    assert duplicates.elsewhere(tmp_path, duplicates.views(tmp_path, enabled=readers), shared, "notes",
+                                claude / "notes", readers=readers) == []
+
+
+def test_skill_pair_for_pending_plugin_replacement_is_reported_once_as_info(tmp_path):
+    from agent_sync import pending, plugins
+    from tests.test_plugins import NEW, OLD, old_plugin, own_plugin
+
+    old_plugin(tmp_path)
+    own_plugin(tmp_path)
+    codex_config(tmp_path, f'[plugins."{OLD}"]\nenabled = true\n[plugins."{NEW}"]\nenabled = true\n')
+    state = tmp_path / "state"
+    warn, = duplicates.report(tmp_path, enabled=("codex",))
+    assert "loads netlify-functions more than once" in warn and not warn.startswith("info")
+    with pending.during(state, [], lambda *_: None, False) as run:
+        plugins.own_versions(tmp_path, False, lambda *_: None, state_dir=state)
+        assert f"plugin:codex:{OLD}" in run.questions()
+        message, = duplicates.report(tmp_path, enabled=("codex",))
+        assert message.startswith("info  ")
+        assert "netlify-functions" in message and "waiting for your approval" in message

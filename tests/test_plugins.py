@@ -191,12 +191,37 @@ def test_a_codex_app_with_another_name_counts_when_it_has_half_the_skills(tmp_pa
 def test_a_replacement_that_lacks_a_command_or_hooks_is_not_taken(tmp_path):
     root = old_plugin(tmp_path)
     write(root, "commands/deploy.md", "deploy")
-    write(root, "hooks/hooks.json", "{}")
+    write(root, "hooks/hooks.json", {"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "start"}]}]}})
     own_plugin(tmp_path)
     logs = []
     plugins.own_versions(tmp_path, False, lambda *line: logs.append(line), state_dir=tmp_path / "state",
                          run=lambda _: pytest.fail("would remove a plugin"))
-    assert "lacks 2 of its commands, agents or hooks (command deploy, hooks)" in logs[0][1]
+    assert "lacks 2 of its commands, agents or hooks (command deploy, hook SessionStart)" in logs[0][1]
+
+
+def test_switch_requires_every_individual_hook_even_for_the_same_event_and_matcher(tmp_path):
+    root = old_plugin(tmp_path)
+    new = own_plugin(tmp_path)
+    hooks = [{"type": "command", "command": "first"}, {"type": "command", "command": "second"}]
+    write(root, "hooks/hooks.json", {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": hooks}]}})
+    manifest = ".codex-plugin/plugin.json"
+    metadata = json.loads((new / manifest).read_text())
+    write(new, manifest, {**metadata, "hooks": ["./hooks/custom.json"]})
+    write(new, "hooks/custom.json", {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": hooks[:1]}]}})
+    logs = []
+
+    def switch():
+        plugins.own_versions(tmp_path, False, lambda *line: logs.append(line), state_dir=tmp_path / "state",
+                             run=lambda _: pytest.fail("would remove a plugin"))
+
+    with pending.during(tmp_path / "state", [], lambda *line: logs.append(line), False) as run:
+        switch()
+        assert list(run.questions()) == []
+        assert "lacks one of its commands, agents or hooks" in logs[-1][1]
+        assert "PreToolUse" in logs[-1][1]
+        write(new, "hooks/custom.json", {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": hooks}]}})
+        switch()
+        assert list(run.questions()) == [f"plugin:codex:{OLD}"]
 
 
 def test_twice_says_once_that_a_pending_removal_waits_for_approval(tmp_path):

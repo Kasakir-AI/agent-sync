@@ -394,7 +394,8 @@ def apply(home: Path, steps: list[Step], backup_dir: Path | None = None) -> list
     return apply_edits(home, edits(steps), backup_dir)
 
 
-def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None) -> list[str]:
+def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None, *,
+                check: Callable[[], None] | None = None) -> list[str]:
     """Stage every file, back up the originals, then rename each into place; raises Raced, before renaming any, when
     one no longer holds what the edits were planned from."""
     staged: list[tuple[Edit, Path]] = []
@@ -419,6 +420,8 @@ def apply_edits(home: Path, changes: list[Edit], backup_dir: Path | None = None)
         for edit, _ in staged:
             if current(edit.path) != edit.before:
                 raise Raced(edit.path)
+        if check is not None:
+            check()
         for edit, temp in staged:
             temp.replace(edit.path)
     finally:
@@ -460,12 +463,19 @@ def repair(home: Path, cfg: Config, dry: bool = False) -> list[str]:
                               f"{tool_names(best.tools)}'s version ({review.first_version(best, older)})")
     steps = [step for step in plan(home, scan_now, choices, cfg.source) if step.action == "replace"]
     if not steps:
-        return []
+        return scan_now.problems
     if dry:
-        return [f"would update {shown(home, step.path)} ({why[step.key]})" for step in steps]
-    if not apply(home, steps):
-        return []
-    return [f"updated {shown(home, step.path)} ({why[step.key]})" for step in steps]
+        return scan_now.problems + [f"would update {shown(home, step.path)} ({why[step.key]})" for step in steps]
+
+    def check() -> None:
+        for path, (target, before) in scan_now.mcp_originals.items():
+            if path.resolve() != target or read_bytes(target) != before:
+                raise Raced(path)
+
+    check()
+    if not apply_edits(home, edits(steps), check=check):
+        return scan_now.problems
+    return scan_now.problems + [f"updated {shown(home, step.path)} ({why[step.key]})" for step in steps]
 
 
 def repair_mcp(home: Path, cfg: Config, dry: bool = False) -> list[str]:

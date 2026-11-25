@@ -125,6 +125,7 @@ def apply(home: Path, dry: bool, cfg: Config, run: pending.Run) -> list[str]:
             elif writes.update_text(path, change, new_mode=0o600, empty="" if tool == "codex" else "{}"):
                 lines.append(f"{'created' if created else 'updated'} {path.relative_to(home)}")
         except writes.Raced as raced:
+            pending.incomplete()
             lines.append(f"WARN  {raced}")
         except (OSError, ValueError) as error:
             lines.append(f"FAIL  {TOOLS[tool].name} status line: {error}")

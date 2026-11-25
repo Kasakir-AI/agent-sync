@@ -18,10 +18,11 @@ import os
 import tomllib
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import combinations
 from pathlib import Path
 
-from . import inventory, skills
-from .registry import DEFAULT_AGENTS, TOOLS
+from . import inventory, pending, skills
+from .registry import DEFAULT_AGENTS, TOOLS, inside
 
 SHOWN = 8                # names listed in a report line
 
@@ -31,6 +32,7 @@ class Seen:
     name: str    # as the tool matches it: the SKILL.md name after the last colon, in lower case
     where: str   # the place it comes from, in words
     path: Path   # the skill's folder
+    plugin_id: str = ""
 
 
 def skill_name(d: Path) -> str:
@@ -49,16 +51,19 @@ def skill_name(d: Path) -> str:
     return name.rsplit(":", 1)[-1].lower()
 
 
-def walk(root: Path) -> list[Path]:
+def walk(root: Path, *, within: Path | None = None) -> list[Path]:
     """Every skill folder under `root`, through links, skipping hidden folders and not looking inside a skill."""
     out, seen, todo = [], set(), [root]
     while todo:
         d = todo.pop()
+        if within is not None and not inside(within, d):
+            continue
         real = os.path.realpath(d)
         if real in seen or not d.is_dir():
             continue
         seen.add(real)
-        if d != root and (d / "SKILL.md").is_file():
+        definition = d / "SKILL.md"
+        if d != root and (within is None or inside(within, definition)) and definition.is_file():
             out.append(d)
             continue
         try:
@@ -124,7 +129,7 @@ def views(home: Path, *, enabled=DEFAULT_AGENTS) -> dict[str, list[Seen]]:
     loaded = inventory.plugins(home, (*enabled, "claude") if "cursor" in enabled else enabled)
 
     def plugin_skills(tool: str) -> list[Seen]:
-        return [Seen(skill_name(d), f"{TOOLS[tool].name} plugin {p.id.removesuffix('@local')}", d)
+        return [Seen(skill_name(d), f"{TOOLS[tool].name} plugin {p.id.removesuffix('@local')}", d, p.id)
                 for p in loaded.get(tool, []) for d in p.skill_dirs]
 
     claude = [Seen(skill_name(d), claude_where(home, d, locked), d) for d in walk(home / ".claude/skills")]
@@ -182,24 +187,25 @@ def within(path: Path, folder: str) -> bool:
 
 def elsewhere(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, src: Path, *,
               readers: tuple[str, ...] | None = None, off: set[str] | None = None) -> list[str]:
-    """Where each tool that reads `target` already gets the skill in `src` (the same SKILL.md) from a place
-    other than target/name, or that it switched that copy off. Empty when some reader would have it only there.
+    """Where each tool reads an identical skill elsewhere, or deliberately disabled the copy a second tool reads.
+    Empty when a reader would lose its only identical copy.
     `off`: Codex's switched-off skill folders, read once by the caller."""
     if readers is None:
         readers = tuple(tool for tool, folder in skills.folders(home).items() if folder == target)
     mine = os.path.realpath(target / name)
-    want = (src / "SKILL.md").read_bytes()
+    want = skills.tree_digest(src)
+    name = skill_name(src)
+    switched_off = off if off is not None else codex_off(codex_config(home))
     places = []
     for tool in readers:
-        if tool == "codex" and mine in (codex_off(codex_config(home)) if off is None else off):
+        hit = next((s for s in seen.get(tool, []) if not within(s.path, mine) and s.name == name
+                    and (s.path / "SKILL.md").is_file() and skills.tree_digest(s.path) == want), None)
+        if hit:
+            places.append(f"{TOOLS[tool].name}: {hit.where}")
+        elif tool == "codex" and mine in switched_off and len(readers) > 1:
             places.append("Codex: switched off there")
-            continue
-        hits = [s.where for s in seen.get(tool, []) if not within(s.path, mine)
-                and s.name == skill_name(src) and (s.path / "SKILL.md").is_file()
-                and (s.path / "SKILL.md").read_bytes() == want]
-        if not hits:
+        else:
             return []
-        places.append(f"{TOOLS[tool].name}: {hits[0]}")
     return places
 
 
@@ -225,20 +231,33 @@ def doubled(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, sr
 def report(home: Path, allow: list[str] | None = None, *, enabled=DEFAULT_AGENTS) -> list[str]:
     """One line per tool and pair of places that give it the same skills, naming the skills."""
     allowed = {a.lower() for a in allow or []}
+    run = pending.current.get()
+    pairs = run.plugin_pairs if run is not None else set()
     lines = []
     for tool, seen in views(home, enabled=enabled).items():
         by_name: dict[str, list[Seen]] = defaultdict(list)
         for s in seen:
             by_name[s.name].append(s)
-        groups: dict[tuple[str, ...], list[str]] = defaultdict(list)
+        groups: dict[tuple[bool, tuple[str, ...]], list[str]] = defaultdict(list)
         for name, found in sorted(by_name.items()):
-            if len(found) > 1 and name not in allowed:
-                groups[tuple(sorted({s.where for s in found}))].append(name)
-        for places, names in sorted(groups.items()):
+            if len(found) <= 1 or name in allowed:
+                continue
+            related = {(a, b) for a, b in combinations(found, 2)
+                       if (tool, frozenset((a.plugin_id, b.plugin_id))) in pairs}
+            if not related:
+                groups[False, tuple(sorted({s.where for s in found}))].append(name)
+                continue
+            for waiting, places in {(pair in related, tuple(sorted({s.where for s in pair})))
+                                    for pair in combinations(found, 2)}:
+                groups[waiting, places].append(name)
+        for (waiting, places), names in sorted(groups.items()):
             where = "; ".join(places) if len(places) > 1 else f"{places[0]}, twice"
+            head = "info  " if waiting else ""
+            tail = " (waiting for your approval)" if waiting else ""
             if len(names) == 1:
-                lines.append(f"{TOOLS[tool].name} loads {names[0]} more than once, from {where}")
+                lines.append(f"{head}{TOOLS[tool].name} loads {names[0]} more than once, from {where}{tail}")
                 continue
             shown = ", ".join(names[:SHOWN]) + (f" and {len(names) - SHOWN} others" if len(names) > SHOWN else "")
-            lines.append(f"{TOOLS[tool].name} loads {len(names)} skills more than once, from {where}: {shown}")
+            lines.append(f"{head}{TOOLS[tool].name} loads {len(names)} skills more than once, from {where}: "
+                         f"{shown}{tail}")
     return lines

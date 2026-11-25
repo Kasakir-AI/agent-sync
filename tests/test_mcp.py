@@ -7,6 +7,33 @@ from agent_sync import backups, mcp, pending
 from tests.test_pending import approve_current
 
 
+@pytest.mark.parametrize(("tool", "filename", "body"), [
+    ("cursor", ".cursor/mcp.json", "[]"),
+    ("gemini", ".gemini/settings.json", '{"mcpServers": [1]}'),
+    ("antigravity", ".gemini/config/mcp_config.json", '{"mcpServers": []}'),
+    ("codex", ".codex/config.toml", 'mcp_servers = "unexpected"'),
+])
+def test_malformed_mcp_target_warns_and_other_settings_still_mirror(tmp_path, tool, filename, body):
+    from tests.test_inventory import write
+
+    write(tmp_path, ".claude.json", {"mcpServers": {"docs": {"url": "https://docs.example/mcp"}}})
+    broken = write(tmp_path, filename, body)
+    healthy = "codex" if tool == "cursor" else "cursor"
+    changes = mcp.mirror(tmp_path, "claude", enabled=("claude", tool, healthy))
+    assert any(line.startswith(f"WARN  MCP servers in {broken}:") for line in changes)
+    assert mcp.read(tmp_path, healthy) == {"docs": {"url": "https://docs.example/mcp"}}
+    assert broken.read_text() == body
+
+
+def test_malformed_mcp_source_warns_without_creating_target(tmp_path):
+    from tests.test_inventory import write
+
+    broken = write(tmp_path, ".claude.json", "[]")
+    warning, = mcp.mirror(tmp_path, "claude", enabled=("claude", "codex"))
+    assert warning.startswith(f"WARN  MCP servers in {broken}:")
+    assert not (tmp_path / ".codex/config.toml").exists()
+
+
 def test_missing_servers_are_added_and_existing_ones_left_alone(tmp_path):
     (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {
         "files": {"type": "stdio", "command": "npx", "args": ["-y", "files-mcp@1.0.0"], "env": {"ROOT": "/tmp"}},
@@ -150,6 +177,24 @@ def test_mirror_skips_both_plugin_name_and_endpoint(tmp_path):
     assert mcp.read(tmp_path, "codex") == {"new": {"url": "https://new.example"}}
 
 
+def test_mirror_considers_every_provider_of_a_name_and_preserves_argument_boundaries(tmp_path):
+    from tests.test_inventory import write
+
+    write(tmp_path, ".cursor/plugins/local/first/mcp.json", {
+        "shared": {"url": "https://first.example"},
+        "tool": {"command": "run", "args": ["a b"]},
+    })
+    write(tmp_path, ".cursor/plugins/local/second/mcp.json", {"shared": {"url": "https://second.example"}})
+    distinct = {"command": "run", "args": ["a", "b"]}
+    write(tmp_path, ".claude.json", {"mcpServers": {
+        "alias": {"url": "https://first.example"}, "distinct": distinct,
+        "shared": {"url": "https://second.example"},
+    }})
+    lines = mcp.mirror(tmp_path, "claude", enabled=("claude", "cursor"))
+    assert len(lines) == 2 and lines[0].startswith("WARN  MCP server shared not added")
+    assert mcp.read(tmp_path, "cursor") == {"distinct": distinct}
+
+
 def test_same_server_twice_warns_without_writing(tmp_path):
     from tests.test_inventory import write
 
@@ -211,6 +256,29 @@ def test_pins_change_only_selected_toml_and_json_strings(tmp_path):
     assert (saved / ".cursor/mcp.json").read_bytes() == json_before.encode()
     assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest, released=released) == []
     assert list(root.iterdir()) == [saved]
+
+
+def test_pin_updates_package_flag_only_and_skips_only_equivalent_plugin_endpoint(tmp_path):
+    from tests.test_inventory import write
+
+    old, new = "--package=pack@1.0.0", "--package=pack@1.1.0"
+    write(tmp_path, ".cursor/plugins/local/pack/mcp.json", {
+        "same": {"command": "npx", "args": ["--package=pack@1.0.1", "start", "a b", old]},
+    })
+    same = ["--package=pack@1.0.0", "start", "a b", old]
+    different = [old, "start", "a", "b", old]
+    write(tmp_path, ".cursor/mcp.json", {"mcpServers": {
+        "same": {"command": "npx", "args": same},
+        "different": {"command": "npx", "args": different},
+    }})
+    toml = write(tmp_path, ".codex/config.toml", f'[mcp_servers.pack]\ncommand = "npx"\nargs = ["{old}", "start"]\n')
+    lines = mcp.pins(tmp_path, False, enabled=("cursor", "codex"), keep=[], latest=lambda _: "1.1.0",
+                     released=lambda _: {"1.1.0": "2020-01-01T00:00:00Z"})
+    assert len(lines) == 2
+    servers = mcp.read(tmp_path, "cursor")
+    assert servers["same"]["args"] == same
+    assert servers["different"]["args"] == [new, "start", "a", "b", old]
+    assert tomllib.loads(toml.read_text())["mcp_servers"]["pack"]["args"] == [new, "start"]
 
 
 def test_shared_settings_use_plugins_from_every_reader(tmp_path, monkeypatch):

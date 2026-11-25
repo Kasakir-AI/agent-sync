@@ -81,7 +81,11 @@ def test_endpoint_normalizes_raw_urls_and_exact_npm_versions():
     assert inventory.endpoint({"serverUrl": "https://example.com/mcp/"}) == "https://example.com/mcp"
     assert inventory.endpoint({"httpUrl": "https://example.com/mcp/"}) == "https://example.com/mcp"
     assert inventory.endpoint({"command": "npx", "args": ["-y", "@org/pkg@1.2.3-beta.1", "mcp"]}) == (
-        "npx -y @org/pkg mcp")
+        inventory.endpoint({"command": "npx", "args": ["-y", "@org/pkg", "mcp"]}))
+    assert inventory.endpoint({"command": "npx", "args": ["pkg", "arg@1.2.3"]}) != (
+        inventory.endpoint({"command": "npx", "args": ["pkg", "arg@2.0.0"]}))
+    assert inventory.endpoint({"command": "run", "args": ["arg@1.2.3"]}) != (
+        inventory.endpoint({"command": "run", "args": ["arg@2.0.0"]}))
 
 
 def test_inventory_command_is_read_only(tmp_path, monkeypatch, capsys):
@@ -138,3 +142,37 @@ def test_a_broken_mcp_or_app_file_skips_that_file_not_the_plugin(tmp_path):
     make_skill(root / "skills", "kept")
     plugin, = inventory.plugins(tmp_path, ("codex",))["codex"]
     assert plugin.skill_names == {"kept"} and [name for name, _ in plugin.servers] == ["good"]
+
+
+def test_default_mcp_symlinks_must_stay_inside_plugin(tmp_path):
+    root = codex_plugin(tmp_path, "pack@remote", "1.0.0", remote=True)
+    outside = write(tmp_path, "outside.json", {"external": {"url": "https://external.example"}})
+    local = write(root, "servers.json", {"local": {"url": "https://local.example"}})
+    (root / ".mcp.json").symlink_to(outside)
+    (root / "mcp.json").symlink_to(local)
+    plugin, = inventory.plugins(tmp_path, ("codex",))["codex"]
+    assert plugin.servers == (("local", {"url": "https://local.example"}),)
+
+
+def test_inventory_only_loads_skill_directories_and_files_inside_plugin(tmp_path):
+    root = codex_plugin(tmp_path, "pack@remote", "1.0.0", remote=True)
+    make_skill(tmp_path / "outside", "unrelated")
+    make_skill(root / "skills", "kept")
+    (root / "skills/linked-dir").symlink_to(tmp_path / "outside/unrelated", target_is_directory=True)
+    linked = root / "skills/linked-file"
+    linked.mkdir()
+    (linked / "SKILL.md").symlink_to(tmp_path / "outside/unrelated/SKILL.md")
+    plugin, = inventory.plugins(tmp_path, ("codex",))["codex"]
+    assert plugin.skill_names == {"kept"}
+
+
+def test_gemini_enablement_matches_literal_path_characters(tmp_path):
+    home = tmp_path / "home[1]?"
+    for name in ("off", "on"):
+        write(home, f".gemini/extensions/{name}/gemini-extension.json", {"name": name})
+    write(home, ".gemini/extensions/extension-enablement.json", {
+        "off": {"overrides": [f"!{home}/*"]},
+        "on": {"overrides": [f"!{tmp_path}/home?/*"]},
+    })
+    loaded = inventory.plugins(home, ("gemini",))["gemini"]
+    assert [plugin.name for plugin in loaded] == ["on"]
