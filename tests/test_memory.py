@@ -127,9 +127,7 @@ def test_private_notes_are_removed_from_the_copy_and_indexes(tmp_path):
     secret = "ghp_" + "A1" * 18
     index = INDEX + "".join(f"- [{name}](./{name}.md) index detail\n" for name in notes)
     (source / "MEMORY.md").write_text(index)
-    dest.mkdir(parents=True)
-    (dest / ".agent-sync").touch()
-    (dest / "secret.md").write_text(notes["secret"])
+    memory.mirror(tmp_path, False, enabled=TOOLS)
     (source / "secret.md").write_text(secret + "\n")
     settings = {"enabled": TOOLS, "private_memory": ["Display name"],
                 "share_memory": ["shared", "secret", "configured", "marked"]}
@@ -321,3 +319,101 @@ def test_macos_memory_window_retries_after_dismissal(memory_upkeep, monkeypatch)
     assert main(["run", "--force"]) == 0
     assert len(calls) == 2
     assert all('buttons {"Don\'t share", "Share"}' in args[2] for args, _ in calls)
+
+
+@pytest.mark.parametrize("marker", ["", "[]", '{"files":{"workspace.md":"bad"}}'])
+def test_malformed_manifest_owns_no_notes_even_if_bytes_match(tmp_path, marker):
+    import json
+
+    source, _, dest = setup(tmp_path)
+    dest.mkdir(parents=True)
+    (dest / memory.MARKER).write_text(marker)
+    note = dest / "workspace.md"
+    note.write_bytes((source / note.name).read_bytes())
+    lines = memory.mirror(tmp_path, False, enabled=TOOLS)
+    assert any(line.startswith("WARN") and "manifest" in line for line in lines)
+    assert note.name not in json.loads((dest / memory.MARKER).read_text())["files"]
+    (source / note.name).write_text("Updated source\n")
+    memory.mirror(tmp_path, False, enabled=TOOLS)
+    assert note.read_text() == "Prefer local worktrees.\n"
+
+
+def test_a_byte_identical_note_in_a_valid_manifest_folder_is_never_claimed(tmp_path):
+    import json
+
+    source, _, dest = setup(tmp_path)
+    dest.mkdir(parents=True)
+    (dest / memory.MARKER).write_text('{"files":{}}')
+    note = dest / "workspace.md"
+    note.write_bytes((source / note.name).read_bytes())
+    memory.mirror(tmp_path, False, enabled=TOOLS)
+    assert note.name not in json.loads((dest / memory.MARKER).read_text())["files"]
+
+
+def test_removing_claudes_memory_folder_clears_and_backs_up_the_managed_index(tmp_path):
+    source, files, _ = setup(tmp_path)
+    codex = files["codex"]
+    codex.parent.mkdir()
+    codex.write_text("My own instructions.\n\n")
+    memory.mirror(tmp_path, False, enabled=TOOLS)
+    before = codex.read_bytes()
+    for note in source.iterdir():
+        note.unlink()
+    source.rmdir()
+
+    with backups.during(tmp_path, tmp_path / "backups") as run:
+        memory.mirror(tmp_path, False, enabled=TOOLS)
+    assert codex.read_text() == "My own instructions.\n\n"
+    assert (run.folder / ".codex/AGENTS.md").read_bytes() == before
+
+
+@pytest.mark.parametrize("removed_at_source", [False, True])
+def test_managed_memory_symlink_is_left_alone_during_updates_and_removals(tmp_path, removed_at_source):
+    source, _, dest = setup(tmp_path)
+    memory.mirror(tmp_path, False, enabled=TOOLS)
+    note = dest / "workspace.md"
+    unrelated = tmp_path / "outside.md"
+    unrelated.write_bytes(note.read_bytes())
+    state = tmp_path / "state"
+    if removed_at_source:
+        (source / note.name).unlink()
+        with pending.during(state, [], lambda *_: None, False):
+            memory.mirror(tmp_path, False, enabled=TOOLS)
+        approve_current(state)
+    else:
+        (source / note.name).write_text("New source\n")
+    note.unlink()
+    note.symlink_to(unrelated)
+    with pending.during(state, [], lambda *_: None, False):
+        lines = memory.mirror(tmp_path, False, enabled=TOOLS)
+    assert note.is_symlink() and unrelated.read_text() == "Prefer local worktrees.\n"
+    assert any(line.startswith("WARN") and "symlink" in line for line in lines)
+
+
+@pytest.mark.parametrize("when", ["before_read", "during_stage"])
+def test_memory_preserves_an_edit_arriving_before_each_write_attempt(tmp_path, monkeypatch, when):
+    from agent_sync import writes
+
+    source, _, dest = setup(tmp_path)
+    memory.mirror(tmp_path, False, enabled=TOOLS)
+    note = dest / "workspace.md"
+    (source / note.name).write_text("New source\n")
+    update, stage = writes.update, writes.stage
+
+    def edit_before_read(path, *args, **kwargs):
+        if path == note:
+            note.write_text("Concurrent edit\n")
+        return update(path, *args, **kwargs)
+
+    def edit_during_stage(path, *args):
+        if path == note.resolve():
+            note.write_text("Concurrent edit\n")
+        return stage(path, *args)
+
+    if when == "before_read":
+        monkeypatch.setattr(writes, "update", edit_before_read)
+    else:
+        monkeypatch.setattr(writes, "stage", edit_during_stage)
+    lines = memory.mirror(tmp_path, False, enabled=TOOLS)
+    assert note.read_text() == "Concurrent edit\n"
+    assert any(line.startswith("WARN") and "changed while" in line for line in lines)

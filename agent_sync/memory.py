@@ -11,7 +11,7 @@ from . import backups, pending, writes
 from .config import Config
 from .instructions import MEMORY_END, MEMORY_START, files, rendered, split_front
 from .privacy import secret_rows, secret_values, sensitive
-from .registry import TOOLS, grouped_paths
+from .registry import TOOLS, grouped_paths, inside
 
 MARKER = ".agent-sync"
 CHOICE = "memory-sharing"
@@ -34,21 +34,19 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def manifest(marker: Path, dest: Path) -> dict[str, str]:
-    """The files agent-sync copied into the memory folder, with the digest of what it wrote. An older release left
-    the marker empty and owned every note in the folder, so those notes count as its copies once."""
+def manifest(marker: Path) -> dict[str, str] | None:
+    """The note digests agent-sync wrote, or None for a malformed manifest."""
     try:
-        text = marker.read_text()
-    except OSError:
+        files = json.loads(marker.read_text()).get("files")
+    except FileNotFoundError:
         return {}
-    try:
-        files = json.loads(text).get("files") if text.strip() else None
     except (ValueError, AttributeError):
-        files = None
-    if isinstance(files, dict):
-        return {name: value for name, value in files.items() if isinstance(name, str) and isinstance(value, str)}
-    return {path.name: digest(path.read_bytes()) for path in dest.glob("*.md")
-            if path.is_file() and not path.is_symlink()}
+        return None
+    if not isinstance(files, dict) or any(Path(name).name != name or not name.endswith(".md")
+                                         or not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                                         for name, value in files.items()):
+        return None
+    return files
 
 
 def note_privacy(filename: str, text: str, private_memory=(), share_memory=()) -> tuple[str, list[str], list[str]]:
@@ -99,18 +97,18 @@ def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()
     claude = files(home, ("claude",))["claude"]
     source = notes(home)
     if not locations or not any(tool != "claude" for tool in locations):
-        return []
-    if not source.is_dir():
+        pending.incomplete()
         return []
 
     dest = home / ".agents/memory"
     marker = dest / MARKER
     exists = dest.exists()
-    if (dest.is_symlink() or not dest.resolve().is_relative_to(home.resolve())
+    if (dest.is_symlink() or not inside(home, dest)
             or (exists and (marker.is_symlink() or not marker.is_file()))):
-        return [f"WARN  {dest} is not an agent-sync-owned memory folder"]
-    if not exists and not dry:
-        dest.mkdir(mode=0o700, parents=True)
+        pending.incomplete()
+        messages = [f"WARN  {dest} is not an agent-sync-owned memory folder"]
+        return messages if source.is_dir() else messages + mirror_index(locations, claude, "", dry)
+    resolved_dest = dest.resolve()
 
     messages = []
     action = "would update" if dry else "updated"
@@ -138,56 +136,98 @@ def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()
                              and not any(unquote(target) in private_notes for target in LINK_TARGET.findall(line)))
         source_files["MEMORY.md"] = index_text.encode()
 
-    owned = manifest(marker, dest)
+    owned = manifest(marker)
+    malformed = owned is None
+    if malformed:
+        messages.append(f"WARN  malformed memory manifest {marker}; existing notes are treated as unowned")
+        owned = {}
     written = dict(owned)
 
-    def mine(path: Path) -> bool:
-        """agent-sync wrote this file and nobody changed it since."""
-        return path.name in owned and path.is_file() and digest(path.read_bytes()) == owned[path.name]
+    def check_dest() -> None:
+        if dest.is_symlink() or dest.resolve() != resolved_dest:
+            raise writes.Raced(dest)
+
+    def skip_link(path: Path) -> bool:
+        if not path.is_symlink():
+            return False
+        messages.append(f"WARN  skipped symlink {path}")
+        pending.incomplete()
+        return True
 
     copied = False
     for name, data in source_files.items():
         path = dest / name
-        if not path.is_symlink() and path.is_file() and path.read_bytes() == data:
-            written[name] = digest(data)
+        if skip_link(path):
             continue
-        if path.exists() or path.is_symlink():
+        before = writes.read_bytes(path) if path.is_file() else None
+        if before == data:
+            continue
+        expected = digest(before) if before is not None else None
+        key = f"memory:{name}"
+        if before is not None or path.exists():
             if name not in owned:
                 messages.append(f"WARN  {path} is not a copy agent-sync made; left alone")
                 continue
-            key = f"memory:{name}"
-            if not mine(path) and (not pending.due(key, f"your edits to memory copy {path} (Claude Code's note "
-                                                         "changed; its new text replaces them)") or dry):
+            if expected != owned[name] and (not pending.due(key, f"your edits to memory copy {path} (Claude Code's "
+                                                                 "note changed; its new text replaces them)") or dry):
                 continue
+        if not dry:
+            def replace(current: bytes | None, expected=expected, path=path, data=data) -> bytes:
+                if (digest(current) if current is not None else None) != expected:
+                    raise writes.Raced(path)
+                return data
+
+            try:
+                check_dest()
+                dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+                writes.update(path, replace, check=check_dest, new_mode=0o600, follow_symlinks=False)
+            except writes.Raced as raced:
+                messages.append(f"WARN  {raced}")
+                pending.incomplete()
+                continue
+            written[name] = digest(data)
             pending.removed(key)
         copied = True
-        if not dry:
-            writes.update(path, lambda _, data=data: data, new_mode=0o600)
-            written[name] = digest(data)
     for path in sorted(dest.glob("*.md")):
-        if path.name in source_files or path.name not in owned or not (path.is_symlink() or path.is_file()):
+        if path.name in source_files or path.name not in owned or skip_link(path) or not path.is_file():
             continue                                        # a file agent-sync did not write is never touched
+        before = path.read_bytes()
         key = f"memory:{path.name}"
-        if path.name in private_notes and mine(path):
-            messages.append(f"{'would remove' if dry else 'removed'} {path}: the note is private now (backed up)")
-            if not dry:
-                backups.save(path)
-                path.unlink()
-                written.pop(path.name, None)
+        private = path.name in private_notes
+        edited = digest(before) != owned[path.name]
+        reason = "the note is private now" if private else "no longer in Claude Code's memory"
+        if (not private or edited) and not pending.due(
+                key, f"memory copy {path} ({reason}{'; you edited this copy' if edited else ''})"):
             continue
-        reason = "the note is private now" if path.name in private_notes else "no longer in Claude Code's memory"
-        edited = "" if mine(path) else "; you edited this copy"
-        if pending.due(key, f"memory copy {path} ({reason}{edited})") and not dry:
+        if not dry:
+            check_dest()
             backups.save(path)
+            check_dest()
+            if skip_link(path) or writes.read_bytes(path) != before:
+                messages.append(f"WARN  {writes.Raced(path)}")
+                pending.incomplete()
+                continue
             path.unlink()
             written.pop(path.name, None)
             pending.removed(key)
+        if private and not edited:
+            messages.append(f"{'would remove' if dry else 'removed'} {path}: the note is private now (backed up)")
+        elif not dry:
             copied = True
-    if copied or not exists:
+    written = {name: value for name, value in written.items()
+               if (dest / name).exists() or (dest / name).is_symlink()}
+    if copied:
         messages.append(f"{action} memory copy ({len(source_files)} files)")
-    if not dry and (written != owned or not marker.is_file() or not marker.read_text().strip()):
-        writes.update_text(marker, lambda _: json.dumps({"files": dict(sorted(written.items()))}, indent=2) + "\n")
+    if not dry and (written != owned or malformed):
+        data = (json.dumps({"files": dict(sorted(written.items()))}, indent=2) + "\n").encode()
+        check_dest()
+        writes.update(marker, lambda _: data, check=check_dest, new_mode=0o600, follow_symlinks=False)
 
+    return messages + mirror_index(locations, claude, index_text, dry)
+
+
+def mirror_index(locations: dict[str, Path], claude: Path, index_text: str, dry: bool) -> list[str]:
+    messages = []
     index_text = LINK.sub(r"\1~/.agents/memory/\2", index_text).strip("\r\n")
     section = "\n".join([MEMORY_START, "## Memory (kept by Claude Code)", GUIDANCE, index_text,
                          MEMORY_END]) + "\n" if index_text.strip() else ""
@@ -212,10 +252,16 @@ def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()
                 current = path.read_text() if path.exists() else ""
                 changed = change(current) != current
             else:
-                changed = writes.update_text(path, change)
+                def plan(data: bytes | None) -> bytes | None:
+                    if data is None and not section:
+                        return None
+                    return change((data or b"").decode()).encode()
+
+                changed = writes.update(path, plan)
         except writes.Raced as raced:
             messages.append(f"WARN  {raced}")
+            pending.incomplete()
             continue
         if changed:
-            messages.append(f"{action} memory index in {path}")
+            messages.append(f"{'would update' if dry else 'updated'} memory index in {path}")
     return messages
