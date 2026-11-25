@@ -279,7 +279,7 @@ def _mirror_snapshot(home: Path, src: Path, groups: dict[Path, tuple[str, ...]],
     for path, rows in hidden.items():
         name = names[path]
         previous_hidden = (set(line_list(last_hidden.get(name))) if isinstance(last_hidden, dict)
-                           else set(rows))
+                           and name in last_hidden else set(rows))
         active_moves = Counter(line_list(last_moves.get(name))) & rows
         new_hidden = Counter({token: count for token, count in rows.items() if token not in previous_hidden})
         available = active_moves | new_hidden
@@ -344,7 +344,8 @@ def _mirror_snapshot(home: Path, src: Path, groups: dict[Path, tuple[str, ...]],
                         donor.append(line)
                         restore[line] -= 1
                 bodies[src] = update_body(bodies[src], {}, {}, {src: set(deleted)}, {src: "\n".join(donor)}, set())
-                visible[src] = keys(shared_body(bodies[src]))
+                public[src] = shared_body(bodies[src])
+                visible[src] = keys(public[src])
                 present[src] = set(visible[src])
                 counts[src] = Counter(visible[src])
             else:

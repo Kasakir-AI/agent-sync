@@ -612,3 +612,30 @@ def test_clearing_an_existing_source_requires_approval_for_its_last_shared_line(
     files["codex"].write_text("Run pytest.\n")
     instructions.mirror(tmp_path, "claude", baselines=baselines)
     assert files["claude"].read_text() == "Run pytest.\n"
+
+
+def test_a_newly_enabled_file_with_a_local_copy_still_gets_the_shared_rule(tmp_path):
+    setup(tmp_path, "Run pytest.\n", "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    gemini = instructions.files(tmp_path, ("gemini",))["gemini"]
+    gemini.parent.mkdir()
+    gemini.write_text("<!-- agent-sync: local -->\nRun pytest.\n<!-- agent-sync: end local -->\n")
+    instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
+    assert "Run pytest." in instructions.shared_body(gemini.read_text())
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS) == []
+
+
+def test_a_kept_deletion_reaches_a_file_seeded_in_the_same_run(tmp_path):
+    files = setup(tmp_path, "Stay concise.\nAlways archive artifacts.\n", "")
+    state = tmp_path / "state"
+    baselines = state / "baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["claude"].write_text("Stay concise.\n")
+    with pending.during(state, [], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
+    key, = pending.load(state)
+    gemini = instructions.files(tmp_path, ("gemini",))["gemini"]
+    with pending.during(state, [key], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
+    assert "Always archive artifacts." in instructions.shared_body(gemini.read_text())
