@@ -543,9 +543,10 @@ def test_single_source_deletion_holds_all_instruction_changes_until_decided(tmp_
         assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
 
 
+@pytest.mark.parametrize("baseline", ["current", "from-0.8"])
 @pytest.mark.parametrize("tool", ["claude", "codex"])
 @pytest.mark.parametrize("section", ["local", "private", "memory"])
-def test_existing_hidden_copy_does_not_mask_shared_deletion(tmp_path, tool, section):
+def test_existing_hidden_copy_does_not_mask_shared_deletion(tmp_path, tool, section, baseline):
     line = "Use the cf CLI."
     shared = f"Be brief.\n{line}\n"
     hidden = f"<!-- agent-sync: {section} -->\n{line}\n<!-- agent-sync: end {section} -->\n"
@@ -553,6 +554,10 @@ def test_existing_hidden_copy_does_not_mask_shared_deletion(tmp_path, tool, sect
                   hidden if tool == "codex" else "")
     baselines = tmp_path / "state/baselines.json"
     instructions.mirror(tmp_path, "claude", baselines=baselines)
+    if baseline == "from-0.8":     # 0.8 recorded no hidden-section lines
+        stored = json.loads(baselines.read_text())
+        stored[instructions.KEY].pop("hidden")
+        baselines.write_text(json.dumps(stored))
     files[tool].write_text("Be brief.\n" + hidden)
     for _ in range(2):
         with pending.during(baselines.parent, [], lambda *_: None, False):

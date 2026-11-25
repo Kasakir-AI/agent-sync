@@ -271,14 +271,15 @@ def _mirror_snapshot(home: Path, src: Path, groups: dict[Path, tuple[str, ...]],
     present = {path: set(rows) for path, rows in counts.items()}
     tracked_counts = synced_counts | Counter(dict.fromkeys(tracked, 1))
     hidden = {path: hidden_lines(body) for path, body in bodies.items()}
-    last_hidden = entry.get("hidden") or {}
+    last_hidden = entry.get("hidden")   # none before 0.9: every hidden line counts as already there
     last_moves = entry.get("moved") or {}
     moves = {path: Counter() for path in groups}
     missing_counts = {}
     moved = {path: Counter() for path in groups}
     for path, rows in hidden.items():
         name = names[path]
-        previous_hidden = set(line_list(last_hidden.get(name)))
+        previous_hidden = (set(line_list(last_hidden.get(name))) if isinstance(last_hidden, dict)
+                           else set(rows))
         active_moves = Counter(line_list(last_moves.get(name))) & rows
         new_hidden = Counter({token: count for token, count in rows.items() if token not in previous_hidden})
         available = active_moves | new_hidden
