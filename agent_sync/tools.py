@@ -7,13 +7,13 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, field
 from functools import cache
 from importlib import metadata
 from pathlib import Path
 
-from . import __version__, backups, mcp
+from . import __version__, backups, mcp, upgrades
 from .registry import DEFAULT_AGENTS, TOOLS, Tool, inside
+from .upgrades import UpdateState
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[─-◿]")
 # Where the CLIs usually live, added after your own PATH (a schedule starts with a bare PATH).
@@ -169,13 +169,6 @@ def update_skills(log, dry: bool, cli: str, *, home: Path, enabled=DEFAULT_AGENT
     act(log, dry, label, [*command, "update", "-g", "-y", *names])
 
 
-@dataclass
-class UpdateState:
-    brew_updated: bool = False
-    npm_outdated: set[str] | None = None
-    npm_upgraded: set[str] = field(default_factory=set)
-
-
 GLOBAL_MANAGERS = ("npm", "pipx", "uv", "homebrew")
 
 
@@ -186,27 +179,19 @@ def global_managers(setting: bool | list[str]) -> tuple[str, ...]:
 
 
 def update_global_tools(log, cfg, dry: bool, *, state: UpdateState) -> None:
+    """Each package the selected managers installed, within the upgrade guard (see upgrades.py)."""
     for manager in global_managers(cfg.update_global_tools):
         cmd = "brew" if manager == "homebrew" else manager
         if not shutil.which(cmd, path=PATH):
             continue
-        label = f"global {manager} tools"
-        if manager == "npm":
-            if dry:
-                act(log, dry, label, ["npm", "outdated", "-g", "--json"])
-                continue
-            for package in sorted(outdated_npm(state) - state.npm_upgraded):
-                upgrade_npm(log, dry, package, state, label=f"{label} ({package})")
-        elif manager == "homebrew":
+        if manager == "homebrew":
             prefix = Path(os.path.realpath(shutil.which("brew", path=PATH))).parents[1]
             if not brew_writable(prefix):
                 log("skip", f"Homebrew in {prefix} belongs to another account; update its tools from that account")
                 continue
             refresh_brew(log, dry, state)
-            act(log, dry, label, ["brew", "upgrade"])
-        else:
-            args = ["pipx", "upgrade-all"] if manager == "pipx" else ["uv", "tool", "upgrade", "--all"]
-            act(log, dry, label, args)
+        for name in sorted(upgrades.installed(state, manager)):
+            upgrades.upgrade(log, dry, state, manager, name, majors=cfg.global_major_updates, why="global tool")
 
 
 def refresh_brew(log, dry: bool, state: UpdateState, *, quiet: bool = False) -> None:
@@ -227,18 +212,6 @@ def json_object(text: str) -> dict:
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def outdated_npm(state: UpdateState) -> set[str]:
-    if state.npm_outdated is None:
-        state.npm_outdated = set(json_object(raw(["npm", "outdated", "-g", "--json"], ok_codes=(0, 1))))
-    return state.npm_outdated
-
-
-def upgrade_npm(log, dry: bool, package: str, state: UpdateState, *, label: str = "") -> None:
-    if package not in state.npm_upgraded and act(
-            log, dry, label or f"{package} upgrade (npm)", ["npm", "install", "-g", f"{package}@latest"]):
-        state.npm_upgraded.add(package)
 
 
 def update_clis(log, cfg, dry: bool = False, *, state: UpdateState | None = None) -> None:
@@ -283,22 +256,21 @@ def update_clis(log, cfg, dry: bool = False, *, state: UpdateState | None = None
 PREREQUISITES = ("git", "node")
 
 
-def update_prerequisites(log, dry: bool = False, *, state: UpdateState | None = None) -> None:
-    """Update Homebrew git and Node, and npm if installed as a global package."""
+def update_prerequisites(log, dry: bool = False, *, state: UpdateState | None = None, majors: bool = False) -> None:
+    """Update Homebrew git and Node, and npm if installed as a global package, all within the upgrade guard: a new
+    major version (Node 25 -> 26) waits for your approval."""
     state = state or UpdateState()
     brew = shutil.which("brew", path=PATH)
     if brew:
         prefix = Path(os.path.realpath(brew)).parents[1]
         if brew_writable(prefix):
             refresh_brew(log, dry, state, quiet=True)
-            outdated = set(raw(["brew", "outdated", "--formula", "--quiet"], timeout=300).split())
             for formula in PREREQUISITES:
-                if formula in outdated:
-                    act(log, dry, f"{formula} upgrade (Homebrew)", ["brew", "upgrade", "--formula", formula])
+                upgrades.upgrade(log, dry, state, "homebrew", formula, majors=majors)
         else:
             log("skip", f"git and Node come from Homebrew in {prefix}, which another account owns; update them there")
-    if shutil.which("npm", path=PATH) and "npm" in outdated_npm(state):
-        upgrade_npm(log, dry, "npm", state)
+    if shutil.which("npm", path=PATH):
+        upgrades.upgrade(log, dry, state, "npm", "npm", majors=majors)
 
 
 # Interpreters and runners an MCP server starts its code with: updating one (`brew upgrade python@3.13`) is not the
@@ -364,24 +336,18 @@ def standalone_folder(home: Path, executable: Path, real: Path) -> Path | None:
 
 
 def update_mcp_programs(log, cfg, dry: bool, *, state: UpdateState | None = None) -> None:
-    """Update the programs enabled agents' stdio servers run: a Homebrew, npm, pipx or uv package when it is
-    outdated, or a program listed in `program_updates` with its own command. A dry run runs nothing."""
+    """Update the programs enabled agents' stdio servers run: a Homebrew, npm, pipx or uv package within the upgrade
+    guard, or a program listed in `program_updates` with its own command. A dry run runs nothing."""
     state = state or UpdateState()
     pipx = (Path(os.environ.get("PIPX_HOME") or cfg.home / ".local/pipx") / "venvs").resolve()
     uv = (cfg.home / ".local/share/uv/tools").resolve()
 
     @cache
     def npm_root() -> Path | None:
-        if dry or not shutil.which("npm", path=PATH):
+        if not shutil.which("npm", path=PATH):
             return None
         root = raw(["npm", "root", "-g"]).strip()
         return Path(os.path.realpath(root)) if root else None
-
-    @cache
-    def brew_outdated(kind: str) -> dict[str, str]:
-        greedy = ["--greedy"] if kind == "cask" else []
-        names = raw(["brew", "outdated", f"--{kind}", *greedy, "--quiet"], timeout=300).split()
-        return {name.rsplit("/", 1)[-1]: name for name in names}
 
     package_resolvers = (
         brew_package,
@@ -415,21 +381,10 @@ def update_mcp_programs(log, cfg, dry: bool, *, state: UpdateState | None = None
             log("skip", f"{cmd.name} comes from Homebrew in {prefix}, which another account owns; "
                         "update it from that account")
             continue
-        if dry:
-            log("dry", f"would update {package} ({'Homebrew' if prefix else kind}) if it is outdated, "
-                       f"for MCP server {name}")
-            continue
         if prefix:
             refresh_brew(log, dry, state, quiet=True)
-            if full_name := brew_outdated(kind).get(package):
-                act(log, dry, f"{package} upgrade (Homebrew, for MCP server {name})",
-                    ["brew", "upgrade", f"--{kind}", full_name])
-        elif kind == "npm":
-            if package in outdated_npm(state):
-                upgrade_npm(log, dry, package, state)
-        else:
-            upgrade = ["uv", "tool", "upgrade"] if kind == "uv" else ["pipx", "upgrade"]
-            act(log, dry, f"{package} upgrade ({kind}, for MCP server {name})", [*upgrade, package])
+        upgrades.upgrade(log, dry, state, "homebrew" if prefix else kind, package,
+                         majors=cfg.global_major_updates, why=f"for MCP server {name}")
 
 
 def how_installed(prefix: str | None = None) -> tuple[str, str]:

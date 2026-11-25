@@ -44,6 +44,11 @@ share.
 - **Skills** from every source are updated (`skills update`), not only the packages in `skill_packages`.
 - **MCP server programs** are upgraded the way they were installed (Homebrew, npm, pipx or uv). A program with its
   own updater runs it when you list it in `program_updates`.
+- **Upgrades stay in the installed major version.** MCP programs, global tools, git, Node and npm move to the
+  newest release in the major version you have, once that release is at least 2 days old. A newer major version
+  can include breaking changes, so upkeep asks you first (see [Approve removals](#approve-removals));
+  `global_major_updates` installs it without asking, still after 2 days. Homebrew has no 2-day wait, because
+  Homebrew reviews a release before publishing it. A pipx tool installed from a URL or a folder is left alone.
 - **CLIs** are updated through Homebrew when it installed them or through their own update commands. Gemini CLI
   uses npm outside Homebrew. Antigravity uses `agy update`. Upkeep also upgrades git and Node when Homebrew
   installed them, and npm when it is installed globally. `update_global_tools` (off by default) also updates your
@@ -130,9 +135,12 @@ and Git origin before deleting a folder. Warning acknowledgements and Inbox noti
 
 A run never removes something you or another program installed until you approve it. This covers an MCP settings
 entry that a plugin already brings, a Codex plugin replaced by Codex's own version, a skill a package dropped, an
-edited skill or memory copy, a deletion from your source instructions, and replacing your own status line.
+edited skill or memory copy, a deletion from your source instructions, and replacing your own status line. A run
+also never installs a new major version of a program it upgrades (`upgrade:<manager>:<package>@<major>`) until you
+approve it. Keeping that key stays on your major version until an even newer one comes out; keeping
+`upgrade:<manager>:<package>` stays on it for good.
 
-- **Scheduled run (macOS):** a window lists what is waiting. Select what may go and click **Remove selected**, or
+- **Scheduled run (macOS):** a window lists what is waiting. Select what may go ahead and click **Approve selected**, or
   click **Keep all for now**. Anything you don't select is asked about again at the next run.
 - **Terminal and the Desktop launcher:** the run asks yes or no for each item. The default is no.
 - **Plannotator Inbox:** when Plannotator is installed, each run with something new posts to the Inbox thread
@@ -293,6 +301,7 @@ and change what you need. Every key is optional:
 | `update_mcp_programs` | `true` | upgrade the programs MCP servers run (Homebrew, npm, pipx, uv) |
 | `[program_updates]` | none | a program's own update command, e.g. `plannotator = ["plannotator", "update"]` |
 | `update_global_tools` | `false` | also update global npm, pipx and uv tools (`true`), or a list that may include `"homebrew"` |
+| `global_major_updates` | `false` | install a new major version of an MCP program, a global tool, git, Node or npm without asking (still after 2 days) |
 | `notify` | `true` | ask for approvals and show warnings in a macOS window and the Plannotator Inbox |
 | `backup_days` | `30` | how long you keep backup folders |
 | `backup_max_mb` | `500` | total backup size limit in MiB |

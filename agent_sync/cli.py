@@ -262,9 +262,9 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
         guarded(log, "model roles", mirror_roles)
     if cfg.mirror_mcp:
         def mcp_versions() -> None:
-            npm = mcp.NpmLookup()
             log.lines(mcp.pins(home, dry, enabled=enabled, keep=cfg.keep_mcp_versions,
-                               latest=npm.latest, released=npm.released, major=cfg.mcp_major_updates))
+                               latest=updates.npm.latest, released=updates.npm.released,
+                               major=cfg.mcp_major_updates))
 
         failed = log.problems
         guarded(log, "MCP repair", lambda: log.lines(writes.repair_mcp(home, cfg, dry)))
@@ -293,7 +293,8 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
     guarded(log, "global tools", lambda: tools.update_global_tools(log, cfg, dry, state=updates))
     if cfg.update_clis:
         guarded(log, "CLI updates", lambda: tools.update_clis(log, cfg, dry, state=updates))
-        guarded(log, "git and Node", lambda: tools.update_prerequisites(log, dry, state=updates))
+        guarded(log, "git and Node",
+                lambda: tools.update_prerequisites(log, dry, state=updates, majors=cfg.global_major_updates))
     guarded(log, "extra steps", lambda: tools.extra_steps(log, cfg.extra_steps, dry))
     if cfg.update_self:
         def update_self() -> None:

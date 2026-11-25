@@ -32,6 +32,7 @@ status_line = true      # one status line in Claude Code, Cursor CLI and Antigra
 update_plugins = true   # update plugins and extensions for the enabled agents
 update_mcp_programs = true   # upgrade the programs MCP servers run (Homebrew, npm, pipx, uv)
 update_global_tools = false  # also update global npm, pipx and uv tools (true), or a list that may add "homebrew"
+global_major_updates = false # install a new major version of a program upkeep upgrades without asking
 keep_mcp_versions = []  # MCP servers whose pinned package version stays, e.g. ["rea"]
 mcp_major_updates = false    # let a pinned MCP package move to a new major version
 keep_installed = []     # items upkeep never removes or replaces, by key or name (see `agent-sync pending`)

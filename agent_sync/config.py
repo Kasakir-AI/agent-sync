@@ -48,6 +48,7 @@ class Config:
     warn_models: list[str] = field(default_factory=list)     # warn when a model name containing one of these appears
     update_clis: bool | list[str] = True                     # true, false, or a list like ["claude", "codex"]
     update_global_tools: bool | list[str] = False
+    global_major_updates: bool = False                       # install a new major version of a tool without asking
     update_plugins: bool = True                              # plugins and extensions for enabled agents
     update_mcp_programs: bool = True                          # executables used by enabled agents' MCP servers
     program_updates: dict[str, list[str]] = field(default_factory=dict)  # MCP program -> its own update command
@@ -88,7 +89,8 @@ KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skil
         "allow_duplicate_skills",
         "mirror_instructions", "mirror_memory", "private_memory", "share_memory", "warn_models", "keep_mcp_versions",
         "status_line", "keep_installed",
-        "update_clis", "update_global_tools", "update_plugins", "update_mcp_programs", "cli_commands",
+        "update_clis", "update_global_tools", "global_major_updates", "update_plugins", "update_mcp_programs",
+        "cli_commands",
         "install_commands", "extra_steps", "launcher", "update_self", "notify", "log_days", "backup_days",
         "backup_max_mb")
 
@@ -145,8 +147,9 @@ def parse(text: str, path: Path, home: Path) -> Config:
         names = getattr(cfg, key)
         if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
             raise ValueError(f"{key} must be a list of memory note names")
-    if not isinstance(cfg.mcp_major_updates, bool):
-        raise ValueError("mcp_major_updates must be true or false")
+    for key in ("mcp_major_updates", "global_major_updates"):
+        if not isinstance(getattr(cfg, key), bool):
+            raise ValueError(f"{key} must be true or false")
     for section, allowed in (("cli_commands", registry.TOOLS), ("install_commands", INSTALL_ITEMS),
                              ("program_updates", None), ("agent_notes", None)):
         entries = table(getattr(cfg, section), section, allowed)

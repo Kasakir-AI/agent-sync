@@ -1,19 +1,58 @@
 import json
+from datetime import UTC, datetime
 from stat import S_IMODE
 from types import SimpleNamespace
 
 import pytest
 
-from agent_sync import backups, cli, tools
+from agent_sync import backups, cli, pending, tools
 from agent_sync.config import Config, parse
 
 SKILLS_UPDATE = ["npx", "-y", "--prefer-online", "skills@latest", "update", "-g", "-y"]
 SKILLS_CHECK = (*SKILLS_UPDATE[:4], "check", "-g")
 BREW_UPDATE = ["brew", "update", "-q"]
-BREW_FORMULAE = ("brew", "outdated", "--formula", "--quiet")
 BREW_CASKS = ("brew", "outdated", "--cask", "--greedy", "--quiet")
+BREW_JSON = ("brew", "outdated", "--json=v2")
 NPM_ROOT = ("npm", "root", "-g")
 NPM_OUTDATED = ("npm", "outdated", "-g", "--json")
+PIPX_LIST = ("pipx", "list", "--json")
+UV_LIST = ("uv", "tool", "list")
+SETTLED = "2020-01-01T00:00:00.000Z"
+
+
+def npm_releases(output, packages):
+    """Fake npm's answers: {package: (installed, {release: when, ...})}; the last release is the latest."""
+    report = {}
+    for name, (installed, releases) in packages.items():
+        report[name] = {"current": installed, "latest": list(releases)[-1]}
+        output[("npm", "view", name, "time", "--json")] = json.dumps(releases)
+        for major in {version.split(".")[0] for version in [installed, *releases]}:
+            output[("npm", "view", f"{name}@^{major}", "version", "--json")] = json.dumps(
+                [version for version in releases if version.split(".")[0] == major])
+    output[NPM_OUTDATED] = json.dumps(report)
+
+
+def brew_outdated(formulae=(), casks=()):
+    """Fake `brew outdated --json=v2`: (name, installed, current) per formula and cask."""
+    return json.dumps({section: [{"name": name, "installed_versions": [installed], "current_version": current,
+                                  "pinned": False} for name, installed, current in entries]
+                       for section, entries in (("formulae", formulae), ("casks", casks))})
+
+
+def pipx_list(**tools_installed):
+    return json.dumps({"venvs": {name: {"metadata": {"main_package": {
+        "package": name, "package_version": version, "package_or_url": name}}}
+        for name, version in tools_installed.items()}})
+
+
+@pytest.fixture
+def pypi(monkeypatch):
+    """Fake PyPI: releases[name] = {version: upload time}."""
+    from agent_sync import upgrades
+
+    releases = {}
+    monkeypatch.setattr(upgrades, "pypi_releases", lambda name: releases.get(name, {}))
+    return releases
 
 
 def write(home, path, content):
@@ -285,13 +324,13 @@ def test_mcp_brew_uses_package_identity_and_outdated_listings(tmp_path, commands
     program(tmp_path, "cask-mcp", "brew/Caskroom/cask-mcp/1/cask-mcp")
     servers(tmp_path, safari="mcp-safari", helper="mcp-helper", current="current")
     servers(tmp_path, ".cursor/mcp.json", other="mcp-safari", cask="cask-mcp")
-    commands.output[BREW_FORMULAE] = "team/tap/mcp-safari-server\nunrelated\n"
-    commands.output[BREW_CASKS] = "cask-mcp\n"
+    commands.output[BREW_JSON] = brew_outdated([("team/tap/mcp-safari-server", "0.3.2", "0.3.3"),
+                                                ("unrelated", "1.0", "1.1")], [("cask-mcp", "1", "1.1")])
     tools.update_mcp_programs(commands.log, Config(home=tmp_path), False)
-    assert commands.read == [BREW_FORMULAE, BREW_CASKS]
+    assert commands.read == [BREW_JSON]
     assert commands.ran == [BREW_UPDATE, ["brew", "upgrade", "--formula", "team/tap/mcp-safari-server"],
                             ["brew", "upgrade", "--cask", "cask-mcp"]]
-    assert ("ran", "mcp-safari-server upgrade (Homebrew, for MCP server safari)") in commands.lines
+    assert ("ran", "mcp-safari-server 0.3.2 -> 0.3.3 (Homebrew, for MCP server safari)") in commands.lines
 
 
 def test_mcp_brew_skips_another_accounts_install(tmp_path, monkeypatch, commands):
@@ -313,7 +352,8 @@ def test_mcp_program_updates_report_non_object_settings(tmp_path, commands):
 
 @pytest.mark.parametrize("dry", [False, True])
 @pytest.mark.parametrize("custom_pipx_home", [False, True])
-def test_mcp_resolves_npm_pipx_uv_and_listed_own_updaters(tmp_path, monkeypatch, commands, dry, custom_pipx_home):
+def test_mcp_resolves_npm_pipx_uv_and_listed_own_updaters(tmp_path, monkeypatch, commands, pypi, dry,
+                                                          custom_pipx_home):
     pipx = "pipx-other" if custom_pipx_home else ".local/pipx"
     if custom_pipx_home:
         monkeypatch.setenv("PIPX_HOME", str(tmp_path / pipx))
@@ -328,23 +368,25 @@ def test_mcp_resolves_npm_pipx_uv_and_listed_own_updaters(tmp_path, monkeypatch,
     (tmp_path / "bin/alias").symlink_to(own)
     servers(tmp_path, one="one", two="two", current="current", pipx="pix", uv="tool-uv", own="plannotator",
             repeated="alias", standalone="standalone")
-    commands.output.update({
-        NPM_ROOT: str(tmp_path / "global") + "\n",
-        NPM_OUTDATED: json.dumps({"one": {}, "@org/two": {}}),
-    })
+    commands.output[NPM_ROOT] = str(tmp_path / "global") + "\n"
+    npm_releases(commands.output, {"one": ("1.0.0", {"1.0.0": SETTLED, "1.1.0": SETTLED}),
+                                   "@org/two": ("2.0.0", {"2.0.0": SETTLED, "2.0.1": SETTLED})})
+    commands.output[PIPX_LIST] = pipx_list(**{"pix-package": "3.0.0"})
+    commands.output[UV_LIST] = "tool-uv-package v0.4.0\n- tool-uv\n"
+    pypi.update({"pix-package": {"3.0.0": SETTLED, "3.1.0": SETTLED},
+                 "tool-uv-package": {"0.4.0": SETTLED, "0.5.0": SETTLED}})
     cfg = Config(home=tmp_path, program_updates={"plannotator": ["plannotator", "update"]})
     tools.update_mcp_programs(commands.log, cfg, dry)
-    if dry:                                            # a dry run runs nothing, not even a lookup
-        assert commands.read == commands.ran == []
-        assert ("dry", "would run: plannotator update  (plannotator update (MCP server own))") in commands.lines
-        assert any("would update pix-package (pipx)" in message for _, message in commands.lines)
+    upgrades = [["npm", "install", "-g", "one@1.1.0"], ["npm", "install", "-g", "@org/two@2.0.1"],
+                ["pipx", "install", "--force", "pix-package==3.1.0"],
+                ["uv", "tool", "install", "--force", "tool-uv-package==0.5.0"], ["plannotator", "update"]]
+    assert not any(read[-1] == "--help" for read in commands.read)   # no program is probed with --help
+    if dry:                                            # a dry run looks versions up and runs nothing
+        assert commands.ran == []
+        assert [message.split("  ")[0] for kind, message in commands.lines if kind == "dry"] == [
+            f"would run: {' '.join(args)}" for args in upgrades]
         return
-    assert commands.read == [NPM_ROOT, NPM_OUTDATED]   # no program is probed with --help
-    assert commands.ran == [
-        ["npm", "install", "-g", "one@latest"], ["npm", "install", "-g", "@org/two@latest"],
-        ["pipx", "upgrade", "pix-package"], ["uv", "tool", "upgrade", "tool-uv-package"],
-        ["plannotator", "update"],
-    ]
+    assert commands.ran == upgrades
 
 
 def test_mcp_ignores_runners_agent_clis_apps_and_disabled_agents(tmp_path, commands):
@@ -366,13 +408,17 @@ def test_npm_outdated_reads_json_when_npm_exits_one(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "PATH", str(tmp_path / "bin"))
     monkeypatch.setattr(tools, "sh", lambda args, timeout: ran.append(args) or (0, ""))
 
+    answers = {NPM_OUTDATED: (1, '{"npm": {"current": "11.0.0", "latest": "11.1.0"}}'),
+               ("npm", "view", "npm@^11", "version", "--json"): (0, '["11.0.0", "11.1.0"]'),
+               ("npm", "view", "npm", "time", "--json"): (0, json.dumps({"11.1.0": SETTLED}))}
+
     def subprocess_run(args, **kwargs):
-        assert tuple(args) == NPM_OUTDATED
-        return SimpleNamespace(returncode=1, stdout='{"npm": {"current": "11.0.0", "latest": "11.1.0"}}')
+        code, stdout = answers[tuple(args)]
+        return SimpleNamespace(returncode=code, stdout=stdout)
 
     monkeypatch.setattr(tools.subprocess, "run", subprocess_run)
     tools.update_prerequisites(lambda *_: None)
-    assert ran == [["npm", "install", "-g", "npm@latest"]]
+    assert ran == [["npm", "install", "-g", "npm@11.1.0"]]
 
 
 def test_run_shares_brew_refresh_and_updates_npm_after_node(tmp_path, monkeypatch, commands):
@@ -388,10 +434,12 @@ def test_run_shares_brew_refresh_and_updates_npm_after_node(tmp_path, monkeypatc
     monkeypatch.setattr(cli, "online", lambda: True)
     monkeypatch.setattr(tools, "how_installed", lambda: ("homebrew", str(brew.resolve().parents[1])))
     commands.output.update({
-        BREW_FORMULAE: "mcp-safari-server\ngit\nnode\n",
+        BREW_JSON: brew_outdated([("mcp-safari-server", "1", "1.1"), ("git", "2.50", "2.51"),
+                                  ("node", "25.1", "25.2")]),
         NPM_ROOT: str(tmp_path / "global"),
-        NPM_OUTDATED: '{"npm": {}, "npm-mcp": {}}',
     })
+    npm_releases(commands.output, {"npm": ("11.0.0", {"11.0.0": SETTLED, "11.1.0": SETTLED}),
+                                   "npm-mcp": ("1.0.0", {"1.0.0": SETTLED, "1.1.0": SETTLED})})
     commands.responses[("brew", "outdated", "--cask", "--greedy", "cursor-cli")] = (1, "cursor-cli")
     commands.responses[("brew", "outdated", "--formula", "agent-sync")] = (1, "agent-sync")
     assert cli.run(force=True, echo=False, dry=True) == 0
@@ -403,8 +451,8 @@ def test_run_shares_brew_refresh_and_updates_npm_after_node(tmp_path, monkeypatc
         assert commands.ran.count(BREW_UPDATE) == 1
         assert commands.read.count(NPM_OUTDATED) == 1
         upgrades = [args[-1] for args in commands.ran if args[1:2] in (["upgrade"], ["install"])]
-        assert upgrades == ["mcp-safari-server", "npm-mcp@latest", "cursor-cli", "git", "node",
-                            "npm@latest", "agent-sync"]
+        assert upgrades == ["mcp-safari-server", "npm-mcp@1.1.0", "cursor-cli", "git", "node",
+                            "npm@11.1.0", "agent-sync"]
 
 
 def test_run_can_disable_mcp_program_updates(tmp_path, monkeypatch, commands):
@@ -421,29 +469,35 @@ def test_run_can_disable_mcp_program_updates(tmp_path, monkeypatch, commands):
     assert SKILLS_UPDATE not in commands.ran
 
 
+NPM_ONE = ["npm", "install", "-g", "one@1.1.0"]
+PIPX_PIX = ["pipx", "install", "--force", "pix==2.1.0"]
+UV_TUV = ["uv", "tool", "install", "--force", "tuv==0.3.0"]
+BREW_WGET = ["brew", "upgrade", "--formula", "wget"]
+
+
 @pytest.mark.parametrize(("setting", "dry", "expected"), [
     (False, False, []),
-    (True, False, [["npm", "install", "-g", "one@latest"], ["pipx", "upgrade-all"],
-                   ["uv", "tool", "upgrade", "--all"]]),
-    (["homebrew"], False, [BREW_UPDATE, ["brew", "upgrade"]]),
+    (True, False, [NPM_ONE, PIPX_PIX, UV_TUV]),
+    (["homebrew"], False, [BREW_UPDATE, BREW_WGET]),
     (["homebrew", "npm", "pipx", "uv"], True, []),
 ])
-def test_global_tools_update_only_selected_managers(tmp_path, commands, setting, dry, expected):
+def test_global_tools_update_only_selected_managers(tmp_path, commands, pypi, setting, dry, expected):
     for manager in ("npm", "pipx", "uv", "brew"):
         program(tmp_path, manager)
-    commands.output[NPM_OUTDATED] = '{"one": {}, "already-updated": {}}'
-    state = tools.UpdateState(npm_upgraded={"already-updated"})
+    npm_releases(commands.output, {"one": ("1.0.0", {"1.0.0": SETTLED, "1.1.0": SETTLED}),
+                                   "already-updated": ("1.0.0", {"1.0.0": SETTLED, "1.1.0": SETTLED})})
+    commands.output.update({PIPX_LIST: pipx_list(pix="2.0.0"), UV_LIST: "tuv v0.2.0\n- tuv\n",
+                            BREW_JSON: brew_outdated([("wget", "1.24", "1.25")])})
+    pypi.update({"pix": {"2.0.0": SETTLED, "2.1.0": SETTLED}, "tuv": {"0.2.0": SETTLED, "0.3.0": SETTLED}})
+    state = tools.UpdateState(handled={("npm", "already-updated")})
     cfg = Config(home=tmp_path, update_global_tools=setting)
     tools.update_global_tools(commands.log, cfg, dry, state=state)
     assert commands.ran == expected
-    assert commands.read == ([NPM_OUTDATED] if setting is True else [])
-    if dry:
+    if dry:                                     # it looks versions up and says what a real run would install
         assert [message for kind, message in commands.lines if kind == "dry"] == [
-            "would run: npm outdated -g --json  (global npm tools)",
-            "would run: pipx upgrade-all  (global pipx tools)",
-            "would run: uv tool upgrade --all  (global uv tools)",
-            "would run: brew upgrade  (global homebrew tools)",
-        ]
+            f"would run: {' '.join(args)}  ({label} global tool))" for args, label in (
+                (NPM_ONE, "one 1.0.0 -> 1.1.0 (npm,"), (PIPX_PIX, "pix 2.0.0 -> 2.1.0 (pipx,"),
+                (UV_TUV, "tuv 0.2.0 -> 0.3.0 (uv,"), (BREW_WGET, "wget 1.24 -> 1.25 (Homebrew,"))]
 
 
 def test_global_tools_run_between_mcp_and_clis_and_reuse_manager_state(tmp_path, monkeypatch, commands):
@@ -454,19 +508,21 @@ def test_global_tools_run_between_mcp_and_clis_and_reuse_manager_state(tmp_path,
     program(tmp_path, "claude")
     servers(tmp_path, npm="mcp-npm", brew="mcp-brew")
     commands.output.update({NPM_ROOT: str(tmp_path / "global"),
-                            NPM_OUTDATED: '{"mcp-npm": {}, "npm": {}}',
-                            BREW_FORMULAE: "mcp-brew\n"})
+                            BREW_JSON: brew_outdated([("mcp-brew", "1", "1.1"), ("wget", "1.24", "1.25")])})
+    npm_releases(commands.output, {"mcp-npm": ("1.0.0", {"1.0.0": SETTLED, "1.1.0": SETTLED}),
+                                   "npm": ("11.0.0", {"11.0.0": SETTLED, "11.1.0": SETTLED})})
     cfg = Config(home=tmp_path, agents=["claude"], skill_packages=[], update_plugins=False, update_self=False,
                  update_global_tools=["npm", "homebrew"])
     monkeypatch.setattr(cli, "load", lambda: cfg)
     monkeypatch.setattr(cli, "online", lambda: True)
     assert cli.run(force=True, echo=False) == 0
-    assert commands.ran.count(BREW_UPDATE) == commands.read.count(NPM_OUTDATED) == 1
+    assert commands.ran.count(BREW_UPDATE) == 1
+    assert commands.read.count(NPM_OUTDATED) == commands.read.count(BREW_JSON) == 1
     assert [args for args in commands.ran if args[:2] in (
         ["npm", "install"], ["brew", "upgrade"], ["claude", "update"]
     )] == [
-        ["npm", "install", "-g", "mcp-npm@latest"], ["brew", "upgrade", "--formula", "mcp-brew"],
-        ["npm", "install", "-g", "npm@latest"], ["brew", "upgrade"], ["claude", "update"],
+        ["npm", "install", "-g", "mcp-npm@1.1.0"], ["brew", "upgrade", "--formula", "mcp-brew"],
+        ["npm", "install", "-g", "npm@11.1.0"], BREW_WGET, ["claude", "update"],
     ]
 
 
@@ -481,7 +537,8 @@ def test_mcp_programs_never_update_interpreters_or_switched_off_servers(tmp_path
     data = json.loads((tmp_path / ".claude.json").read_text())
     data["mcpServers"]["disabled"]["disabled"] = True
     (tmp_path / ".claude.json").write_text(json.dumps(data))
-    commands.output[BREW_FORMULAE] = "python@3.13\njava\nruby\nbash\noff\ndisabled\n"
+    commands.output[BREW_JSON] = brew_outdated([(name, "1", "1.1") for name in
+                                                ("python@3.13", "java", "ruby", "bash", "off", "disabled")])
     tools.update_mcp_programs(commands.log, Config(home=tmp_path), False)
     assert commands.read == commands.ran == []
 
@@ -554,3 +611,176 @@ def test_standalone_updater_backs_up_its_install_folder(tmp_path, monkeypatch, c
     assert (run.folder / support.relative_to(tmp_path)).read_text() == "before"
     assert (run.folder / real.relative_to(tmp_path)).is_file()
     assert not (run.folder / unrelated.relative_to(tmp_path)).exists()
+
+
+# ---------- the upgrade guard: same major after 2 days, a new major only after approval ----------
+
+FRESH = datetime.now(UTC).isoformat()
+WRANGLER_5 = "upgrade:npm:wrangler@5"
+ASK_5 = "upgrade wrangler 4.1.0 -> 5.0.0 (a new major version, which can include breaking changes)"
+
+
+def global_npm(tmp_path, commands, releases, *, keep=(), majors=False, dry=False):
+    """One global npm tool, wrangler 4.1.0, with these releases; returns the questions the run asks."""
+    program(tmp_path, "npm")
+    npm_releases(commands.output, {"wrangler": ("4.1.0", releases)})
+    cfg = Config(home=tmp_path, update_global_tools=["npm"], global_major_updates=majors)
+    with pending.during(cfg.state_dir, list(keep), commands.log, dry) as run:
+        tools.update_global_tools(commands.log, cfg, dry, state=tools.UpdateState())
+    return run.questions()
+
+
+@pytest.mark.parametrize(("released", "installs", "waits"), [
+    (SETTLED, True, None),
+    (FRESH, False, "it is under 2 days old"),
+    (None, False, "its release time could not be looked up"),
+])
+def test_same_major_release_installs_once_it_is_two_days_old(tmp_path, commands, released, installs, waits):
+    assert global_npm(tmp_path, commands, {"4.1.0": SETTLED, "4.3.0": released}) == {}
+    assert commands.ran == ([["npm", "install", "-g", "wrangler@4.3.0"]] if installs else [])
+    if waits:
+        assert ("info", f"wrangler 4.3.0 (npm) waits: {waits}") in commands.lines
+
+
+def test_new_major_is_asked_about_and_only_the_same_major_installs(tmp_path, commands):
+    questions = global_npm(tmp_path, commands, {"4.1.0": SETTLED, "4.3.0": SETTLED, "5.0.0": SETTLED})
+    assert questions == {WRANGLER_5: ASK_5}
+    assert commands.ran == [["npm", "install", "-g", "wrangler@4.3.0"]]
+    assert ("WARN", f"approval required to {ASK_5}") in commands.lines
+
+
+def test_new_major_under_two_days_old_is_not_asked_about_yet(tmp_path, commands):
+    assert global_npm(tmp_path, commands, {"4.1.0": SETTLED, "4.3.0": SETTLED, "5.0.0": FRESH}) == {}
+    assert commands.ran == [["npm", "install", "-g", "wrangler@4.3.0"]]
+    assert ("info", "wrangler 5.0.0 (npm) waits: it is under 2 days old") in commands.lines
+
+
+def test_approved_new_major_installs_and_its_question_is_done(tmp_path, commands):
+    state = Config(home=tmp_path).state_dir
+    state.mkdir(parents=True)
+    earlier = "upgrade wrangler 4.0.0 -> 5.0.0 (a new major version, which can include breaking changes)"
+    (state / pending.FILENAME).write_text(json.dumps({WRANGLER_5: {"first": 1, "what": earlier, "approved": True}}))
+    assert global_npm(tmp_path, commands, {"4.1.0": SETTLED, "4.3.0": SETTLED, "5.0.0": SETTLED}) == {}
+    assert commands.ran == [["npm", "install", "-g", "wrangler@5.0.0"]]
+    assert json.loads((state / pending.FILENAME).read_text()) == {}
+
+
+@pytest.mark.parametrize(("keep", "asked"), [
+    (["upgrade:npm:wrangler"], {}),
+    ([WRANGLER_5], {}),
+    (["upgrade:npm:wrangler@4"], {WRANGLER_5: ASK_5}),
+])
+def test_keep_installed_keeps_the_installed_major(tmp_path, commands, keep, asked):
+    releases = {"4.1.0": SETTLED, "4.3.0": SETTLED, "5.0.0": SETTLED}
+    assert global_npm(tmp_path, commands, releases, keep=keep) == asked
+    assert commands.ran == [["npm", "install", "-g", "wrangler@4.3.0"]]
+
+
+def test_a_later_major_is_a_new_question_after_keeping_one(tmp_path, commands):
+    releases = {"4.1.0": SETTLED, "4.3.0": SETTLED, "5.0.0": SETTLED, "6.0.0": SETTLED}
+    assert list(global_npm(tmp_path, commands, releases, keep=[WRANGLER_5])) == ["upgrade:npm:wrangler@6"]
+
+
+def test_global_major_updates_installs_a_new_major_without_asking(tmp_path, commands):
+    assert global_npm(tmp_path, commands, {"4.1.0": SETTLED, "5.0.0": SETTLED}, majors=True) == {}
+    assert commands.ran == [["npm", "install", "-g", "wrangler@5.0.0"]]
+    assert not any(kind == "WARN" for kind, _ in commands.lines)
+
+
+def test_homebrew_upgrades_now_asks_for_a_new_major_and_never_waits(tmp_path, commands):
+    program(tmp_path, "brew", "brew/bin/brew")
+    commands.output[BREW_JSON] = brew_outdated(
+        [("big", "1.9", "2.0"), ("small", "1.2.0", "1.2.1_1"), ("odd", "HEAD-abc", "HEAD-def")],
+        [("tool", "abc", "def")])
+    cfg = Config(home=tmp_path, update_global_tools=["homebrew"])
+    with pending.during(cfg.state_dir, [], commands.log, False) as run:
+        tools.update_global_tools(commands.log, cfg, False, state=tools.UpdateState())
+    assert run.questions() == {
+        "upgrade:homebrew:big@2": "upgrade big 1.9 -> 2.0 (a new major version, which can include breaking changes)"}
+    assert commands.ran == [BREW_UPDATE, ["brew", "upgrade", "--formula", "odd"],
+                            ["brew", "upgrade", "--formula", "small"], ["brew", "upgrade", "--cask", "tool"]]
+    assert commands.read == [BREW_JSON]          # no release-time lookups for Homebrew
+
+
+def test_dry_run_says_what_it_would_upgrade_and_ask_and_records_nothing(tmp_path, monkeypatch, commands, capsys):
+    program(tmp_path, "npm")
+    npm_releases(commands.output, {"wrangler": ("4.1.0", {"4.1.0": SETTLED, "4.3.0": SETTLED, "5.0.0": SETTLED})})
+    cfg = Config(home=tmp_path, skill_packages=[], update_plugins=False, update_clis=False, update_self=False,
+                 update_mcp_programs=False, update_global_tools=["npm"])
+    monkeypatch.setattr(cli, "load", lambda: cfg)
+    monkeypatch.setattr(cli, "online", lambda: True)
+    assert cli.run(force=True, echo=True, dry=True) == 0
+    output = capsys.readouterr().out
+    assert "would run: npm install -g wrangler@4.3.0" in output
+    assert f"Would ask: U{ASK_5[1:]}? [y/N]" in output
+    assert not any(args[:2] == ["npm", "install"] for args in commands.ran)
+    assert not (cfg.state_dir / pending.FILENAME).exists()
+
+
+def test_one_run_shares_one_npm_cache_for_mcp_pins_and_tools(tmp_path, monkeypatch, commands):
+    import os
+
+    program(tmp_path, "npm")
+    write(tmp_path, ".claude.json", json.dumps({"mcpServers": {"pin": {"command": "npx",
+                                                                        "args": ["-y", "pinned@1.0.0"]}}}))
+    npm_releases(commands.output, {"wrangler": ("4.1.0", {"4.1.0": SETTLED, "4.3.0": SETTLED})})
+    caches = []
+    fake = tools.raw
+
+    def raw(args, timeout=120, **kwargs):
+        if args[:2] == ["npm", "view"]:
+            caches.append((args[2], os.environ.get("npm_config_cache")))
+        return fake(args, timeout, **kwargs)
+
+    monkeypatch.setattr(tools, "raw", raw)
+    cfg = Config(home=tmp_path, agents=["claude"], skill_packages=[], update_plugins=False, update_clis=False,
+                 update_self=False, update_mcp_programs=False, update_global_tools=["npm"])
+    monkeypatch.setattr(cli, "load", lambda: cfg)
+    monkeypatch.setattr(cli, "online", lambda: True)
+    cli.run(force=True, echo=False)
+    assert {package for package, _ in caches} >= {"pinned", "wrangler", "wrangler@^4"}
+    assert len({cache for _, cache in caches}) == 1 and None not in {cache for _, cache in caches}
+
+
+def test_pipx_keeps_extras_and_leaves_tools_from_a_url_alone(tmp_path, commands, pypi):
+    program(tmp_path, "pipx")
+    commands.output[PIPX_LIST] = json.dumps({"venvs": {
+        "black": {"metadata": {"main_package": {"package": "black", "package_version": "24.1.0",
+                                                "package_or_url": "black[d]"}}},
+        "fork": {"metadata": {"main_package": {"package": "fork", "package_version": "1.0.0",
+                                               "package_or_url": "git+https://example.com/fork.git"}}}}})
+    pypi.update({"black": {"24.1.0": SETTLED, "24.2.0": SETTLED}, "fork": {"1.0.0": SETTLED, "1.1.0": SETTLED}})
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["pipx"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == [["pipx", "install", "--force", "black[d]==24.2.0"]]
+
+
+def test_a_failed_pypi_lookup_skips_the_tool_with_information_only(tmp_path, commands):
+    program(tmp_path, "uv")
+    commands.output[UV_LIST] = "tuv v0.2.0\n- tuv\n"
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == []
+    assert commands.lines == [("info", "tuv (uv) is skipped this run: its releases could not be looked up")]
+
+
+def test_pypi_releases_skip_pre_releases_and_yanked_files(monkeypatch):
+    import io
+
+    from agent_sync import upgrades
+
+    data = {"releases": {
+        "1.0.0": [{"upload_time_iso_8601": "2026-01-02T00:00:00Z"}, {"upload_time_iso_8601": "2026-01-01T00:00:00Z"}],
+        "1.1.0": [{"upload_time_iso_8601": "2026-02-01T00:00:00Z", "yanked": True}],
+        "2.0.0rc1": [{"upload_time_iso_8601": "2026-03-01T00:00:00Z"}],
+        "1.0.1": [],
+    }}
+    urls = []
+
+    def urlopen(url, timeout):
+        urls.append((url, timeout))
+        return io.BytesIO(json.dumps(data).encode())
+
+    monkeypatch.setattr(upgrades.urllib.request, "urlopen", urlopen)
+    assert upgrades.pypi_releases("black") == {"1.0.0": "2026-01-01T00:00:00Z"}
+    assert urls == [("https://pypi.org/pypi/black/json", 20)]

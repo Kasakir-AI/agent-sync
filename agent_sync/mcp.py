@@ -360,6 +360,16 @@ def npm_released(package: str) -> dict[str, str]:
     return {key: value for key, value in times.items() if isinstance(value, str)} if isinstance(times, dict) else {}
 
 
+def npm_newest(package: str, major: int) -> str:
+    """The newest release of `package` in one major version ("" when unknown)."""
+    try:
+        found = json.loads(tools.raw(["npm", "view", f"{package}@^{major}", "version", "--json"]) or "null")
+    except ValueError:
+        return ""
+    found = found[-1] if isinstance(found, list) and found else found
+    return found if isinstance(found, str) else ""
+
+
 RUNNERS = {"npx": (), "bunx": (), "pnpm": ("dlx",), "npm": ("exec", "x")}
 PACKAGE_FLAGS = ("-p", "--package")
 NPM_SPEC = re.compile(r"(?P<package>(?:@[\w.-]+/)?[\w][\w.-]*)@(?P<version>\d+\.\d+\.\d+"
@@ -546,6 +556,7 @@ class NpmLookup:
         self.folder = tempfile.TemporaryDirectory(prefix="agent-sync-npm.")
         self.latest = functools.cache(lambda package: self.view(npm_latest, package))
         self.released = functools.cache(lambda package: self.view(npm_released, package))
+        self.newest = functools.cache(lambda package, major: self.view(lambda name: npm_newest(name, major), package))
 
     def view(self, lookup, package: str):
         previous = os.environ.get("npm_config_cache")

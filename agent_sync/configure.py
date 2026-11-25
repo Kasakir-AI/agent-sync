@@ -351,10 +351,17 @@ class Editor:
         managers = tools.GLOBAL_MANAGERS
         now = tools.global_managers(self.cfg.update_global_tools)
         self.explain("Global tool updates", "Update tools installed globally by npm, pipx, uv or Homebrew.",
+                     "Upgrades (these, MCP programs, git, Node and npm) stay in the installed major version;",
+                     "a new major version is asked about first.",
                      "Now: " + (", ".join(now) or "none"))
+        majors = self.cfg.global_major_updates
         pick = self.choose([("default", "Update npm, pipx and uv tools"), ("none", "Update none"),
-                            ("some", "Choose which")])
-        if pick in ("default", "none"):
+                            ("some", "Choose which"),
+                            ("majors", f"New major versions: {'install without asking' if majors else 'ask first'} "
+                                       "(switch)")])
+        if pick == "majors":
+            self.set("global_major_updates", not majors)
+        elif pick in ("default", "none"):
             self.set("update_global_tools", pick == "default")
         elif pick == "some":
             chosen = set(now)

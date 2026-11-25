@@ -6,9 +6,11 @@ agent-sync runs on your own machine with your permissions. Things to know:
   agent and its agents are mirrored. Only list packages you trust, and read what changed when they update.
 - **`skills_cli = "skills@latest"` picks up new releases of the `skills` CLI automatically.** Pin a version
   (for example `"skills@1.9.0"`) if you'd rather review updates first.
-- **Pinned MCP packages are updated within their major version.** A release must be at least 2 days old first, so
-  a broken or compromised release does not reach every agent the hour it is published. `keep_mcp_versions` holds a
-  pin. `mcp_major_updates` allows major versions.
+- **Packages agent-sync upgrades are updated within their major version.** This covers pinned MCP packages, the
+  programs MCP servers run, global tools, git, Node and npm. A release must be at least 2 days old first, so a broken or
+  compromised release does not reach every agent the hour it is published (Homebrew reviews its releases, so they
+  have no wait). A newer major version waits for your approval. `keep_mcp_versions` holds a pin.
+  `mcp_major_updates` and `global_major_updates` allow major versions without asking.
 - **agent-sync runs only the update commands you list for programs it doesn't manage.** Programs installed with
   Homebrew, npm, pipx or uv are upgraded through those tools. Any other program runs only the command you put in
   `program_updates`. Upkeep backs up the resolved executable and its dedicated install folder, when present,

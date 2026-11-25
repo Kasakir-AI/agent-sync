@@ -175,3 +175,11 @@ def test_upkeep_safety_and_global_tools_settings_can_be_saved(tmp_path):
     assert data["backup_days"] == 45
     assert data["keep_installed"] == ["mcp:codex:extract"]
     assert data["update_global_tools"] == ["homebrew"]
+
+
+def test_new_major_versions_of_global_tools_can_install_without_asking(tmp_path):
+    ed, path, said = editor(tmp_path, ["17", "4", "s", "q"])
+    assert ed.cfg.global_major_updates is False
+    ed.menu()
+    assert any("New major versions: ask first (switch)" in line for line in said)
+    assert tomllib.loads(path.read_text())["global_major_updates"] is True

@@ -1,6 +1,7 @@
+import json
 import os
 
-from agent_sync import tools
+from agent_sync import pending, tools
 from agent_sync.config import Config
 
 
@@ -104,19 +105,35 @@ def test_update_self_other_installs(monkeypatch):
     assert lines == ["skip agent-sync can't update itself: it runs from a source checkout"]
 
 
-def test_prerequisites_homebrew_installed_are_upgraded_when_outdated(monkeypatch, tmp_path):
+def prerequisites(monkeypatch, state_dir, formulae, keep=()):
+    """Run the git and Node step against a fake `brew outdated --json=v2`; returns (brew upgrades, log, questions)."""
     calls, lines = [], []
     monkeypatch.setattr(tools.shutil, "which",
                         lambda cmd, path=None: "/opt/homebrew/bin/brew" if cmd == "brew" else None)
     monkeypatch.setattr(tools, "brew_writable", lambda prefix: True)
+    monkeypatch.setattr(tools, "sh", lambda args, timeout=900, cwd=None: calls.append(args) or (0, ""))
+    report = json.dumps({"formulae": [{"name": name, "installed_versions": [old], "current_version": new,
+                                       "pinned": False} for name, old, new in formulae], "casks": []})
+    monkeypatch.setattr(tools, "raw", lambda args, timeout=120: report if args[:2] == ["brew", "outdated"] else "")
+    log = lambda kind, text: lines.append(f"{kind} {text}")     # noqa: E731
+    with pending.during(state_dir, list(keep), log, False) as run:
+        tools.update_prerequisites(log, dry=False)
+        questions = run.questions()
+    return [args for args in calls if args[:2] == ["brew", "upgrade"]], lines, questions
 
-    def sh(args, timeout=900, cwd=None):
-        calls.append(args)
-        return 0, ""
-    monkeypatch.setattr(tools, "sh", sh)
-    listing = "node\n" + "".join(f"some-formula-{n}\n" for n in range(40)) + "wget\n"    # longer than a log line
-    monkeypatch.setattr(tools, "raw", lambda args, timeout=120: listing if args[:2] == ["brew", "outdated"] else "")
-    tools.update_prerequisites(lambda kind, text: lines.append(f"{kind} {text}"))
-    assert ["brew", "upgrade", "--formula", "node"] in calls
-    assert not any("wget" in args or "git" in args[3:] for args in calls if args[:2] == ["brew", "upgrade"])
-    assert lines == ["ran node upgrade (Homebrew)"]
+
+def test_git_and_node_upgrade_within_their_major_version(monkeypatch, tmp_path):
+    upgraded, lines, questions = prerequisites(
+        monkeypatch, tmp_path, [("node", "25.1.0", "25.2.0"), ("wget", "1.24", "1.25"), ("git", "2.50.0", "2.51.0")])
+    assert upgraded == [["brew", "upgrade", "--formula", "git"], ["brew", "upgrade", "--formula", "node"]]
+    assert lines == ["ran git 2.50.0 -> 2.51.0 (Homebrew)", "ran node 25.1.0 -> 25.2.0 (Homebrew)"]
+    assert questions == {}
+
+
+def test_a_new_node_major_version_waits_for_approval(monkeypatch, tmp_path):
+    upgraded, _, questions = prerequisites(monkeypatch, tmp_path / "a", [("node", "25.4.0", "26.0.0")])
+    assert upgraded == []
+    assert questions == {"upgrade:homebrew:node@26": "upgrade node 25.4.0 -> 26.0.0 "
+                                                     "(a new major version, which can include breaking changes)"}
+    kept = prerequisites(monkeypatch, tmp_path / "b", [("node", "25.4.0", "26.0.0")], keep=["upgrade:homebrew:node"])
+    assert kept[0] == [] and kept[2] == {}

@@ -15,10 +15,11 @@ def disable_live_notifications(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def offline_package_managers(monkeypatch):
-    """No test reaches npm, npx or Homebrew; a test that needs their answers fakes them itself."""
+    """No test reaches npm, npx, pipx, uv, Homebrew or PyPI; a test that needs their answers fakes them itself."""
     import subprocess
+    import urllib.request
 
-    blocked = {"npm", "npx", "brew"}
+    blocked = {"npm", "npx", "brew", "pipx", "uv"}
     run = subprocess.run
     popen = subprocess.Popen
 
@@ -40,3 +41,8 @@ def offline_package_managers(monkeypatch):
 
     monkeypatch.setattr(subprocess, "Popen", no_live_dialogs)
     monkeypatch.setattr(subprocess, "run", offline_run)
+
+    def offline_url(url, *rest, **kwargs):
+        raise OSError(f"offline in tests: {url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", offline_url)
