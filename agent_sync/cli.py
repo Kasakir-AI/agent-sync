@@ -51,6 +51,7 @@ from . import (
     roles,
     schedule,
     skills,
+    statuslines,
     tools,
     writes,
 )
@@ -74,7 +75,7 @@ def hours(n: float) -> str:
     return "under an hour" if n < 1 else f"{n:.0f} hour{'' if round(n) == 1 else 's'}"
 
 
-def run(force: bool, echo: bool, dry: bool = False) -> int:
+def run(force: bool, echo: bool, dry: bool = False, *, approvals: tuple[str, ...] = ()) -> int:
     cfg = load()
     echo = echo or sys.stdout.isatty()
     stamp = cfg.state_dir / "last-run"
@@ -111,7 +112,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
         if not online():
             log("skip", "no network; will try again at the next scheduled check")
             return 0
-        stack.enter_context(pending.during(cfg.state_dir, cfg.keep_installed, log, dry))
+        upkeep = stack.enter_context(pending.during(cfg.state_dir, cfg.keep_installed, log, dry, approvals=approvals))
         updates = tools.UpdateState()
         log("start", f"agent-sync {__version__}, source of truth: {cfg.source}"
             + ("  (dry run: nothing is changed)" if dry else ""))
@@ -163,6 +164,7 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 log.lines(memory.mirror(cfg.home, dry, enabled=cfg.agents))
             except OSError as e:
                 log("FAIL", f"shared memory: {e}")
+        log.lines(statuslines.apply(cfg.home, dry, cfg, upkeep))
         log_review(cfg, log)
         if cfg.update_plugins:
             tools.update_plugins(log, dry, cfg.home, enabled=cfg.agents)
@@ -390,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--force", action="store_true", help="run even if the last run is recent")
     r.add_argument("--echo", action="store_true", help="also print each log line (the default in a terminal)")
     r.add_argument("--dry-run", action="store_true", help="show what would change; change nothing")
+    r.add_argument("--approve-status-line", action="append", default=[], metavar="TOKEN",
+                   help="approve one status line replacement using the token from the upkeep log")
     i = sub.add_parser("install", help="schedule the daily upkeep")
     i.add_argument("--launcher", action="store_true", help="also put a double-click launcher on the Desktop (macOS)")
     sub.add_parser("launcher", help="put the double-click launcher on the Desktop and keep it up to date (macOS)")
@@ -412,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "agents":
         return membership.run(load(), a.agent_action, getattr(a, "ids", []))
     if a.cmd == "run":
-        return run(a.force, a.echo, a.dry_run)
+        return run(a.force, a.echo, a.dry_run, approvals=tuple(a.approve_status_line))
     if a.cmd == "review":
         return review_settings(a.list, a.no_open)
     if a.cmd == "setup":

@@ -39,6 +39,7 @@ class Config:
     keep_mcp_versions: list[str] = field(default_factory=list)  # MCP servers whose pinned package version stays
     mirror_instructions: bool = False                        # global instructions across enabled tools
     mirror_memory: bool = False                              # Claude Code's home-project memory
+    status_line: bool = True
     warn_models: list[str] = field(default_factory=list)     # warn when a model name containing one of these appears
     update_clis: bool | list[str] = True                     # true, false, or a list like ["claude", "codex"]
     update_global_tools: bool | list[str] = False
@@ -75,7 +76,7 @@ class Config:
 
 KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
         "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "allow_duplicate_skills",
-        "mirror_instructions", "mirror_memory", "warn_models", "keep_mcp_versions", "keep_installed",
+        "mirror_instructions", "mirror_memory", "status_line", "warn_models", "keep_mcp_versions", "keep_installed",
         "update_clis", "update_global_tools", "update_plugins", "update_mcp_programs", "cli_commands",
         "install_commands", "extra_steps", "launcher", "update_self", "log_days", "backup_days")
 
@@ -122,6 +123,8 @@ def parse(text: str, path: Path, home: Path) -> Config:
         raise ValueError(f"source {cfg.source!r} must be enabled in agents")
     if type(cfg.backup_days) is not int or cfg.backup_days < 0:
         raise ValueError("backup_days must be a nonnegative whole number")
+    if not isinstance(cfg.status_line, bool):
+        raise ValueError("status_line must be true or false")
     if not isinstance(cfg.keep_installed, list) or any(not isinstance(key, str) for key in cfg.keep_installed):
         raise ValueError("keep_installed must be a list of removal keys or names")
     for step in cfg.extra_steps:

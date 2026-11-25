@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, time
 
 # One part of a key: bare (codex), "basic" (may have \ escapes) or 'literal' (no escapes). TOML allows all three
@@ -17,6 +17,7 @@ PART = r"""(?:[A-Za-z0-9_-]+|"(?:[^"\\\n]|\\.)*"|'[^'\n]*')"""
 DOTTED = rf"{PART}(?:[ \t]*\.[ \t]*{PART})*"
 HEADER = re.compile(rf"^[ \t]*\[(\[?)[ \t]*({DOTTED})[ \t]*\]\]?[ \t]*(#.*)?$")
 KEY = re.compile(rf"[ \t]*({PART})[ \t]*=[ \t]*")
+ASSIGNMENT = re.compile(rf"[ \t]*({DOTTED})[ \t]*=[ \t]*")
 PARTS = re.compile(PART)
 BARE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -98,6 +99,7 @@ class Section:
     end: int
     parts: tuple[str, ...]
     keys: list[tuple[str, int, int, int]]   # (key, line start, value start, value end)
+    dotted: list[tuple[tuple[str, ...], int, int, int]] = field(default_factory=list)
 
 
 def sections(text: str) -> list[Section]:
@@ -108,15 +110,18 @@ def sections(text: str) -> list[Section]:
         eol = len(text) if eol < 0 else eol
         line = text[i:eol].removesuffix("\r")
         m = HEADER.match(line)
-        k = KEY.match(text, i)
+        k = ASSIGNMENT.match(text, i)
         if m:
             out[-1].end = i
             parts = tuple(key_name(part) for part in PARTS.findall(m.group(2)))
             out.append(Section(".".join(parts), bool(m.group(1)), i, min(eol + 1, len(text)), len(text), parts, []))
         elif k and k.start() == i:
             ve = value_end(text, k.end())
-            out[-1].keys.append((key_name(k.group(1)),
-                                 i, k.end(), ve))
+            parts = tuple(key_name(part) for part in PARTS.findall(k.group(1)))
+            if len(parts) == 1:
+                out[-1].keys.append((parts[0], i, k.end(), ve))
+            else:
+                out[-1].dotted.append((parts, i, k.end(), ve))
             eol = text.find("\n", ve)
             eol = len(text) if eol < 0 else eol
         i = eol + 1
@@ -142,14 +147,16 @@ def append_block(text: str, block: str) -> str:
     return text.rstrip("\n") + "\n\n" + block
 
 
-def set_value(text: str, table: Table | None, key: str, value) -> str:
+def set_value(text: str, table: Table | None, key: str | tuple[str, ...], value) -> str:
     """`key = value` at the top (table None) or in [table]: the old value replaced, or a new line added."""
-    line = f"{key_text(key)} = {value_text(value)}"
+    name = key_text(key) if isinstance(key, str) else ".".join(map(key_text, key))
+    line = f"{name} = {value_text(value)}"
     s = section(text, table)
     if s is None:
         heading = ".".join(map(key_text, table)) if isinstance(table, tuple) else table
         return append_block(text, f"[{heading}]\n{line}\n")
-    hit = next((k for k in s.keys if k[0] == key), None)
+    entries = s.keys if isinstance(key, str) else s.dotted
+    hit = next((k for k in entries if k[0] == key), None)
     if hit:
         return text[:hit[1]] + line + text[hit[3]:]
     if s.keys:                                    # after the last setting of the section
