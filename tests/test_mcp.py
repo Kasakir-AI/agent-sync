@@ -144,7 +144,9 @@ def test_mirror_skips_both_plugin_name_and_endpoint(tmp_path):
         "same": {"url": "https://user.example"},
         "new": {"url": "https://new.example"},
     }})
-    assert mcp.mirror(tmp_path, "claude", enabled=("claude", "codex")) == ["added MCP server new to codex"]
+    warning, added = mcp.mirror(tmp_path, "claude", enabled=("claude", "codex"))
+    assert warning.startswith("WARN  MCP server same not added to Codex: a plugin there brings a different server")
+    assert added == "added MCP server new to codex"
     assert mcp.read(tmp_path, "codex") == {"new": {"url": "https://new.example"}}
 
 
@@ -190,13 +192,16 @@ def test_pins_change_only_selected_toml_and_json_strings(tmp_path):
     expected = ["updated MCP server rea in Codex settings: rea-agents 6.8.0 -> 6.10.1",
                 "updated MCP server scoped in Cursor settings: @org/pack 1.2.3-rc.1 -> 1.2.3",
                 "updated MCP server rea in Cursor settings: rea-agents 6.8.0 -> 6.10.1"]
-    assert mcp.pins(tmp_path, True, enabled=enabled, keep=["hold"], latest=latest) == [
+    def released(package):
+        return {"6.10.1": "2026-01-01T00:00:00Z", "1.2.3": "2026-01-01T00:00:00Z"}
+
+    assert mcp.pins(tmp_path, True, enabled=enabled, keep=["hold"], latest=latest, released=released) == [
         line.replace("updated", "would update", 1) for line in expected]
     assert codex.read_bytes() == toml_before.encode() and cursor.read_bytes() == json_before.encode()
     assert not root.exists()
     calls.clear()
     with backups.during(tmp_path, root, 30):
-        assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest) == expected
+        assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest, released=released) == expected
     assert calls == ["rea-agents", "@org/pack"]
     assert codex.read_bytes() == toml_before.replace(f"'{old}'", f"'{new}'").encode()
     assert cursor.read_text() == json_before.replace('"dlx","@org/pack@1.2.3-rc.1"', '"dlx","@org/pack@1.2.3"').replace(
@@ -204,7 +209,7 @@ def test_pins_change_only_selected_toml_and_json_strings(tmp_path):
     saved, = root.iterdir()
     assert (saved / ".codex/config.toml").read_bytes() == toml_before.encode()
     assert (saved / ".cursor/mcp.json").read_bytes() == json_before.encode()
-    assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest) == []
+    assert mcp.pins(tmp_path, False, enabled=enabled, keep=["hold"], latest=latest, released=released) == []
     assert list(root.iterdir()) == [saved]
 
 
@@ -240,3 +245,85 @@ def test_dedupe_handles_inline_codex_entries_without_reformatting_others(tmp_pat
     assert changes == [
         "removed MCP server same from Codex settings: plugin pack@remote brings the same server"]
     assert path.read_text() == before.replace(' same = {url="https://same.example"},', "")
+
+
+def test_dedupe_never_touches_the_source_tools_settings(tmp_path):
+    from tests.test_inventory import write
+    from tests.test_skills import make_plugin
+
+    root = make_plugin(tmp_path, "pack@market", [])
+    write(root, ".mcp.json", {"mcpServers": {"docs": {"url": "https://docs.example/mcp"}}})
+    source = write(tmp_path, ".claude.json", {"mcpServers": {"docs": {"url": "https://docs.example/mcp"}}})
+    logs = []
+    with pending.during(tmp_path / "state", [], lambda *line: logs.append(line), False):
+        changes = mcp.dedupe(tmp_path, False, enabled=("claude", "codex"), source="claude")
+    assert changes == logs == [] and pending.load(tmp_path / "state") == {}   # nothing asked, nothing to remove
+    assert json.loads(source.read_text())["mcpServers"]["docs"]
+
+
+def test_a_dotted_codex_entry_is_skipped_with_a_warning_not_a_failure(tmp_path):
+    from tests.test_inventory import codex_plugin, write
+
+    root = codex_plugin(tmp_path, "pack@remote", "1.0.0", remote=True)
+    write(root, ".mcp.json", {"same": {"url": "https://same.example"}, "other": {"url": "https://other.example"}})
+    before = ('mcp_servers.same.url = "https://same.example"\n'
+              '[mcp_servers.other]\nurl = "https://other.example"\n')
+    path = write(tmp_path, ".codex/config.toml", before)
+    changes, _ = dedupe_runs(tmp_path, ("codex",))
+    assert any(line.startswith("WARN  could not remove MCP server same") for line in changes)
+    assert "removed MCP server other from Codex settings: plugin pack@remote brings the same server" in changes
+    assert tomllib.loads(path.read_text())["mcp_servers"] == {"same": {"url": "https://same.example"}}
+
+
+def test_mirror_leaves_credentials_behind_and_names_the_variable(tmp_path):
+    from tests.test_inventory import write
+
+    token = "ghp_" + "a" * 36
+    write(tmp_path, ".claude.json", {"mcpServers": {"gh": {
+        "command": "gh-mcp", "args": [], "env": {"GITHUB_TOKEN": token, "MODE": "read"}}}})
+    changes = mcp.mirror(tmp_path, "claude", enabled=("claude", "cursor"))
+    assert changes == ["WARN  MCP server gh in Cursor needs GITHUB_TOKEN set: agent-sync does not copy values that "
+                       "look like credentials", "added MCP server gh to cursor"]
+    copied = (tmp_path / ".cursor/mcp.json").read_text()
+    assert token not in copied and json.loads(copied)["mcpServers"]["gh"]["env"] == {"MODE": "read"}
+    assert (tmp_path / ".cursor/mcp.json").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("args,expected", [
+    (["-y", "pkg@1.0.0", "other@2.0.0"], [(1, "pkg", "1.0.0")]),
+    (["--yes", "-p", "a@1.0.0", "--package=b@1.0.0", "bin"], [(2, "a", "1.0.0"), (3, "b", "1.0.0")]),
+    (["--", "pkg@1.0.0"], []),
+    (["server", "pkg@1.0.0"], []),
+])
+def test_npm_pins_reads_only_the_runners_package_operands(args, expected):
+    assert list(mcp.npm_pins({"command": "npx", "args": args})) == expected
+    assert list(mcp.npm_pins({"command": "npm", "args": ["exec", *args]})) == [
+        (index + 1, package, version) for index, package, version in expected]
+
+
+def test_pins_wait_for_settled_releases_and_stay_within_the_major_version(tmp_path):
+    from tests.test_inventory import codex_plugin, write
+
+    path = write(tmp_path, ".cursor/mcp.json", {"mcpServers": {
+        "fresh": {"command": "npx", "args": ["fresh@1.0.0"]},
+        "major": {"command": "npx", "args": ["major@1.0.0"]}}})
+    root = codex_plugin(tmp_path, "pack@remote", "1.0.0", remote=True)
+    write(root, ".mcp.json", {"plugged": {"command": "npx", "args": ["plugged@1.0.0"]}})
+    codex = write(tmp_path, ".codex/config.toml", '[mcp_servers.plugin]\ncommand = "npx"\nargs = ["plugged@1.0.0"]\n')
+    now = 1_800_000_000
+    latest = {"fresh": "1.1.0", "major": "2.0.0", "plugged": "1.5.0"}.get
+    hour, week = "2027-01-15T07:00:00Z", "2027-01-08T00:00:00Z"
+
+    def released(package):
+        return {"1.1.0": hour, "2.0.0": week, "1.5.0": week}
+
+    before = path.read_text()
+    lines = mcp.pins(tmp_path, False, enabled=("cursor", "codex"), keep=[], latest=latest, released=released, now=now)
+    assert path.read_text() == before                 # too new, and a new major
+    assert any("fresh 1.1.0 is under 2 days old" in line for line in lines)
+    assert any("major 2.0.0 is a new major version" in line for line in lines)
+    lines = mcp.pins(tmp_path, False, enabled=("cursor", "codex"), keep=[], latest=latest, released=released,
+                     now=now + 3 * 86400, major=True)
+    servers = json.loads(path.read_text())["mcpServers"]
+    assert servers["fresh"]["args"] == ["fresh@1.1.0"] and servers["major"]["args"] == ["major@2.0.0"]
+    assert tomllib.loads(codex.read_text())["mcp_servers"]["plugin"]["args"] == ["plugged@1.0.0"]

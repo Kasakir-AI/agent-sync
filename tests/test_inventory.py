@@ -89,6 +89,7 @@ def test_inventory_command_is_read_only(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setattr(mcp, "npm_latest", lambda pkg: "6.10.1" if pkg == "rea-agents" else "")
+    monkeypatch.setattr(mcp, "npm_released", lambda pkg: {"6.10.1": "2026-01-01T00:00:00Z"})
     plugin = codex_plugin(tmp_path, "cloudflare@remote", "2.0.0", remote=True)
     make_skill(plugin / "skills", "workers")
     write(plugin, ".mcp.json", {"cloudflare": {"url": "https://cf.example/mcp"}})

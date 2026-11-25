@@ -31,6 +31,7 @@ import tempfile
 import time
 import urllib.request
 from collections import Counter
+from collections.abc import Callable
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
@@ -122,73 +123,7 @@ def run(force: bool, echo: bool, dry: bool = False, *, approvals: tuple[str, ...
         log("info", f"skills tool: {tools.skills(cfg.skills_cli, '--version')[1]}")
         if cfg.launcher and cfg.macos:
             log.lines(filter(None, [schedule.refresh_launcher(cfg.home, dry, tools.PATH)]))
-        sync_packages(cfg, log, work, dry)
-        tools.update_skills(log, dry, cfg.skills_cli, home=cfg.home, enabled=cfg.agents)
-        if cfg.plugin_skills:
-            log("WARN", "plugin_skills is no longer used: Cursor loads Claude Code plugins' skills itself, so copies "
-                "made it load them twice. To give Codex a plugin's skills, install the plugin in Codex "
-                "(`codex plugin list`), then remove plugin_skills from your settings.")
-        if cfg.mirror_skills:
-            try:
-                log.lines(skills.mirror(cfg.home, cfg.source, cfg.skip_skills, dry, enabled=cfg.agents))
-                log("ok", "your own skills mirrored")
-            except OSError as e:
-                log("FAIL", f"your own skills: {e}")
-        try:
-            found = duplicates.report(cfg.home, cfg.allow_duplicate_skills, enabled=cfg.agents)
-            log.lines(found, "WARN")
-            if not found:
-                log("ok", "no tool loads a skill twice")
-        except OSError as e:
-            log("FAIL", f"duplicate skills check: {e}")
-        log.lines(plugins.twice(cfg.home, enabled=cfg.agents), "WARN")
-        if cfg.mirror_roles:
-            log.lines(roles.mirror(cfg.home, cfg.source, dry, enabled=cfg.agents))
-            log("ok", "model roles mirrored")
-        if cfg.mirror_mcp:
-            try:
-                log.lines(writes.repair_mcp(cfg.home, cfg, dry))
-                log.lines(mcp.dedupe(cfg.home, dry, enabled=cfg.agents))
-                log.lines(mcp.pins(cfg.home, dry, enabled=cfg.agents, keep=cfg.keep_mcp_versions))
-                log.lines(mcp.mirror(cfg.home, cfg.source, dry, enabled=cfg.agents))
-                log.lines(mcp.same_server_twice(cfg.home, enabled=cfg.agents), "WARN")
-                log("ok", "MCP servers mirrored")
-            except (ValueError, OSError) as e:
-                log("FAIL", f"MCP servers: {e}")
-        if cfg.mirror_instructions:
-            try:
-                log.lines(instructions.mirror(cfg.home, cfg.source, dry, review.baseline_file(cfg),
-                                              enabled=cfg.agents))
-                log("ok", "global instructions mirrored")
-            except OSError as e:
-                log("FAIL", f"global instructions: {e}")
-        if cfg.mirror_memory:
-            try:
-                log.lines(memory.mirror(cfg.home, dry, enabled=cfg.agents,
-                                        private_memory=cfg.private_memory, share_memory=cfg.share_memory))
-            except OSError as e:
-                log("FAIL", f"shared memory: {e}")
-        log.lines(statuslines.apply(cfg.home, dry, cfg, removals))
-        log_review(cfg, log)
-        if cfg.update_plugins:
-            tools.update_plugins(log, dry, cfg.home, enabled=cfg.agents)
-            if ("codex" in cfg.agents and shutil.which("codex", path=tools.PATH)
-                    and (not dry or tools.started("codex", cfg.home))):
-                plugins.own_versions(cfg.home, dry, log, enabled=cfg.agents, state_dir=cfg.state_dir)
-        if cfg.update_mcp_programs:
-            tools.update_mcp_programs(log, cfg, dry, state=updates)
-        tools.update_global_tools(log, cfg, dry, state=updates)
-        if cfg.update_clis:
-            tools.update_clis(log, cfg, dry, state=updates)
-            tools.update_prerequisites(log, dry, state=updates)
-        tools.extra_steps(log, cfg.extra_steps, dry)
-        if cfg.update_self and tools.update_self(log, dry, cfg.home, state=updates) and cfg.launcher and cfg.macos:
-            # the new version writes its own launcher now, not at the next run
-            exe = shutil.which("agent-sync", path=tools.PATH)
-            if exe:
-                backups.save(schedule.launcher_path(cfg.home), follow=True)
-                tools.act(log, dry, "Desktop launcher from the new version", [exe, "launcher"])
-        log.lines(checks.unwanted_models(cfg.home, cfg.warn_models, enabled=cfg.agents), "WARN")
+        steps(cfg, log, work, dry, updates, removals, stack)
         acknowledgements = WarningAcks(cfg.state_dir)
         warnings = acknowledgements.unseen(log.warnings)
         questions = removals.questions()
@@ -204,6 +139,7 @@ def run(force: bool, echo: bool, dry: bool = False, *, approvals: tuple[str, ...
         if echo and not notify.in_terminal():
             for warning in warnings:
                 print(f"WARN  {warning}")
+        removals.complete = not log.problems
         approved, acknowledged = notify.deliver(cfg, log, warnings, questions)
         for key in approved:
             removals.seen[key]["approved"] = True
@@ -212,6 +148,102 @@ def run(force: bool, echo: bool, dry: bool = False, *, approvals: tuple[str, ...
         summary = f", backups: {saved.folder}" if saved and saved.folder else ""
         log("done", f"agent-sync finished: {log.summary()}{summary}")
         return 1 if log.problems else 0
+
+
+GUARDED = (OSError, ValueError, TypeError, KeyError)   # JSON and Unicode decode errors are ValueErrors
+
+
+def guarded(log: Log, label: str, action: Callable[[], object]) -> None:
+    """Run one step; a step that fails logs FAIL and the run goes on with the next."""
+    try:
+        action()
+    except writes.Raced as raced:
+        log("WARN", str(raced))
+    except GUARDED as error:
+        log("FAIL", f"{label}: {error}")
+
+
+def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateState, removals: pending.Run,
+          stack: ExitStack) -> None:
+    """Every upkeep step, each in its own guard. Plugins update first, so the checks after them see one state."""
+    home, enabled = cfg.home, cfg.agents
+    if cfg.launcher and cfg.macos:
+        guarded(log, "Desktop launcher",
+                lambda: log.lines(filter(None, [schedule.refresh_launcher(home, dry, tools.PATH)])))
+    guarded(log, "skill packages", lambda: sync_packages(cfg, log, work, dry))
+    guarded(log, "skills update", lambda: tools.update_skills(log, dry, cfg.skills_cli, home=home, enabled=enabled))
+    if cfg.plugin_skills:
+        log("WARN", "plugin_skills is no longer used: Cursor loads Claude Code plugins' skills itself, so copies "
+            "made it load them twice. To give Codex a plugin's skills, install the plugin in Codex "
+            "(`codex plugin list`), then remove plugin_skills from your settings.")
+    if cfg.update_plugins:
+        guarded(log, "plugin updates", lambda: tools.update_plugins(log, dry, home, enabled=enabled))
+        if ("codex" in enabled and shutil.which("codex", path=tools.PATH)
+                and (not dry or tools.started("codex", home))):
+            guarded(log, "Codex's own plugins",
+                    lambda: plugins.own_versions(home, dry, log, enabled=enabled, state_dir=cfg.state_dir))
+    stack.enter_context(inventory.snapshot())
+
+    if cfg.mirror_skills:
+        def mirror_skills() -> None:
+            log.lines(skills.mirror(home, cfg.source, cfg.skip_skills, dry, enabled=enabled))
+            log("ok", "your own skills mirrored")
+        guarded(log, "your own skills", mirror_skills)
+
+    def duplicate_skills() -> None:
+        found = duplicates.report(home, cfg.allow_duplicate_skills, enabled=enabled)
+        log.lines(found, "WARN")
+        if not found:
+            log("ok", "no tool loads a skill twice")
+    guarded(log, "duplicate skills check", duplicate_skills)
+    guarded(log, "duplicate plugins check", lambda: log.lines(plugins.twice(home, enabled=enabled), "WARN"))
+    if cfg.mirror_roles:
+        def mirror_roles() -> None:
+            log.lines(roles.mirror(home, cfg.source, dry, enabled=enabled))
+            log("ok", "model roles mirrored")
+        guarded(log, "model roles", mirror_roles)
+    if cfg.mirror_mcp:
+        npm, failed = mcp.NpmLookup(), log.problems
+        for label, action in (
+            ("MCP repair", lambda: writes.repair_mcp(home, cfg, dry)),
+            ("MCP duplicates", lambda: mcp.dedupe(home, dry, enabled=enabled, source=cfg.source)),
+            ("MCP versions", lambda: mcp.pins(home, dry, enabled=enabled, keep=cfg.keep_mcp_versions,
+                                              latest=npm.latest, released=npm.released,
+                                              major=cfg.mcp_major_updates)),
+            ("MCP servers", lambda: mcp.mirror(home, cfg.source, dry, enabled=enabled)),
+        ):
+            guarded(log, label, lambda action=action: log.lines(action()))
+        guarded(log, "MCP servers", lambda: log.lines(mcp.same_server_twice(home, enabled=enabled), "WARN"))
+        if log.problems == failed:
+            log("ok", "MCP servers mirrored")
+    if cfg.mirror_instructions:
+        def mirror_instructions() -> None:
+            log.lines(instructions.mirror(home, cfg.source, dry, review.baseline_file(cfg), enabled=enabled))
+            log("ok", "global instructions mirrored")
+        guarded(log, "global instructions", mirror_instructions)
+    if cfg.mirror_memory:
+        guarded(log, "shared memory", lambda: log.lines(memory.mirror(
+            home, dry, enabled=enabled, private_memory=cfg.private_memory, share_memory=cfg.share_memory)))
+    guarded(log, "status line", lambda: log.lines(statuslines.apply(home, dry, cfg, removals)))
+    log_review(cfg, log)
+    if cfg.update_mcp_programs:
+        guarded(log, "MCP programs", lambda: tools.update_mcp_programs(log, cfg, dry, state=updates))
+    guarded(log, "global tools", lambda: tools.update_global_tools(log, cfg, dry, state=updates))
+    if cfg.update_clis:
+        guarded(log, "CLI updates", lambda: tools.update_clis(log, cfg, dry, state=updates))
+        guarded(log, "git and Node", lambda: tools.update_prerequisites(log, dry, state=updates))
+    guarded(log, "extra steps", lambda: tools.extra_steps(log, cfg.extra_steps, dry))
+    if cfg.update_self:
+        def update_self() -> None:
+            if tools.update_self(log, dry, home, state=updates) and cfg.launcher and cfg.macos:
+                # the new version writes its own launcher now, not at the next run
+                exe = shutil.which("agent-sync", path=tools.PATH)
+                if exe:
+                    backups.save(schedule.launcher_path(home), follow=True)
+                    tools.act(log, dry, "Desktop launcher from the new version", [exe, "launcher"])
+        guarded(log, "agent-sync update", update_self)
+    guarded(log, "model check", lambda: log.lines(checks.unwanted_models(home, cfg.warn_models, enabled=enabled),
+                                                  "WARN"))
 
 
 def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
@@ -352,7 +384,8 @@ def put_launcher() -> int:
 def show_inventory() -> int:
     cfg = load()
     home, enabled = cfg.home, cfg.agents
-    latest = mcp.pin_lookup()
+    npm = mcp.NpmLookup()
+    latest = npm.latest
     seen = duplicates.views(home, enabled=enabled)
     settings = {tool: entries for _, readers, _, _, entries in mcp.settings_files(home, enabled)
                 for tool in readers}
@@ -385,7 +418,8 @@ def show_inventory() -> int:
     problems = (duplicates.report(home, cfg.allow_duplicate_skills, enabled=enabled)
                 + plugins.twice(home, enabled=enabled)
                 + mcp.same_server_twice(home, enabled=enabled)
-                + mcp.pins(home, True, enabled=enabled, keep=cfg.keep_mcp_versions, latest=latest))
+                + mcp.pins(home, True, enabled=enabled, keep=cfg.keep_mcp_versions, latest=latest,
+                           released=npm.released, major=cfg.mcp_major_updates))
     with pending.during(cfg.state_dir, cfg.keep_installed, lambda _, text: problems.append(text), True) as removals:
         problems.extend(mcp.dedupe(home, True, enabled=enabled))
         problems.extend(f"approval required to remove {what}" for what in removals.questions().values())

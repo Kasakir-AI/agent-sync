@@ -70,12 +70,8 @@ def test_upkeep_writers_share_one_pre_run_backup(tmp_path, monkeypatch, capsys):
         return 0, ""
 
     monkeypatch.setattr(cli.tools, "checkout", checkout)
-    original_pins = mcp.pins
-
-    def pins(*args, **kwargs):
-        return original_pins(*args, **kwargs, latest=lambda _: "2.0.0")
-
-    monkeypatch.setattr(mcp, "pins", pins)
+    monkeypatch.setattr(mcp, "npm_latest", lambda _: "1.1.0")
+    monkeypatch.setattr(mcp, "npm_released", lambda _: {"1.1.0": "2020-01-01T00:00:00Z"})
     _, files, memory_dir = memory_setup(tmp_path)
     files["claude"].write_text("Include the date.\n")
     old = [
@@ -119,7 +115,7 @@ def test_upkeep_writers_share_one_pre_run_backup(tmp_path, monkeypatch, capsys):
     assert "Include the date." in files["codex"].read_text()
     assert "<!-- agent-sync: memory -->" in files["codex"].read_text()
     cursor = json.loads((tmp_path / ".cursor/mcp.json").read_text())["mcpServers"]
-    assert cursor == {"pin": {"command": "npx", "args": ["pack@2.0.0"]},
+    assert cursor == {"pin": {"command": "npx", "args": ["pack@1.1.0"]},
                       "mirror": {"url": "https://example.invalid/mcp"}}
     assert cli.main(["pending", "--approve", "agent:.cursor/plugins/local/pack-agents/agents:dropped",
                      "memory:gone.md"]) == 0

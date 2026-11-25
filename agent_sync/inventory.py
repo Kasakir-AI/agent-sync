@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -177,7 +179,34 @@ READERS = {
 }
 
 
+SNAPSHOT: ContextVar[dict | None] = ContextVar("inventory", default=None)
+
+
+@contextmanager
+def snapshot():
+    """Read each tool's plugins once while this is open: upkeep opens it after the plugin updates, so every later
+    step sees the same plugins without walking them again."""
+    token = SNAPSHOT.set({})
+    try:
+        yield
+    finally:
+        SNAPSHOT.reset(token)
+
+
 def plugins(home: Path, enabled=DEFAULT_AGENTS, *, include_disabled: bool = False) -> dict[str, list[Plugin]]:
+    cache = SNAPSHOT.get()
+    if cache is None:
+        return read_plugins(home, enabled, include_disabled)
+    found = {}
+    for tool in (tool for tool in READERS if tool in enabled):
+        key = (home, tool, include_disabled)
+        if key not in cache:
+            cache[key] = read_plugins(home, (tool,), include_disabled)[tool]
+        found[tool] = list(cache[key])
+    return found
+
+
+def read_plugins(home: Path, enabled, include_disabled: bool) -> dict[str, list[Plugin]]:
     result = {tool: [] for tool in READERS if tool in enabled}
     for tool, found in result.items():
         for pid, root, version, loads in READERS[tool](home):

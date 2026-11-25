@@ -8,13 +8,18 @@ approvals or tool settings).
 """
 from __future__ import annotations
 
+import functools
 import json
+import os
 import re
 import tempfile
+import time
 import tomllib
+from datetime import datetime
 from pathlib import Path
 
-from . import backups, inventory, pending, tools
+from . import inventory, pending, tools
+from .privacy import secret_values
 from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
 from .tomledit import PART, basic_string, key_text
 
@@ -122,7 +127,20 @@ ADDERS = {
 }
 
 
+def without_secrets(server: dict) -> tuple[dict, list[str]]:
+    """The server without the env values that look like credentials, and the names of those variables."""
+    env = server.get("env") or {}
+    secret = [var for var, value in env.items()
+              if secret_values(str(value)) or secret_values(f"{var}={value}")]
+    if not secret:
+        return server, []
+    kept = {var: value for var, value in env.items() if var not in secret}
+    return {**{key: value for key, value in server.items() if key != "env"}, **({"env": kept} if kept else {})}, secret
+
+
 def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS) -> list[str]:
+    from . import writes  # writes builds on this module
+
     enabled = tuple(enabled)
     wanted = {k: p for k, v in read(home, source).items() if (p := portable(v))}
     locations = paths(home, enabled, "mcp")
@@ -132,21 +150,41 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
         if path == locations.get(source):
             continue
         tool = readers[0]
-        have = read(home, tool)
-        provided = [(name, inventory.endpoint(server)) for plugin in reader_plugins(loaded, readers)
-                    for name, server in plugin.servers]
-        missing = {k: v for k, v in wanted.items() if k not in have
-                   and not any(k == name or inventory.endpoint(v) == endpoint for name, endpoint in provided)}
-        if not missing:
+        brought = {name: inventory.endpoint(server) for plugin in reader_plugins(loaded, readers)
+                   for name, server in plugin.servers}
+        endpoints = set(brought.values())
+        found: list[str] = []
+
+        def add(text: str, tool=tool, readers=readers, brought=brought, endpoints=endpoints, found=found) -> str:
+            have = READERS[TOOLS[tool].mcp_format](text)
+            found.clear()
+            missing = {}
+            for name, server in wanted.items():
+                if name in have or inventory.endpoint(server) in endpoints:
+                    continue
+                if name in brought:
+                    found.append(f"WARN  MCP server {name} not added to {tool_names(readers)}: a plugin there brings "
+                                 "a different server of that name. Rename one of them to load both.")
+                    continue
+                server, unset = without_secrets(server)
+                found += [f"WARN  MCP server {name} in {tool_names(readers)} needs {var} set: agent-sync does not "
+                          "copy values that look like credentials" for var in unset]
+                missing[name] = server
+            found += [f"{'would add' if dry else 'added'} MCP server {name} to {tool}" for name in missing]
+            return ADDERS[TOOLS[tool].mcp_format](text, missing) if missing else text
+
+        try:
+            if dry:
+                add(path.read_text() if path.exists() else "")
+            else:
+                writes.update_text(path, add, new_mode=0o600)
+        except writes.Raced as raced:
+            changes.append(f"WARN  {raced}")
             continue
-        if not dry:
-            current = path.read_text() if path.exists() else ""
-            updated = ADDERS[TOOLS[tool].mcp_format](current, missing)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            backups.save(path, follow=True)
-            path.write_text(updated)
-        verb = "would add" if dry else "added"
-        changes += [f"{verb} MCP server {name} to {tool}" for name in missing]
+        except (OSError, ValueError) as error:
+            changes.append(f"FAIL  MCP servers in {path}: {error}")
+            continue
+        changes += found
     return changes
 
 
@@ -158,64 +196,94 @@ def tool_names(readers: tuple[str, ...]) -> str:
     return ", ".join(TOOLS[tool].name for tool in readers)
 
 
-def settings_files(home: Path, enabled):
-    """The original text and raw server entries in each settings file."""
+def settings_files(home: Path, enabled, failed: list[str] | None = None):
+    """The original text and raw server entries in each settings file. A file that can't be read is skipped (and
+    named in `failed`, when given)."""
     for path, readers in grouped_paths(paths(home, enabled, "mcp")).items():
-        if path.is_file():
-            text = path.read_bytes().decode()
-            codex = TOOLS[readers[0]].mcp_format == "codex-toml"
+        if not path.is_file():
+            continue
+        try:
+            text, codex = path.read_bytes().decode(), TOOLS[readers[0]].mcp_format == "codex-toml"
             entries = tomllib.loads(text).get("mcp_servers", {}) if codex else json_servers(text)
-            if isinstance(entries, dict):
-                yield path, readers, codex, text, {k: v for k, v in entries.items() if isinstance(v, dict)}
+        except (OSError, ValueError, AttributeError) as error:
+            if failed is not None:
+                failed.append(f"FAIL  MCP servers in {path}: {error}")
+            continue
+        if isinstance(entries, dict):
+            yield path, readers, codex, text, {k: v for k, v in entries.items() if isinstance(v, dict)}
 
 
 COPY_KEYS = {"command", "args", "env", "url", "httpUrl", "serverUrl", "type", "enabled"}
 
 
-def dedupe(home: Path, dry: bool, backup_dir: Path | None = None, *, enabled=DEFAULT_AGENTS) -> list[str]:
+def dedupe(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, source: str | None = None) -> list[str]:
+    """Remove a settings entry a loaded plugin brings exactly, after approval. The source tool's settings are never
+    touched: the mirror reads them, so other tools (and ones added later) depend on them."""
     from . import writes
 
     enabled = tuple(enabled)
     loaded = inventory.plugins(home, enabled)
-    lines, edits = [], []
-    removed = []
-    for path, readers, codex, text, entries in settings_files(home, enabled):
+    lines: list[str] = []
+    for path, readers, codex, _, _ in settings_files(home, enabled, lines):
+        if source in readers:
+            continue
         providers = {}
         for plugin in reader_plugins(loaded, readers):
             for server_name, server in plugin.servers:
                 if identity := inventory.endpoint(server):
                     providers.setdefault(identity, []).append((plugin.id, server))
                 providers.setdefault(("name", server_name), []).append((plugin.id, server))
-        updated = text
-        for name, server in entries.items():
-            key = f"mcp:{readers[0]}:{name}"
-            if pending.keeps(key):
-                continue
-            matches = [*providers.get(inventory.endpoint(server), ()), *providers.get(("name", name), ())]
-            if not matches:
-                continue
-            own = portable(server)
-            exact = next((pid for pid, other in matches if own is not None and own == portable(other)), None)
-            if (not exact or set(server) - COPY_KEYS or server.get("enabled", True) is not True
-                    or (server.get("env") and "env" not in (own or {}))):
-                provider = matches[0][0]
-                lines.append(f'WARN  {tool_names(readers)} load MCP server {name} twice '
-                             f'(settings and plugin {provider}); remove one, or add "{key}" '
-                             'to keep_installed to stop this warning')
-                continue
-            what = f"MCP server {name} from {tool_names(readers)} settings: plugin {exact} brings the same server"
-            if not pending.due(key, what) or dry:
-                continue
-            rewrite = writes.codex_mcp_text if codex else writes.json_mcp_text
-            updated = rewrite(updated, name, None)
-            lines.append(f"removed {what}")
-            removed.append(key)
-        if updated != text:
-            target = writes.checked_path(home, path)
-            edits.append(writes.Edit("mcp", readers, target, "replace", target, text.encode(), updated.encode()))
-    writes.apply_edits(home, edits, backup_dir)
-    for key in removed:
-        pending.removed(key)
+        found: list[str] = []
+        removed: list[str] = []
+
+        def remove(text: str, path=path, readers=readers, codex=codex, providers=providers, found=found,
+                   removed=removed) -> str:
+            found.clear()
+            removed.clear()
+            entries = tomllib.loads(text).get("mcp_servers", {}) if codex else json_servers(text)
+            updated = text
+            for name, server in entries.items():
+                key = f"mcp:{readers[0]}:{name}"
+                if not isinstance(server, dict) or pending.keeps(key):
+                    continue
+                matches = [*providers.get(inventory.endpoint(server), ()), *providers.get(("name", name), ())]
+                if not matches:
+                    continue
+                own = portable(server)
+                exact = next((pid for pid, other in matches if own is not None and own == portable(other)), None)
+                if (not exact or set(server) - COPY_KEYS or server.get("enabled", True) is not True
+                        or (server.get("env") and "env" not in (own or {}))):
+                    found.append(f'WARN  {tool_names(readers)} load MCP server {name} twice '
+                                 f'(settings and plugin {matches[0][0]}); remove one, or add "{key}" '
+                                 'to keep_installed to stop this warning')
+                    continue
+                what = f"MCP server {name} from {tool_names(readers)} settings: plugin {exact} brings the same server"
+                if not pending.due(key, what) or dry:
+                    continue
+                try:
+                    updated = (writes.codex_mcp_text if codex else writes.json_mcp_text)(updated, name, None)
+                except ValueError:
+                    found.append(f"WARN  could not remove MCP server {name} from {path}: its entry is written in a "
+                                 "form agent-sync does not edit (remove it by hand)")
+                    continue
+                found.append(f"removed {what}")
+                removed.append(key)
+            return updated
+
+        try:
+            if dry:
+                remove(path.read_text())
+            else:
+                writes.update_text(path, remove)
+        except writes.Raced as raced:
+            lines.append(f"WARN  {raced}")
+            continue
+        except (OSError, ValueError) as error:
+            lines.append(f"FAIL  MCP servers in {path}: {error}")
+            continue
+        lines += found
+        for key in removed:
+            pending.removed(key)
     return lines
 
 
@@ -237,17 +305,52 @@ def npm_latest(package: str) -> str:
     return tools.raw(["npm", "view", package, "version"]).strip()
 
 
+def npm_released(package: str) -> dict[str, str]:
+    """When each version of `package` was published (ISO 8601 times)."""
+    try:
+        times = json.loads(tools.raw(["npm", "view", package, "time", "--json"]) or "{}")
+    except ValueError:
+        return {}
+    return {key: value for key, value in times.items() if isinstance(value, str)} if isinstance(times, dict) else {}
+
+
+RUNNERS = {"npx": (), "bunx": (), "pnpm": ("dlx",), "npm": ("exec", "x")}
+PACKAGE_FLAGS = ("-p", "--package")
+
+
 def npm_pins(server: dict):
+    """(argument index, package, version) of each pinned package the runner runs: the operands of -p/--package and
+    the first argument that is not a flag. Arguments after that belong to the server."""
     command, args = server.get("command"), server.get("args")
     if not isinstance(command, str) or not isinstance(args, list):
         return
     runner = Path(command).name
-    if not (runner in ("npx", "bunx") or (runner == "pnpm" and "dlx" in args)
-            or (runner == "npm" and "exec" in args)):
+    if runner not in RUNNERS:
         return
-    for index, arg in enumerate(args):
-        if isinstance(arg, str) and (spec := inventory.NPM_SPEC.fullmatch(arg)):
+    index, subcommand = 0, RUNNERS[runner]
+    if subcommand:
+        while index < len(args) and isinstance(args[index], str) and args[index].startswith("-"):
+            index += 1
+        if index >= len(args) or args[index] not in subcommand:
+            return
+        index += 1
+    while index < len(args):
+        arg = args[index]
+        if not isinstance(arg, str) or arg == "--":
+            return
+        operand = None
+        if arg in PACKAGE_FLAGS and index + 1 < len(args):
+            index += 1
+            operand = args[index]
+        elif arg.startswith("--package="):
+            operand = arg.partition("=")[2]
+        elif not arg.startswith("-"):
+            operand = arg
+        if isinstance(operand, str) and (spec := inventory.NPM_SPEC.fullmatch(operand)):
             yield index, spec["package"], spec["version"]
+        if operand is arg:
+            return
+        index += 1
 
 
 PLAIN_VERSION = re.compile(r"\d+\.\d+\.\d+")
@@ -256,7 +359,7 @@ TOML_STRING = re.compile(PART)
 
 
 def pin_update(current: str, latest: str) -> bool:
-    if not PLAIN_VERSION.fullmatch(latest):
+    if not PLAIN_VERSION.fullmatch(latest or ""):
         return False
     base, sep, _ = current.partition("-")
     old, new = (tuple(map(int, version.split("."))) for version in (base, latest))
@@ -290,50 +393,105 @@ def pin_text(text: str, codex: bool, name: str, index: int, old: str, new: str) 
     raise ValueError(f"could not update the pinned MCP argument for {name!r}")
 
 
+SETTLE_DAYS = 2   # a release this new may still be pulled; wait before every tool runs it
+
+
+def settled(released: str | None, now: float) -> bool:
+    try:
+        stamp = datetime.fromisoformat(released.replace("Z", "+00:00")).timestamp() if released else None
+    except ValueError:
+        stamp = None
+    return stamp is not None and now - stamp >= SETTLE_DAYS * 86400
+
+
 def pins(home: Path, dry: bool, *, enabled=DEFAULT_AGENTS, keep: list[str], latest=npm_latest,
-         backup_dir: Path | None = None) -> list[str]:
+         released=npm_released, major: bool = False, now: float | None = None) -> list[str]:
+    """Move each pinned npm package of a stdio server to its newest release: not across a major version (unless
+    `major`), not to a release under two days old, and not for a server a plugin of that tool brings too."""
     from . import writes
 
-    lines, edits, versions = [], [], {}
-    for path, readers, codex, text, entries in settings_files(home, enabled):
-        updated = text
+    now = time.time() if now is None else now
+    lines: list[str] = []
+    loaded = inventory.plugins(home, enabled)
+    files = list(settings_files(home, enabled, lines))
+    pinned: dict[str, set[str]] = {}
+    for _, _, _, _, entries in files:                # every lookup first, before reading a file to change it
         for name, server in entries.items():
-            if name in keep:
-                continue
-            for index, package, version in npm_pins(server):
-                if package not in versions:
-                    versions[package] = latest(package)
-                available = versions[package]
-                if not pin_update(version, available):
+            for _, package, version in npm_pins(server):
+                if name not in keep:
+                    pinned.setdefault(package, set()).add(version)
+    wanted: dict[str, tuple[str, set[str]]] = {}     # package -> (the release to move to, the versions that move)
+    notes = []
+    for package, versions in pinned.items():
+        available = latest(package)
+        movable = {version for version in versions if pin_update(version, available)}
+        same_major = {version for version in movable if version.split(".")[0] == available.split(".")[0]}
+        if movable - same_major and not major:
+            notes.append(f"info  {package} {available} is a new major version; MCP servers keep "
+                         f"{', '.join(sorted(movable - same_major))} (set mcp_major_updates = true to move them)")
+        movable = movable if major else same_major
+        if movable and not settled(released(package).get(available), now):
+            notes.append(f"info  {package} {available} is under {SETTLE_DAYS} days old; MCP servers move to it later")
+            continue
+        if movable:
+            wanted[package] = (available, movable)
+    for path, readers, codex, _, _ in files:
+        brought = {inventory.endpoint(server) for plugin in reader_plugins(loaded, readers)
+                   for _, server in plugin.servers}
+        found: list[str] = []
+
+        def bump(text: str, path=path, readers=readers, codex=codex, brought=brought, found=found) -> str:
+            found.clear()
+            entries = tomllib.loads(text).get("mcp_servers", {}) if codex else json_servers(text)
+            updated = text
+            for name, server in entries.items():
+                if name in keep or not isinstance(server, dict) or inventory.endpoint(server) in brought:
                     continue
-                verb = "would update" if dry else "updated"
-                lines.append(f"{verb} MCP server {name} in {tool_names(readers)} settings: "
-                             f"{package} {version} -> {available}")
-                if not dry:
-                    updated = pin_text(updated, codex, name, index, f"{package}@{version}", f"{package}@{available}")
-        if updated != text:
-            target = writes.checked_path(home, path)
-            edits.append(writes.Edit("mcp", readers, target, "replace", target, text.encode(), updated.encode()))
-    writes.apply_edits(home, edits, backup_dir)
-    return lines
+                for index, package, version in npm_pins(server):
+                    available, movable = wanted.get(package, ("", ()))
+                    if version not in movable:
+                        continue
+                    try:
+                        updated = pin_text(updated, codex, name, index, f"{package}@{version}",
+                                           f"{package}@{available}")
+                    except (ValueError, KeyError, TypeError):
+                        found.append(f"WARN  could not update MCP server {name} in {path}: its entry is written in a "
+                                     "form agent-sync does not edit")
+                        continue
+                    found.append(f"{'would update' if dry else 'updated'} MCP server {name} in "
+                                 f"{tool_names(readers)} settings: {package} {version} -> {available}")
+            return updated
+
+        try:
+            if dry:
+                bump(path.read_text())
+            else:
+                writes.update_text(path, bump)
+        except writes.Raced as raced:
+            lines.append(f"WARN  {raced}")
+            continue
+        except (OSError, ValueError) as error:
+            lines.append(f"FAIL  MCP servers in {path}: {error}")
+            continue
+        lines += found
+    return lines + list(dict.fromkeys(notes))
 
 
-def pin_lookup():
-    """A cached npm lookup whose npm logs and cache stay in a temporary directory."""
-    import os
-    from functools import cache
+class NpmLookup:
+    """Cached npm lookups for one run, sharing one temporary npm cache (its logs and downloads stay out of yours)."""
 
-    @cache
-    def latest(package: str) -> str:
-        with tempfile.TemporaryDirectory(prefix="agent-sync-npm.") as folder:
-            previous = os.environ.get("npm_config_cache")
-            os.environ["npm_config_cache"] = folder
-            try:
-                return npm_latest(package)
-            finally:
-                if previous is None:
-                    os.environ.pop("npm_config_cache", None)
-                else:
-                    os.environ["npm_config_cache"] = previous
+    def __init__(self):
+        self.folder = tempfile.TemporaryDirectory(prefix="agent-sync-npm.")
+        self.latest = functools.cache(lambda package: self.view(npm_latest, package))
+        self.released = functools.cache(lambda package: self.view(npm_released, package))
 
-    return latest
+    def view(self, lookup, package: str):
+        previous = os.environ.get("npm_config_cache")
+        os.environ["npm_config_cache"] = self.folder.name
+        try:
+            return lookup(package)
+        finally:
+            if previous is None:
+                os.environ.pop("npm_config_cache", None)
+            else:
+                os.environ["npm_config_cache"] = previous

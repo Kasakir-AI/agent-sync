@@ -189,3 +189,26 @@ def test_expired_warning_acknowledgement_is_removed(upkeep, monkeypatch, capsys)
     assert cli.main(["run", "--force", "--echo"]) == 0
     assert warning in capsys.readouterr().out
     assert json.loads(state.read_text()) == {}
+
+
+def test_a_failing_step_is_logged_the_run_goes_on_and_pending_items_stay(upkeep, monkeypatch, capsys):
+    cfg = upkeep
+    cfg.mirror_roles = True
+    with pending.during(cfg.state_dir, [], lambda *_: None, False, now=time.time()):
+        assert not pending.due("memory:old.md", "memory copy old.md")
+
+    def broken(*args, **kwargs):
+        raise json.JSONDecodeError("bad", "{", 0)
+
+    monkeypatch.setattr(cli.roles, "mirror", broken)
+    monkeypatch.setattr(cli.notify, "deliver", lambda *args: (set(), False))
+    assert cli.main(["run", "--force", "--echo"]) == 1
+    output = capsys.readouterr().out
+    assert "FAIL  model roles: bad" in output
+    assert (cfg.home / ".claude/settings.json").exists()             # the status line step still ran
+    assert (cfg.state_dir / "last-run").exists()
+    assert "memory:old.md" in pending.load(cfg.state_dir)            # its owner may not have run: kept
+
+    monkeypatch.setattr(cli.roles, "mirror", lambda *args, **kwargs: [])
+    assert cli.main(["run", "--force", "--echo"]) == 0
+    assert "memory:old.md" not in pending.load(cfg.state_dir)        # a clean run asked nothing about it

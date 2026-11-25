@@ -38,6 +38,15 @@ class Run:
     previous: dict[str, Removal]
     seen: dict[str, Removal] = field(default_factory=dict)
     removed: set[str] = field(default_factory=set)
+    complete: bool = True   # False when a step failed: it may not have asked about its items, so none are dropped
+
+    def entries(self) -> dict[str, Removal]:
+        """What to remember: the items asked about this run, plus, after a run where a step failed, every earlier
+        item not removed since (the failed step owns some of them)."""
+        if self.complete:
+            return self.seen
+        kept = {key: item for key, item in self.previous.items() if key not in self.removed}
+        return {**kept, **self.seen}
 
     def keeps(self, key: str) -> bool:
         return key in self.keep or key.rsplit(":", 1)[-1] in self.keep
@@ -86,6 +95,6 @@ def during(state_dir: Path, keep: list[str], log, dry: bool, *, now: float | Non
         yield run
         path = state_dir / FILENAME
         if not dry and (run.seen or path.exists()):
-            save_baselines(path, run.seen)
+            save_baselines(path, run.entries())
     finally:
         current.reset(token)

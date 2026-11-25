@@ -37,6 +37,7 @@ class Config:
     allow_duplicate_skills: list[str] = field(default_factory=list)  # skill names a tool may load more than once
     keep_installed: list[str] = field(default_factory=list)
     keep_mcp_versions: list[str] = field(default_factory=list)  # MCP servers whose pinned package version stays
+    mcp_major_updates: bool = False                          # let a pinned MCP package move to a new major version
     mirror_instructions: bool = False                        # global instructions across enabled tools
     mirror_memory: bool = True                               # Claude Code's home-project memory
     private_memory: list[str] = field(default_factory=list)   # memory notes kept in Claude Code
@@ -47,6 +48,7 @@ class Config:
     update_global_tools: bool | list[str] = False
     update_plugins: bool = True                              # plugins and extensions for enabled agents
     update_mcp_programs: bool = True                          # executables used by enabled agents' MCP servers
+    program_updates: dict[str, list[str]] = field(default_factory=dict)  # MCP program -> its own update command
     cli_commands: dict[str, list[str]] = field(default_factory=dict)   # your own update command per CLI
     install_commands: dict[str, list[str]] = field(default_factory=dict)  # your own install command for setup
     extra_steps: list[dict] = field(default_factory=list)    # [{name = "...", command = ["..."]}] run at the end
@@ -78,7 +80,9 @@ class Config:
 
 
 KEYS = ("source", "agents", "skill_packages", "skills_cli", "remove_dropped_skills", "agent_notes", "mirror_roles",
-        "mirror_mcp", "mirror_skills", "skip_skills", "plugin_skills", "allow_duplicate_skills",
+        "mirror_mcp",
+        "mcp_major_updates", "program_updates", "mirror_skills", "skip_skills", "plugin_skills",
+        "allow_duplicate_skills",
         "mirror_instructions", "mirror_memory", "private_memory", "share_memory", "warn_models", "keep_mcp_versions",
         "status_line", "keep_installed",
         "update_clis", "update_global_tools", "update_plugins", "update_mcp_programs", "cli_commands",
@@ -137,6 +141,13 @@ def parse(text: str, path: Path, home: Path) -> Config:
         names = getattr(cfg, key)
         if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
             raise ValueError(f"{key} must be a list of memory note names")
+    if not isinstance(cfg.mcp_major_updates, bool):
+        raise ValueError("mcp_major_updates must be true or false")
+    if not isinstance(cfg.program_updates, dict) or any(
+            not isinstance(command, list) or not command or not all(isinstance(arg, str) for arg in command)
+            for command in cfg.program_updates.values()):
+        raise ValueError('program_updates must map a program name to its update command, like '
+                         'plannotator = ["plannotator", "update"]')
     for step in cfg.extra_steps:
         if not isinstance(step.get("command"), list) or not step["command"]:
             raise ValueError(f"extra step {step.get('name', '?')!r} needs command = [\"program\", \"arg\", ...]")
