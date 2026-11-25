@@ -159,6 +159,14 @@ def views(home: Path, *, enabled=DEFAULT_AGENTS) -> dict[str, list[Seen]]:
             kept.append(s)
 
     found = {"claude": unique(claude), "codex": unique(codex), "cursor": kept}
+    if "gemini" in enabled:
+        alias_names = {skill.name for skill in shared}
+        native = skills.EXTRA_ROOTS["gemini"]
+        found["gemini"] = unique(shared + [Seen(skill_name(d), f"~/{native}", d)
+                                           for d in walk(home / native) if skill_name(d) not in alias_names])
+    if "antigravity" in enabled:
+        root = TOOLS["antigravity"].skills_dir
+        found["antigravity"] = unique([Seen(skill_name(d), f"~/{root}", d) for d in walk(home / root)])
     return {tool: found[tool] for tool in TOOLS if tool in enabled}
 
 
@@ -208,7 +216,9 @@ def doubled(home: Path, seen: dict[str, list[Seen]], target: Path, name: str, sr
     shadows = {home / folder / name for folder in CURSOR_FOLDERS}
     return [tool for tool in readers
             if any(s.name == wanted and not os.path.realpath(s.path).startswith(mine)
-                   and not (tool == "cursor" and s.path in shadows) for s in seen.get(tool, []))]
+                   and not (tool == "cursor" and s.path in shadows)
+                   and not (tool == "gemini" and s.where == f"~/{skills.EXTRA_ROOTS['gemini']}")
+                   for s in seen.get(tool, []))]
 
 
 def report(home: Path, allow: list[str] | None = None, *, enabled=DEFAULT_AGENTS) -> list[str]:

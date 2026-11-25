@@ -26,7 +26,25 @@ def codex_servers(text: str) -> dict[str, dict]:
             for name, entry in servers.items() if isinstance(entry, dict)}
 
 
-READERS = {"claude-json": json_servers, "codex-toml": codex_servers, "cursor-json": json_servers}
+def read_gemini(text: str) -> dict[str, dict]:
+    # Gemini's `url` is SSE. Only `httpUrl` is portable to every target.
+    return {name: {**{key: value for key, value in server.items() if key not in ("url", "httpUrl")},
+                   **({"url": server["httpUrl"]} if server.get("httpUrl") else {})}
+            for name, server in json_servers(text).items() if isinstance(server, dict)}
+
+
+def read_antigravity(text: str) -> dict[str, dict]:
+    return {name: {**server, "url": server.get("url") or server.get("serverUrl")}
+            for name, server in json_servers(text).items() if isinstance(server, dict)}
+
+
+READERS = {
+    "claude-json": json_servers,
+    "codex-toml": codex_servers,
+    "cursor-json": json_servers,
+    "gemini-json": read_gemini,
+    "antigravity-json": read_antigravity,
+}
 
 
 def read(home: Path, tool: str) -> dict[str, dict]:
@@ -39,6 +57,8 @@ def read(home: Path, tool: str) -> dict[str, dict]:
 
 def portable(server: dict) -> dict | None:
     """The part every tool understands: a stdio command (command/args/env) or a remote url."""
+    if not isinstance(server, dict):
+        return None
     if server.get("command"):
         out = {"command": server["command"], "args": list(server.get("args") or [])}
         if server.get("env"):
@@ -81,7 +101,21 @@ def add_json(text: str, missing: dict[str, dict]) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
 
-ADDERS = {"claude-json": add_json, "codex-toml": add_codex, "cursor-json": add_json}
+def gemini_entry(server: dict) -> dict:
+    return {"httpUrl" if key == "url" else key: value for key, value in server.items()}
+
+
+def add_gemini(text: str, missing: dict[str, dict]) -> str:
+    return add_json(text, {name: gemini_entry(server) for name, server in missing.items()})
+
+
+ADDERS = {
+    "claude-json": add_json,
+    "codex-toml": add_codex,
+    "cursor-json": add_json,
+    "gemini-json": add_gemini,
+    "antigravity-json": add_json,
+}
 
 
 def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS) -> list[str]:

@@ -10,7 +10,8 @@ from .registry import DEFAULT_AGENTS, TOOLS
 
 def model_files(home: Path, *, enabled=DEFAULT_AGENTS) -> list[Path]:
     """Where the enabled tools name the models they run."""
-    settings = {"codex": TOOLS["codex"].mcp, "cursor": TOOLS["cursor"].first_run}
+    settings = {"codex": TOOLS["codex"].mcp, "cursor": TOOLS["cursor"].first_run,
+                "gemini": TOOLS["gemini"].mcp, "antigravity": ".gemini/config/config.json"}
     files = list(roles.files(home, enabled).values())
     for tool in TOOLS.values():
         if tool.id in enabled:

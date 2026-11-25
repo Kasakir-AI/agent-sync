@@ -24,6 +24,8 @@ from pathlib import Path
 
 from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
 
+EXTRA_ROOTS = {"codex": ".codex/skills", "cursor": ".cursor/skills", "gemini": ".gemini/skills"}
+
 MARKER = ".agent-sync"
 COPY_MARK = "copied by agent-sync from "
 PLUGIN_MARK = COPY_MARK + "Claude Code plugin "
@@ -45,13 +47,19 @@ def locked(home: Path) -> dict[str, dict]:
 
 def own(home: Path, source: str, skip: list[str]) -> dict[str, Path]:
     """name -> folder of every skill in the source tool that came from no package and is not itself a copy."""
-    folder, pkg = folders(home)[source], locked(home)
+    root, pkg = home / TOOLS[source].skills_dir, locked(home)
+    roots = [root]
+    if source == "gemini":
+        roots.append(home / EXTRA_ROOTS[source])
     out = {}
-    for d in sorted(folder.iterdir()) if folder.is_dir() else []:
-        if d.name.startswith(".") or d.name in pkg or d.name in skip or d.is_symlink():
-            continue
-        if (d / "SKILL.md").is_file() and not (d / MARKER).exists():
-            out[d.name] = d
+    seen = set()
+    for folder in roots:
+        for d in sorted(folder.iterdir()) if folder.is_dir() else []:
+            if d.name.startswith(".") or d.name in seen or not (d / "SKILL.md").is_file():
+                continue
+            seen.add(d.name)
+            if d.name not in pkg and d.name not in skip and not d.is_symlink() and not (d / MARKER).exists():
+                out[d.name] = d
     return out
 
 

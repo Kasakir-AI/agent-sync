@@ -54,7 +54,7 @@ class Editor:
         self.text = self.saved = self.path.read_text() if self.path.exists() else ""
         self.cfg = parse(self.text, self.path, home)     # a ValueError here: run() offers the editor instead
         self.did_save = False
-        self.roles_path = roles.files(home)[self.cfg.source]
+        self.roles_path = roles.files(home, self.cfg.agents)[self.cfg.source]
         self.roles_text = self.roles_saved = self.roles_path.read_text() if self.roles_path.exists() else None
         color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
         self.bold = (lambda s: f"\033[1m{s}\033[0m") if color else (lambda s: s)
@@ -110,7 +110,7 @@ class Editor:
     def refresh_roles(self) -> None:
         """Point the roles file at the current source tool, unless there are role edits not saved yet."""
         if self.roles_text == self.roles_saved:
-            self.roles_path = roles.files(self.home)[self.cfg.source]
+            self.roles_path = roles.files(self.home, self.cfg.agents)[self.cfg.source]
             self.roles_text = self.roles_saved = self.roles_path.read_text() if self.roles_path.exists() else None
 
     def set(self, key: str, value, table: str | None = None) -> bool:
@@ -236,7 +236,8 @@ class Editor:
         fields = [("claude", "Claude Code", "opus, sonnet, haiku, fable"),
                   ("cursor", "Cursor", "claude-opus-5-5-high-fast, gpt-6.2-sol"),
                   ("codex", "Codex", "gpt-6.2-sol"),
-                  ("codex_effort", "Codex reasoning effort", "low, medium, high, xhigh")]
+                  ("codex_effort", "Codex reasoning effort", "low, medium, high, xhigh"),
+                  ("gemini", TOOLS["gemini"].name, "inherit")]
         while True:
             pick = self.choose([(k, f"{label:<24} {getattr(m, k)}") for k, label, _ in fields], "Change which")
             if pick is None:
@@ -245,7 +246,7 @@ class Editor:
             self.say(f"  Examples: {examples}. Default: {getattr(AgentModels(), pick)}")
             value = self.ask(f"{label} (Enter keeps {getattr(m, pick)}): ")
             if value:
-                self.set(pick, value, "agent_models")
+                self.set(pick, "" if pick == "gemini" and value == "inherit" else value, "agent_models")
                 m = self.cfg.agent_models
 
     def notes(self) -> None:
@@ -387,8 +388,7 @@ class Editor:
                 self.say("  " + self.dim("Changed. (Not saved yet: choose s to save.)"))
 
     def instructions_file(self) -> None:
-        src = "claude" if self.cfg.source == "cursor" else self.cfg.source
-        path = instructions.files(self.home)[src]
+        path = instructions.files(self.home, self.cfg.agents)[self.cfg.source]
         state = "on" if self.cfg.mirror_instructions else "off (switch it on under 'What to keep in step')"
         self.explain("Global instructions", f"{self.short(path)} opens in your editor.",
                      f"Copying it to the other tools is {state}.")

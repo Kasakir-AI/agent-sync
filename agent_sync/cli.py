@@ -95,13 +95,14 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
             names, gone = skills.package_choice(cfg.home, package, dest, taken) if code == 0 else (None, [])
             for name in gone:
                 tools.act(log, dry, f"remove {name} ({package} ships it, but an earlier package has that name)",
-                          tools.remove_args(cfg.skills_cli, name))
-            tools.act(log, dry, f"skills from {package} for {', '.join(tools.skill_agents(cfg.agents))}",
-                      tools.skill_args(cfg.skills_cli, package, names, enabled=cfg.agents))
+                          tools.remove_args(cfg.skills_cli, name, enabled=cfg.agents))
+            if names != []:
+                tools.act(log, dry, f"skills from {package} for {', '.join(tools.skill_agents(cfg.agents))}",
+                          tools.skill_args(cfg.skills_cli, package, names, enabled=cfg.agents))
             if code == 0 and cfg.remove_dropped_skills:
                 for name in skills.dropped(cfg.home, package, dest):
                     tools.act(log, dry, f"remove {name} (no longer in {package})",
-                              tools.remove_args(cfg.skills_cli, name))
+                              tools.remove_args(cfg.skills_cli, name, enabled=cfg.agents))
             if (dest / "agents").is_dir():
                 version = "0"
                 manifest = dest / ".cursor-plugin/plugin.json"

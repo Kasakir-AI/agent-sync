@@ -17,6 +17,7 @@ class AgentModels:
     cursor: str = "claude-opus-5-5-high-fast"
     codex: str = "gpt-6.2-sol"
     codex_effort: str = "high"
+    gemini: str = ""
 
 
 @dataclass
@@ -118,6 +119,6 @@ def parse(text: str, path: Path, home: Path) -> Config:
             raise ValueError(f"extra step {step.get('name', '?')!r} needs command = [\"program\", \"arg\", ...]")
     for key, value in (data.get("agent_models") or {}).items():
         if not hasattr(cfg.agent_models, key):
-            raise ValueError(f"unknown agent_models key {key!r}; use claude, cursor, codex or codex_effort")
+            raise ValueError(f"unknown agent_models key {key!r}; use claude, cursor, codex, codex_effort or gemini")
         setattr(cfg.agent_models, key, value)
     return cfg

@@ -68,9 +68,9 @@ def skill_agents(enabled) -> list[str]:
                               for agent in tool.skills_agents))
 
 
-def remove_args(cli: str, name: str) -> list[str]:
-    """Remove one skill from every tool."""
-    return ["npx", "-y", "--prefer-online", cli, "remove", "-g", "-s", name, "-y"]
+def remove_args(cli: str, name: str, *, enabled=DEFAULT_AGENTS) -> list[str]:
+    """Remove one package skill from the enabled agents."""
+    return ["npx", "-y", "--prefer-online", cli, "remove", "-g", "-s", name, "-a", *skill_agents(enabled), "-y"]
 
 
 # A CLI writes its own settings the first time it starts (Claude Code ~/.claude.json, Cursor Agent
@@ -89,18 +89,19 @@ def version(cmd: str, home: Path | None = None) -> str:
     return sh([cmd, "--version"], timeout=60)[1] or "?"
 
 
-def homebrew_prefix(cmd: str, cask: str) -> Path | None:
-    """The Homebrew prefix when `cmd` is that Homebrew cask's copy (…/Caskroom/<cask>/…), else None."""
+def homebrew_prefix(cmd: str, name: str, kind: str = "cask") -> Path | None:
+    """The Homebrew prefix when it owns this copy of the command."""
     found = shutil.which(cmd, path=PATH)
     real = Path(os.path.realpath(found)) if found else None
-    if real and f"/Caskroom/{cask}/" in str(real):
-        return Path(str(real).split("/Caskroom/")[0])
+    room = "Caskroom" if kind == "cask" else "Cellar"
+    if real and f"/{room}/{name}/" in str(real):
+        return Path(str(real).split(f"/{room}/", 1)[0])
     return None
 
 
 def brew_writable(prefix: Path) -> bool:
     """Homebrew can only update from the account that owns it."""
-    return all(os.access(prefix / d, os.W_OK) for d in ("Caskroom", "bin") if (prefix / d).exists())
+    return all(os.access(prefix / d, os.W_OK) for d in ("Caskroom", "Cellar", "bin") if (prefix / d).exists())
 
 
 def act(log, dry: bool, label: str, args: list[str], timeout: int = 900) -> None:
@@ -121,11 +122,11 @@ def update_clis(log, cfg, dry: bool = False) -> None:
         tool, cmd = agent.id, agent.command
         if not cfg.wants_cli(tool):
             continue
-        cask = agent.brew[1] if agent.brew else None
         if not shutil.which(cmd, path=PATH):
             log("skip", f"{cmd} not installed (`agent-sync setup` installs it)")
             continue
-        prefix = homebrew_prefix(cmd, cask) if cask else None
+        kind, name = agent.brew or ("", "")
+        prefix = homebrew_prefix(cmd, name, kind) if agent.brew else None
         if dry and not started(cmd, cfg.home):
             log("dry", f"{cmd} has never been started in this account; a real run would update it")
             continue
@@ -141,9 +142,10 @@ def update_clis(log, cfg, dry: bool = False) -> None:
                 code, out = sh(["brew", "update", "-q"])
                 log("ok" if code == 0 else "FAIL", f"brew update{': ' + out if code else ''}")
                 brew_updated = True
-            outdated = sh(["brew", "outdated", "--cask", "--greedy", cask], timeout=300)[1]
-            if cask in outdated:
-                act(log, dry, f"{cmd} upgrade", ["brew", "upgrade", "--cask", cask])
+            greedy = ["--greedy"] if kind == "cask" else []
+            outdated = sh(["brew", "outdated", f"--{kind}", *greedy, name], timeout=300)[1]
+            if name in outdated:
+                act(log, dry, f"{cmd} upgrade", ["brew", "upgrade", f"--{kind}", name])
             else:
                 log("ok", f"{cmd} is current (Homebrew)")
         else:
@@ -271,6 +273,8 @@ def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=
             if len(parts) >= 3 and parts[1] == "user" and parts[2].startswith(("https://", "git@")):
                 act(log, dry, f"Cursor plugin marketplace {parts[0]}",
                     ["cursor-agent", "plugin", "marketplace", "update", parts[0]])
+    if usable("gemini"):
+        act(log, dry, f'{TOOLS["gemini"].name} extensions', [TOOLS["gemini"].command, "extensions", "update", "--all"])
 
 
 def extra_steps(log, steps: list[dict], dry: bool = False) -> None:

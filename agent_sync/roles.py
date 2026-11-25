@@ -47,13 +47,18 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
         return [f"WARN  no role lines in {src}"]
     changes = []
     for path in grouped_paths(locations):
-        if path == src or not path.exists():
+        if path == src:
             continue
-        header, old, rest = split(path.read_text())
+        if path.exists():
+            current = path.read_text()
+        else:
+            current = "---\ndescription: pstack model roles\nalwaysApply: true\n---\n" if path.suffix == ".mdc" else ""
+        header, old, rest = split(current)
         if old == roles:
             continue
         new = "\n".join(header + roles) + ("\n" + rest if rest else "") + "\n"
         if not dry:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(new.replace("\n\n\n", "\n\n"))
         changes.append(f"{'would update' if dry else 'updated'} {path}")
     return changes

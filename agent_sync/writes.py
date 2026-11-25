@@ -237,19 +237,40 @@ def codex_mcp_text(text: str, name: str, winner: dict) -> str:
     return updated
 
 
-def mcp_text(step: Step, text: str) -> str:
-    winner = json.loads(step.winner.body)
-    name = step.winner.key
-    if "codex" in step.tools:
-        return codex_mcp_text(text, name, winner)
+def json_mcp_text(text: str, name: str, winner: dict, *, aliases: tuple[str, ...] = (),
+                  typed: bool = True) -> str:
     data = json.loads(text) if text else {}
     servers = data.get("mcpServers") or {}
-    entry = {key: value for key, value in (servers.get(name) or {}).items()       # keeps the file's key order
-             if key not in MCP_KEYS or key in winner}
-    entry.update(winner, type="stdio" if "command" in winner else "http")
+    entry = {key: value for key, value in (servers.get(name) or {}).items()
+             if key not in (*MCP_KEYS, *aliases) or key in winner}
+    entry.update(winner)
+    if typed:
+        entry["type"] = "stdio" if "command" in winner else "http"
     servers[name] = entry
     data["mcpServers"] = servers
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+
+def gemini_mcp_text(text: str, name: str, winner: dict) -> str:
+    return json_mcp_text(text, name, mcp.gemini_entry(winner), aliases=("httpUrl",), typed=False)
+
+
+def antigravity_mcp_text(text: str, name: str, winner: dict) -> str:
+    return json_mcp_text(text, name, winner, aliases=("serverUrl",), typed=False)
+
+
+MCP_WRITERS = {
+    "claude-json": json_mcp_text,
+    "codex-toml": codex_mcp_text,
+    "cursor-json": json_mcp_text,
+    "gemini-json": gemini_mcp_text,
+    "antigravity-json": antigravity_mcp_text,
+}
+
+
+def mcp_text(step: Step, text: str) -> str:
+    fmt = TOOLS[step.tools[0]].mcp_format
+    return MCP_WRITERS[fmt](text, step.winner.key, json.loads(step.winner.body))
 
 
 def edits(steps: list[Step]) -> list[Edit]:

@@ -60,7 +60,7 @@ def rendered(tool: str, current: str, body: str, src: Path, synced: frozenset[st
 def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = None, *,
            enabled=DEFAULT_AGENTS) -> list[str]:
     if source == "cursor":
-        return ["skip  Cursor can't be the source of global instructions; set source to claude or codex"]
+        return ["skip  Cursor can't be the source of global instructions; choose another enabled agent as the source"]
     locations = files(home, enabled)
     src = locations[source]
     if not src.exists():

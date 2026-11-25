@@ -31,6 +31,10 @@
   --codex-back: #e8eeff;
   --cursor: #4b3b76;
   --cursor-back: #eee9f8;
+  --gemini: #16604e;
+  --gemini-back: #e0f2e9;
+  --antigravity: #75520d;
+  --antigravity-back: #fcf0cf;
   font: 1rem/1.5 "Avenir Next", system-ui, sans-serif;
   background: var(--back);
   color: var(--ink);
@@ -60,6 +64,10 @@
     --codex-back: #2c3d69;
     --cursor: #ded1ff;
     --cursor-back: #3b3359;
+    --gemini: #a9e5cd;
+    --gemini-back: #25493e;
+    --antigravity: #ffd88a;
+    --antigravity-back: #4d3e25;
   }
 }
 * { box-sizing: border-box; }
@@ -115,6 +123,8 @@ main { padding-top: clamp(1rem, 3vw, 2rem); }
 .claude { color: var(--claude); background: var(--claude-back); }
 .codex { color: var(--codex); background: var(--codex-back); }
 .cursor { color: var(--cursor); background: var(--cursor-back); }
+.gemini { color: var(--gemini); background: var(--gemini-back); }
+.antigravity { color: var(--antigravity); background: var(--antigravity-back); }
 .versions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .75rem; }
 .version {
   display: flex;

@@ -61,13 +61,32 @@ TOOLS: dict[str, Tool] = {
         installer=("/bin/bash", "-c", "curl -fsS https://cursor.com/install | bash"),
         updater=("cursor-agent", "update"),
     ),
+    "gemini": Tool(
+        id="gemini", name="Gemini CLI", command="gemini", skills_agents=("gemini-cli",),
+        skills_dir=".agents/skills", mcp=".gemini/settings.json", mcp_format="gemini-json",
+        instructions=".gemini/GEMINI.md", roles=".agents/pstack-models.md",
+        agents_dir=".gemini/agents", agent_format="gemini-md", first_run=".gemini/settings.json",
+        detect=(".gemini/settings.json",), brew=("formula", "gemini-cli"),
+        installer=("npm", "install", "-g", "@google/gemini-cli"),
+        updater=("npm", "install", "-g", "@google/gemini-cli@latest"),
+    ),
+    "antigravity": Tool(
+        id="antigravity", name="Antigravity", command="agy", skills_agents=("antigravity",),
+        skills_dir=".gemini/config/skills", mcp=".gemini/config/mcp_config.json", mcp_format="antigravity-json",
+        instructions=".gemini/GEMINI.md", roles=".agents/pstack-models.md",
+        agents_dir=".gemini/config/agents", agent_format="antigravity-md", first_run=".gemini/antigravity-cli",
+        detect=(".gemini/antigravity", ".gemini/antigravity-cli", "/Applications/Antigravity.app"),
+        brew=None, installer=("/bin/bash", "-c", "curl -fsSL https://antigravity.google/cli/install.sh | bash"),
+        updater=("agy", "update"),
+    ),
 }
 DEFAULT_AGENTS = ("claude", "codex", "cursor")
 
 
 def paths(home: Path, agents: Iterable[str], field: str) -> dict[str, Path]:
+    enabled = set(agents)
     return {tool.id: home / path for tool in TOOLS.values()
-            if tool.id in agents and (path := getattr(tool, field)) is not None}
+            if tool.id in enabled and (path := getattr(tool, field)) is not None}
 
 
 def grouped_paths(mapping: dict[str, Path]) -> dict[Path, tuple[str, ...]]:

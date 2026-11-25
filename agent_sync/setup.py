@@ -87,7 +87,9 @@ def plan(cfg) -> list[Step]:
             "install Node from https://nodejs.org or your system's package manager")
     for tool in TOOLS.values():
         if cfg.wants_cli(tool.id) and not shutil.which(tool.command, path=tools.PATH):
-            brew_args = [f"--{tool.brew[0]}", tool.brew[1]] if tool.brew and sys.platform == "darwin" else None
+            brew_args = None
+            if tool.brew and (tool.brew[0] == "formula" or sys.platform == "darwin"):
+                brew_args = [f"--{tool.brew[0]}", tool.brew[1]]
             add(tool.id, tool.name, brew_args, list(tool.installer))
     return steps
 

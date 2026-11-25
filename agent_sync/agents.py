@@ -35,8 +35,11 @@ class Agent:
         desc = re.search(r"^description:\s*(.+)$", front, re.M)
         if not name or not desc:
             raise ValueError("front matter needs name and description")
+        value = name.group(1).strip()
+        if not value or value in (".", "..") or "/" in value or "\\" in value:
+            raise ValueError(f"invalid agent name: {value!r}")
         lines = [l for l in front.splitlines() if not l.startswith("model:")]
-        return cls(name.group(1).strip(), desc.group(1).strip(), lines,
+        return cls(value, desc.group(1).strip(), lines,
                    re.search(r"^model:", front, re.M) is not None, body.rstrip() + "\n")
 
     def markdown(self, model: str) -> str:
@@ -59,10 +62,24 @@ def write_if_changed(path: Path, text: str, dry: bool = False) -> bool:
     return True
 
 
+def gemini_markdown(agent: Agent, models: AgentModels) -> str:
+    front = [f"name: {agent.name}", f"description: {agent.description}"]
+    if models.gemini:
+        front.append(f"model: {models.gemini}")
+    return "---\n" + "\n".join(front) + "\n---\n" + agent.body
+
+
+def antigravity_markdown(agent: Agent, models: AgentModels) -> str:
+    return (f"---\nname: {agent.name}\ndescription: {agent.description}\nsubagent: true\nmainAgent: false\n"
+            "tools: [read_file, edit_file, write_file, run_command, manage_task, search_web]\n---\n" + agent.body)
+
+
 FORMATS = {
     "claude-md": (".md", lambda a, models: a.markdown(models.claude)),
     "codex-toml": (".toml", lambda a, models: a.codex_toml(models.codex, models.codex_effort)),
     "cursor-plugin": (".md", lambda a, models: a.markdown(models.cursor)),
+    "gemini-md": (".md", gemini_markdown),
+    "antigravity-md": (".md", antigravity_markdown),
 }
 
 
@@ -81,7 +98,11 @@ def mirror(package_dir: Path, package: str, home: Path, models: AgentModels, ver
         if (notes or {}).get(a.name):
             a.body = a.body.rstrip() + "\n\n" + notes[a.name].strip() + "\n"
         for folder, readers in targets.items():
-            suffix, render = FORMATS[TOOLS[readers[0]].agent_format]
+            fmt = TOOLS[readers[0]].agent_format
+            if fmt == "gemini-md" and not re.fullmatch(r"[a-z0-9_-]+", a.name):
+                changes.append(f"WARN  {a.name!r} is not a valid Gemini CLI agent name; skipped")
+                continue
+            suffix, render = FORMATS[fmt]
             path = folder / (a.name + suffix)
             if write_if_changed(path, render(a, models), dry):
                 changes.append(f"{verb} {path}")

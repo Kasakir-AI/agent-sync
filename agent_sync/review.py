@@ -122,7 +122,6 @@ class Kind:
 
 
 RULES = {"claude": (".claude/rules", ".md"), "cursor": (".cursor/rules", ".mdc")}
-EXTRA_SKILL_ROOTS = {"codex": ".codex/skills", "cursor": ".cursor/skills"}
 SKILL_IGNORES = {skills.MARKER, ".DS_Store"}
 
 
@@ -267,7 +266,7 @@ def skill_folders(home: Path, enabled=DEFAULT_AGENTS) -> dict[tuple[str, Path], 
     """(name, real folder) -> the tools that read it, for every skill folder in the tools' skill folders."""
     folders: dict[tuple[str, Path], set[str]] = {}
     roots = list(grouped_paths(skills.folders(home, enabled)).items())
-    roots.extend((home / root, (tool,)) for tool, root in EXTRA_SKILL_ROOTS.items() if tool in enabled)
+    roots.extend((home / root, (tool,)) for tool, root in skills.EXTRA_ROOTS.items() if tool in enabled)
     for root, tools in roots:
         for path in sorted(root.iterdir()) if root.is_dir() else ():
             if not path.name.startswith(".") and (path / "SKILL.md").is_file():
@@ -737,8 +736,12 @@ def scan(home: Path, cfg: Config, kinds: Iterable[str] | None = None) -> Scan:
     installers |= {str(meta.get("source") or "").rstrip("/").removesuffix(".git").rsplit("/", 1)[-1]
                    for meta in locked.values()}
     installers.discard("")
+    configured_mcp = {tool: mcp.read(home, tool) for tool in cfg.agents} if any(
+        group.kind == "mcp" for group in groups) else {}
     for group in groups:
         have = group_tools(group)
+        if group.kind == "mcp":
+            have.update(tool for tool, servers in configured_mcp.items() if group.name in servers)
         location = KINDS[group.kind].location
         if not group.scoped_rule:
             group.missing = tuple(tool for tool in cfg.agents if tool not in have and location(home, group.name, tool))
