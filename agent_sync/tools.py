@@ -35,14 +35,14 @@ def sh(args: list[str], timeout: int = 900, cwd: Path | None = None) -> tuple[in
     return p.returncode, tail
 
 
-def raw(args: list[str], timeout: int = 120, *, ok_codes: tuple[int, ...] = (0,)) -> str:
-    """A command's standard output when its exit code is accepted."""
+def raw(args: list[str], timeout: int = 120, *, ok_codes: tuple[int, ...] = (0,), failure: str = "") -> str:
+    """Return stdout for accepted exit codes and `failure` otherwise."""
     try:
         p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
                            env={**os.environ, "PATH": PATH, "HOMEBREW_NO_AUTO_UPDATE": "1"})
     except (OSError, subprocess.TimeoutExpired):
-        return ""
-    return p.stdout if p.returncode in ok_codes else ""
+        return failure
+    return p.stdout if p.returncode in ok_codes else failure
 
 
 def checkout(package: str, dest: Path) -> tuple[int, str]:
@@ -135,7 +135,7 @@ def act(log, dry: bool, label: str, args: list[str], timeout: int = 900, *, run=
 
 
 def update_skills(log, dry: bool, cli: str, *, home: Path, enabled=DEFAULT_AGENTS) -> None:
-    """Check for global skill updates before backing up and updating the reported installs."""
+    """Check for global skill updates and back up the installs the updater can change."""
     from . import skills as installed_skills
 
     if not (locked := installed_skills.locked(home)):
@@ -144,15 +144,28 @@ def update_skills(log, dry: bool, cli: str, *, home: Path, enabled=DEFAULT_AGENT
     label = "skills from every source (skills update)"
     names = []
     if not dry:
-        report = ANSI.sub("", raw([*command, "check", "-g"], timeout=900, ok_codes=(0, 1)))
+        failure = "skills check did not complete"
+        report = ANSI.sub("", raw([*command, "check", "-g"], timeout=900, ok_codes=(0, 1), failure=failure))
         reported = set(re.findall(r"^↑ (.+) has an update$", report, re.MULTILINE))
+        legacy = re.findall(r"^  ↑ (.+)$", report, re.MULTILINE)
         names = sorted(name for name in reported if name in locked and safe_id(name))
-        if ("Checking for skill updates" not in report or "Failed to check skills from" in report
-                or "Failed to update" in report or reported != set(names)):
+        failed = report == failure or any(message in report for message in (
+            "Failed to check skills from", "Failed to update", "Could not check ",
+        ))
+        if failed or reported != set(names):
             log("FAIL", "skills check did not confirm all global updates")
-        if not names:
-            return
-        installed_skills.backup_installs(home, enabled, names)
+        if legacy:
+            log("info", "this skills CLI updates all skills at once; backing up all locked skills")
+            names = []
+        elif not names:
+            if failed or reported or any(line in report.splitlines() for line in (
+                "✓ All global skills are up to date", "✓ All skills are up to date",
+                "No global skills to check.", "No GitHub skills to check.",
+                "No global skills tracked in lock file.", "No skills tracked in lock file.",
+            )):
+                return
+            log("info", "skills update list could not be read; backing up all locked skills before updating")
+        installed_skills.backup_installs(home, enabled, names or locked)
     act(log, dry, label, [*command, "update", "-g", "-y", *names])
 
 

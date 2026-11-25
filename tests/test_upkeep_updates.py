@@ -81,17 +81,23 @@ def test_run_updates_global_skills_once_after_packages(tmp_path, monkeypatch, co
         assert commands.ran.count([*SKILLS_UPDATE, "example"]) == 1
 
 
-def test_global_skills_up_to_date_never_open_a_backup(tmp_path, commands):
+@pytest.mark.parametrize(("cli_name", "report"), [
+    ("skills@latest", "Checking for skill updates…\n✓ All global skills are up to date\n"),
+    ("skills@1.4.5", "Checking for skill updates...\n\nChecking 1 skill(s) for updates...\n\n"
+                     "✓ All skills are up to date\n\n"),
+])
+def test_global_skills_up_to_date_never_open_a_backup(tmp_path, commands, cli_name, report):
     write(tmp_path, ".agents/.skill-lock.json", '{"skills":{"current":{}}}')
     write(tmp_path, ".agents/skills/current/SKILL.md", "unchanged")
-    commands.output[SKILLS_CHECK] = "Checking for skill updates…\n✓ All global skills are up to date\n"
+    check = (*SKILLS_CHECK[:3], cli_name, "check", "-g")
+    commands.output[check] = report
     root = tmp_path / "backups"
 
     with backups.during(tmp_path, root):
-        tools.update_skills(commands.log, False, "skills@latest", home=tmp_path)
+        tools.update_skills(commands.log, False, cli_name, home=tmp_path)
         assert not root.exists()
 
-    assert commands.read == [SKILLS_CHECK]
+    assert commands.read == [check]
     assert commands.ran == []
 
 
@@ -114,7 +120,10 @@ def test_global_skill_update_backs_up_only_reported_installs(tmp_path, monkeypat
     write(tmp_path, ".agents/.skill-lock.json", '{"skills":{"renamed":{},"current":{}}}')
     changed = write(tmp_path, ".agents/skills/renamed/SKILL.md", "original")
     current = write(tmp_path, ".agents/skills/current/SKILL.md", "unchanged")
-    commands.output[SKILLS_CHECK] = "Checking for skill updates…\n\x1b[32m↑ renamed has an update\x1b[0m\n"
+    commands.output[SKILLS_CHECK] = (
+        "Checking for skill updates…\n\nFetching 1 source…\nChecking skills from source: team/pack\n"
+        "↑ renamed has an update\n\n1 skill(s) can be updated; run npx skills update to install\n\n"
+    )
     root = tmp_path / "backups"
 
     def sh(args, timeout):
@@ -128,6 +137,44 @@ def test_global_skill_update_backs_up_only_reported_installs(tmp_path, monkeypat
     monkeypatch.setattr(tools, "sh", sh)
     with backups.during(tmp_path, root):
         tools.update_skills(commands.log, False, "skills@latest", home=tmp_path)
+
+    assert changed.read_text() == "updated"
+
+
+@pytest.mark.parametrize("report", [
+    pytest.param(
+        "\x1b[38;5;145mChecking for skill updates...\x1b[0m\n\n"
+        "\x1b[38;5;102mChecking 2 skill(s) for updates...\x1b[0m\n\n"
+        "\x1b[38;5;145m1 update(s) available:\x1b[0m\n\n"
+        "  \x1b[38;5;145m↑\x1b[0m renamed\n"
+        "    \x1b[38;5;102msource: team/pack\x1b[0m\n\n"
+        "\x1b[38;5;102mRun\x1b[0m \x1b[38;5;145mnpx skills update\x1b[0m "
+        "\x1b[38;5;102mto update all skills\x1b[0m\n\n",
+        id="legacy-indented-rows",
+    ),
+    pytest.param("Checking for skill updates…\nChanges found in team/pack\n", id="unknown-output"),
+    pytest.param("", id="empty-output"),
+])
+def test_global_skill_bulk_update_backs_up_all_locked_installs(tmp_path, monkeypatch, commands, report):
+    lock = write(tmp_path, ".agents/.skill-lock.json", '{"skills":{"renamed":{},"current":{}}}')
+    changed = write(tmp_path, ".agents/skills/renamed/SKILL.md", "original")
+    current = write(tmp_path, ".agents/skills/current/SKILL.md", "unchanged")
+    unmanaged = write(tmp_path, ".agents/skills/unmanaged/SKILL.md", "unmanaged")
+    update = [*SKILLS_UPDATE[:3], "skills@1.4.5", "update", "-g", "-y"]
+    commands.output[(*update[:4], "check", "-g")] = report
+
+    def sh(args, timeout):
+        assert args == update
+        assert any(level == "info" for level, _ in commands.lines)
+        for original in (lock, changed, current):
+            assert (run.folder / original.relative_to(tmp_path)).read_bytes() == original.read_bytes()
+        assert not (run.folder / unmanaged.relative_to(tmp_path)).exists()
+        changed.write_text("updated")
+        return 0, ""
+
+    monkeypatch.setattr(tools, "sh", sh)
+    with backups.during(tmp_path, tmp_path / "backups") as run:
+        tools.update_skills(commands.log, False, "skills@1.4.5", home=tmp_path)
 
     assert changed.read_text() == "updated"
 
