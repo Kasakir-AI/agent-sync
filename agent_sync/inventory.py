@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from fnmatch import fnmatch
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -172,9 +173,25 @@ def antigravity_plugins(home: Path) -> Iterator[tuple[str, Path, str, bool]]:
                        entry.get("enabled") is not False)
 
 
+def gemini_enabled(rules: object, home: Path) -> bool:
+    """Gemini CLI's extension-enablement.json: overrides are path globs, a "!" one switches the extension off there,
+    and the last that matches wins. agent-sync works at user level, so it asks about the home folder."""
+    loads = True
+    for rule in rules if isinstance(rules, list) else ():
+        if isinstance(rule, str):
+            pattern = rule.removeprefix("!")
+            if fnmatch(f"{home}/", pattern) or fnmatch(str(home), pattern):
+                loads = not rule.startswith("!")
+    return loads
+
+
 def gemini_plugins(home: Path) -> Iterator[tuple[str, Path, str, bool]]:
-    for path in sorted((home / ".gemini/extensions").glob("*/gemini-extension.json")):
-        yield f"{path.parent.name}@extensions", path.parent, "", True
+    root = home / ".gemini/extensions"
+    enablement = settings(root / "extension-enablement.json")
+    for path in sorted(root.glob("*/gemini-extension.json")):
+        entry = enablement.get(path.parent.name)
+        rules = entry.get("overrides") if isinstance(entry, dict) else None
+        yield f"{path.parent.name}@extensions", path.parent, "", gemini_enabled(rules, home)
 
 
 READERS = {

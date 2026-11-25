@@ -112,3 +112,29 @@ def test_inventory_command_is_read_only(tmp_path, monkeypatch, capsys):
     assert "MCP server rea from settings (rea-agents 6.8.0, 6.10.1 is out)" in output
     assert "approval required to remove MCP server cf from Codex settings" in output
     assert "would update MCP server rea in Codex settings" in output
+
+
+def test_gemini_extensions_switched_off_for_the_home_folder_do_not_load(tmp_path):
+    for name in ("on", "off", "back", "elsewhere"):
+        write(tmp_path, f".gemini/extensions/{name}/gemini-extension.json", {"name": name})
+    write(tmp_path, ".gemini/extensions/extension-enablement.json", {
+        "off": {"overrides": [f"!{tmp_path}/*"]},
+        "back": {"overrides": [f"!{tmp_path}/*", f"{tmp_path}/*"]},
+        "elsewhere": {"overrides": ["!/somewhere/else/*"]},
+    })
+    loaded = inventory.plugins(tmp_path, ("gemini",))["gemini"]
+    assert sorted(plugin.name for plugin in loaded) == ["back", "elsewhere", "on"]
+    every = inventory.plugins(tmp_path, ("gemini",), include_disabled=True)["gemini"]
+    assert [plugin.loads for plugin in every if plugin.name == "off"] == [False]
+
+
+def test_a_broken_mcp_or_app_file_skips_that_file_not_the_plugin(tmp_path):
+    root = codex_plugin(tmp_path, "pack@remote", "1.0.0", remote=True, metadata={
+        "name": "pack", "version": "1.0.0", "mcpServers": "../../outside.json"})
+    write(root, ".mcp.json", "{broken")
+    write(root, ".app.json", "[")
+    write(root, "mcp.json", {"good": {"url": "https://good.example"}})
+    write(root.parent.parent, "outside.json", {"evil": {"url": "https://evil.example"}})
+    make_skill(root / "skills", "kept")
+    plugin, = inventory.plugins(tmp_path, ("codex",))["codex"]
+    assert plugin.skill_names == {"kept"} and [name for name, _ in plugin.servers] == ["good"]
