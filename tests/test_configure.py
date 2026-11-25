@@ -23,7 +23,8 @@ def editor(home, answers, text=SETTINGS):
 
 
 def test_desktop_notifications_default_on_and_can_be_disabled(tmp_path):
-    position = next(i for i, (key, _) in enumerate(configure.PARTS, 1) if key == "notify")
+    keys = [key for key, _ in configure.PARTS]
+    position = keys.index("notify") + 1 + 2 * (keys.index("notify") > keys.index("mirror_memory"))
     ed, path, _ = editor(tmp_path, ["3", str(position), "", "s", "q"])
     assert ed.cfg.notify is True
     ed.menu()
@@ -142,13 +143,23 @@ def test_keep_mcp_versions_can_be_edited_and_reloaded(tmp_path):
     assert tomllib.loads(path.read_text())["keep_mcp_versions"] == ["rea"]
 
 
-def test_shared_memory_is_off_by_default_and_can_be_enabled(tmp_path):
+def test_shared_memory_is_on_by_default_and_can_be_disabled(tmp_path):
     ed, path, said = editor(tmp_path, ["3", "5", "", "s", "q"])
-    assert ed.cfg.mirror_memory is False
-    ed.menu()
-    assert any("Share Claude Code's home-project memory" in line for line in said)
     assert ed.cfg.mirror_memory is True
-    assert tomllib.loads(path.read_text())["mirror_memory"] is True
+    ed.menu()
+    assert any("Share Claude Code's home-project memory with the other tools (on by default)" in line for line in said)
+    assert ed.cfg.mirror_memory is False
+    assert tomllib.loads(path.read_text())["mirror_memory"] is False
+
+
+def test_memory_lists_can_be_edited_and_reloaded(tmp_path):
+    answers = ["3", "6", "1", "seller", "", "7", "1", "shared-safely", "", "", "s", "q"]
+    ed, path, _ = editor(tmp_path, answers)
+    assert ed.cfg.private_memory == ed.cfg.share_memory == []
+    ed.menu()
+    saved = tomllib.loads(path.read_text())
+    assert ed.cfg.private_memory == saved["private_memory"] == ["seller"]
+    assert ed.cfg.share_memory == saved["share_memory"] == ["shared-safely"]
 
 
 def test_upkeep_safety_and_global_tools_settings_can_be_saved(tmp_path):

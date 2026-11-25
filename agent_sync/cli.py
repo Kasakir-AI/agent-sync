@@ -163,7 +163,8 @@ def run(force: bool, echo: bool, dry: bool = False) -> int:
                 log("FAIL", f"global instructions: {e}")
         if cfg.mirror_memory:
             try:
-                log.lines(memory.mirror(cfg.home, dry, enabled=cfg.agents))
+                log.lines(memory.mirror(cfg.home, dry, enabled=cfg.agents,
+                                        private_memory=cfg.private_memory, share_memory=cfg.share_memory))
             except OSError as e:
                 log("FAIL", f"shared memory: {e}")
         log_review(cfg, log)

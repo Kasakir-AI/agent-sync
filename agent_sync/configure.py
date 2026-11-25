@@ -24,7 +24,7 @@ PARTS = [  # (setting, what it does) for the on/off switches
     ("mirror_roles", "Copy pstack's model roles from the source tool to the others"),
     ("mirror_mcp", "Add the source tool's MCP servers to the other tools (never deletes any)"),
     ("mirror_instructions", "Share global instructions across enabled tools"),
-    ("mirror_memory", "Share Claude Code's home-project memory with the other tools"),
+    ("mirror_memory", "Share Claude Code's home-project memory with the other tools (on by default)"),
     ("update_plugins", "Update plugins and extensions for enabled agents"),
     ("update_mcp_programs", "Update programs used by enabled agents' MCP servers"),
     ("remove_dropped_skills", "Uninstall skills a skill package stops shipping"),
@@ -233,11 +233,25 @@ class Editor:
 
     def parts(self) -> None:
         self.explain("What to keep in step", "Switch the parts of the daily upkeep on or off.")
+        memory_lists = {
+            "private_memory": "Memory notes kept in Claude Code",
+            "share_memory": "Sensitive memory notes allowed to be shared",
+        }
         while True:
             options = [(k, f"[{'x' if getattr(self.cfg, k) else ' '}] {label}") for k, label in PARTS]
-            pick = self.choose(options, "Switch which on/off")
+            position = next(i for i, (key, _) in enumerate(options) if key == "mirror_memory") + 1
+            options[position:position] = [(key, f"{label} ({len(getattr(self.cfg, key))})")
+                                          for key, label in memory_lists.items()]
+            pick = self.choose(options)
             if pick is None:
                 return
+            if pick in memory_lists:
+                self.say("  Use the note's name or filename stem. "
+                         "Notes marked private or containing secrets stay in Claude Code.")
+                new = self.edit_list(memory_lists[pick], getattr(self.cfg, pick), "Memory note name", ["project-notes"])
+                if new is not None:
+                    self.set(pick, new)
+                continue
             if pick == "launcher" and not self.cfg.launcher:
                 self.say("  The next upkeep puts it on the Desktop (or run: agent-sync launcher).")
             if pick == "mirror_instructions" and not self.cfg.mirror_instructions:

@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from agent_sync import instructions, pending
 from agent_sync.registry import TOOLS
 from tests.test_pending import approve_current
@@ -254,3 +256,44 @@ def test_enabling_an_existing_file_does_not_delete_shared_instructions(tmp_path)
     instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
     assert files["codex"].read_text() == "Keep replies brief.\nRun pytest.\n"
     assert gemini.read_text() == "Run pytest.\nKeep replies brief.\n"
+
+
+def test_first_seed_keeps_private_sections_and_key_blocks_local(tmp_path):
+    secret = "sk-proj-" + "A1" * 10
+    key_body = "personal-key-material"
+    local = ("<!-- agent-sync: private -->\nPersonal notes.\n<!-- agent-sync: end private -->\n"
+             f"{secret}\n-----BEGIN PRIVATE KEY-----\n{key_body}\n-----END PRIVATE KEY-----\n")
+    source = local + "Ask before changing credentials.\n"
+    files = setup(tmp_path, source, "")
+    messages = instructions.mirror(tmp_path, "claude")
+    warning, = [line for line in messages if line.startswith("WARN")]
+    assert warning == (f"WARN  {files['claude']} has 4 line(s) that look like secrets "
+                       "(OpenAI/Anthropic API key, private key); they stay in that file only.")
+    assert secret not in warning and key_body not in warning
+    assert files["claude"].read_text() == source
+    assert files["codex"].read_text() == "Ask before changing credentials.\n"
+    assert files["cursor"].read_text().split("---\n")[-1] == files["codex"].read_text()
+
+
+@pytest.mark.parametrize("changed_tool", ["claude", "codex"])
+def test_secret_additions_and_rewords_stay_in_the_edited_file(tmp_path, changed_tool):
+    old = "Use the service account when running the tests."
+    files = setup(tmp_path, old + "\n", "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    secret = "ghp_" + "A1" * 18
+    replacement = f"Use the service account when running the tests with token {secret}."
+    changed = files[changed_tool]
+    changed.write_text(f"{replacement}\npassword=R4ndomFixtureValue\nRun Ruff.\n")
+    for _ in range(2):
+        messages = instructions.mirror(tmp_path, "claude", baselines=baselines)
+        warning = (f"WARN  {changed} has 2 line(s) that look like secrets (GitHub token, password assignment); "
+                   "they stay in that file only.")
+        assert messages.count(warning) == 1
+        assert "R4ndomFixtureValue" not in "\n".join(messages)
+        assert secret not in "\n".join(messages) and secret not in baselines.read_text()
+        assert changed.read_text() == f"{replacement}\npassword=R4ndomFixtureValue\nRun Ruff.\n"
+        for path in set(files.values()) - {changed}:
+            text = path.read_text()
+            assert secret not in text and "R4ndomFixtureValue" not in text
+            assert "Run Ruff." in text
