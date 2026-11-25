@@ -1,5 +1,6 @@
-# ~/.config/agent-sync/config.toml - every key is optional; these are the defaults.
+# Every key in ~/.config/agent-sync/config.toml is optional. These are the defaults.
 # `agent-sync config` changes these settings by asking questions, and keeps your comments.
+# Put top-level settings before the first table. Unknown keys in tables with fixed keys are errors.
 
 # Agents to keep in step. Add "gemini" or "antigravity", or run `agent-sync agents`.
 agents = ["claude", "codex", "cursor"]
@@ -23,7 +24,8 @@ mirror_skills = true    # copy your own skills (not from a package) from the sou
 skip_skills = []        # your own skills that stay in the source tool, e.g. ["only-for-claude"]
 allow_duplicate_skills = []  # skill names a tool may load from two places without a warning, e.g. ["pdf"]
 mirror_instructions = false  # share global instructions across the enabled agents
-mirror_memory = true    # share Claude Code's memory notes with the other agents; sensitive notes stay in Claude Code
+# If you leave this unset, upkeep asks once when Claude Code has notes and another agent is enabled.
+# mirror_memory = true  # share eligible memory notes. Set false to keep sharing off.
 private_memory = []     # memory notes that stay in Claude Code, e.g. ["my-accounts"]
 share_memory = []       # notes flagged as sensitive that may be shared anyway
 status_line = true      # one status line in Claude Code, Cursor CLI and Antigravity; Codex's built-in items
@@ -38,7 +40,8 @@ warn_models = []        # warn when a model name containing one of these shows u
 update_self = true      # update agent-sync itself (Homebrew, pipx, or a pip install from GitHub)
 launcher = false        # keep "Agent Upkeep" on the Desktop and up to date (macOS); agent-sync launcher sets it
 log_days = 7            # keep this many days of log lines
-backup_days = 30        # keep backups of changed files this many days
+backup_days = 30        # keep backups of changed files for this many days
+backup_max_mb = 500     # cap backups at this many MiB. Upkeep protects the current run.
 
 # The model each tool's copy of a mirrored agent runs on.
 [agent_models]
@@ -67,6 +70,7 @@ gemini = ""             # inherit the Gemini CLI model
 # plannotator = ["plannotator", "update"]
 
 # Extra commands run at the end of every upkeep, in order. A dry run only prints them.
+# Each entry accepts name, command, and timeout.
 # [[extra_steps]]
 # name = "refresh my dotfiles"
 # command = ["git", "-C", "/path/to/dotfiles", "pull", "--ff-only"]

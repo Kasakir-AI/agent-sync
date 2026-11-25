@@ -2,8 +2,8 @@
 
 ## 0.9.0 (2026-11-25)
 
-New: every agent gets the right version of each plugin, skill and MCP server, each loaded once and kept up to date,
-with a backup before every change and nothing removed until you approve it.
+Every agent gets the right version of each plugin, skill and MCP server. Upkeep keeps your setup current, backs up
+your files before it changes them, and asks your approval before removing installed items.
 
 **Loaded once, in each tool's own version**
 
@@ -42,8 +42,9 @@ with a backup before every change and nothing removed until you approve it.
   `agent-sync review`. A large deletion in the source, a missing source file, or an empty one is held for approval.
 - Lines between `<!-- agent-sync: local -->` and `<!-- agent-sync: end local -->` stay in their file. So do lines
   between `<!-- agent-sync: private -->` and `<!-- agent-sync: end private -->`.
-- Claude Code's memory is shared with the other agents (`mirror_memory`, on by default): the notes are copied to
-  `~/.agents/memory/`, and the other agents' instructions get the memory index.
+- Upkeep asks once whether to share Claude Code's memory when notes exist and another agent is enabled. You can
+  answer in the terminal, a desktop window, or the Plannotator Inbox. Upkeep saves your answer as `mirror_memory`.
+  If you choose to share, upkeep copies eligible notes to `~/.agents/memory/` and shares the index.
 - Notes that mention credentials, tokens, keys, legal names or similar personal details stay in Claude Code. The run
   lists them. `private_memory` and `private: true` keep a note private. `share_memory` shares a flagged note. A note
   or an instruction line that contains a secret value, such as a token or a private key, never leaves its file.
@@ -52,14 +53,21 @@ with a backup before every change and nothing removed until you approve it.
 
 **Safety**
 
-- Every run saves the original of each file it changes in `~/.local/state/agent-sync/backups/run-<date-time>/`,
-  kept for 30 days (`backup_days`). Folders are saved as APFS clones on macOS, which take almost no space.
+- Upkeep backs up the original files in your setup and keeps only the copies whose contents changed. Backup paths
+  resolve symlinks in your home path. Backups expire after 30 days (`backup_days`). A 500 MiB size limit
+  (`backup_max_mb`) removes older agent-sync folders first and protects the current run.
+- Cleanup runs even when upkeep is skipped, offline, or fails. It removes obsolete package checkouts and expires
+  warning acknowledgements and Inbox notification records after 30 days. A dry run lists what it would clean up.
+  `agent-sync status` shows backup size, folder count, and limits.
 - Nothing you or another program installed is removed until you approve it. A scheduled run asks in a macOS window
   where you pick what may go. In a terminal it asks yes or no. Your Plannotator Inbox gets buttons to approve or
   keep each removal, when Plannotator is installed. `agent-sync pending` lists what waits and takes
   `--approve`, `--keep` and `--ack`. `keep_installed` keeps an item for good.
 - New warnings appear in a macOS alert that stays until you click **OK**, and in the Inbox. A warning you
-  acknowledged is not shown again until it changes. `notify = false` turns off the window and the Inbox messages.
+  acknowledge stays quiet for 30 days unless it changes. `notify = false` turns off desktop windows and Inbox
+  messages.
+- Unknown keys in config tables fail with an error. Each `[[extra_steps]]` entry accepts `name`, `command`, and
+  `timeout`. Put top-level settings above the first table.
 - Settings files are written through one checked writer. When Claude Code or another tool changes a file while a run
   updates it, the run plans the change again from the new contents instead of overwriting them. New MCP settings
   files are readable only by you.

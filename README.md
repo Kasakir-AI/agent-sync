@@ -35,8 +35,8 @@ share.
   agent's file reaches the others. A line is never deleted from another tool on its own: when a tool drops or
   rewords a shared line, the others keep it and the run warns until you choose in `agent-sync review`. Gemini CLI
   and Antigravity share `~/.gemini/GEMINI.md`. Cursor receives an always-applied rule.
-- **Memory**: Claude Code's memory notes are shared with the other agents, except notes about credentials, keys or
-  personal details, which stay in Claude Code. See [Memory and privacy](#memory-and-privacy).
+- **Memory**: you choose whether to share Claude Code's memory notes with the other agents. Notes about
+  credentials, keys or personal details stay in Claude Code by default. See [Memory and privacy](#memory-and-privacy).
 - **Plugins and extensions** are updated for enabled agents: Claude Code's plugins and marketplaces, Git plugin
   marketplaces in Codex, user marketplaces in Cursor, Antigravity plugins (from its catalog), and Gemini CLI
   extensions.
@@ -54,8 +54,8 @@ share.
   it is missing and rewrites it when a new version of agent-sync changes it.
 - **A status line** in Claude Code, Cursor CLI and Antigravity, and Codex's built-in status items. See
   [Status line](#status-line).
-- **Backups and approvals**: every file a run changes is saved first, and nothing you installed is removed until you
-  approve it. See [Approve removals](#approve-removals).
+- **Backups and approvals**: upkeep saves your files before changing them. You approve removals of installed items.
+  See [Approve removals](#approve-removals).
 - **A small log** with a timestamp on every line keeps the last 7 days, and warns when a model you listed in
   `warn_models` (one you have no subscription for, say) shows up in any tool's settings.
 
@@ -82,7 +82,7 @@ agent-sync install --launcher     # schedule it (hourly + at login, works once a
                                   # a double-click "Agent Upkeep" to the Desktop (macOS)
 agent-sync launcher               # just the Desktop launcher, if you want it without reinstalling
 agent-sync inventory              # what each agent loads, and any duplicates or outdated pins
-agent-sync pending                # removals waiting for your approval, and warnings to acknowledge
+agent-sync pending                # removals and memory sharing waiting for a choice, plus warnings
 ```
 
 In a terminal, `agent-sync setup` first offers to add installed agents you haven't enabled. It then offers to
@@ -96,8 +96,8 @@ official installer when Homebrew is unavailable to your account. Antigravity alw
 On Linux, `agent-sync install` sets up a systemd user timer. Run `loginctl enable-linger` if it should also run
 while you are logged out.
 
-`agent-sync run --dry-run` lists the files it would change and the commands it would run.
-`agent-sync status` shows the last run, the log location, and the enabled CLI versions.
+`agent-sync run --dry-run` previews file changes, commands, cleanup, and questions.
+`agent-sync status` shows the last run, log location, backup totals and limits, and enabled CLI versions.
 `agent-sync uninstall` removes the schedule and the launcher and turns off the launcher setting.
 
 ## Check what each agent loads
@@ -109,9 +109,21 @@ pins with a newer release. It changes nothing.
 
 ## Approve removals
 
-Before a run changes or replaces a file, it saves the original in
-`~/.local/state/agent-sync/backups/run-<date-time>/`, at the same path relative to your home folder. Folders are
-saved as APFS clones on macOS, which take almost no space. Backups are kept for 30 days (`backup_days`).
+Before a run changes a file in your setup, it saves the original in
+`~/.local/state/agent-sync/backups/run-<date-time>/`. Backups use paths relative to your resolved home folder.
+Files outside your home go under `_outside/`. On macOS, upkeep uses APFS clones for folders when it can.
+At the end of a run, upkeep drops byte-identical copies and empty folders. A run with no changed originals
+leaves no backup folder.
+
+Every `agent-sync run` checks retention, even when upkeep is skipped, offline, or fails. Backups expire after
+30 days (`backup_days`). If the backup folder exceeds 500 MiB (`backup_max_mb`), upkeep deletes the oldest
+agent-sync backup folders until it reaches the limit or exhausts eligible backups. The current run and any
+folders you add yourself can keep the total above the limit. Upkeep skips symlinked backup folders and entries
+and asks you to acknowledge the warning. Run `agent-sync status` to see backup size, folder count, and both limits.
+
+Cleanup also drops cached checkouts for packages you remove from `skill_packages`. It checks the checkout name
+and Git origin before deleting a folder. Warning acknowledgements and Inbox notification records expire after
+30 days. Log lines expire after `log_days`. A dry run reports the cleanup it would do.
 
 A run never removes something you or another program installed until you approve it. This covers an MCP settings
 entry that a plugin already brings, a Codex plugin replaced by Codex's own version, a skill a package dropped, an
@@ -126,14 +138,22 @@ edited skill or memory copy, a large deletion in your instructions, and replacin
   remove it. `agent-sync pending --keep <key>` adds it to `keep_installed`, which keeps it for good.
 
 New warnings appear in a macOS alert that stays until you click **OK** (in a terminal, until you press Enter), and in
-the Inbox. A warning you acknowledged is not shown again until its text changes. `agent-sync pending --ack`
-acknowledges the current warnings. `notify = false` turns off the window, the alert and the Inbox messages.
+the Inbox. A warning you acknowledge stays quiet for 30 days unless its text changes. `agent-sync pending --ack`
+acknowledges the recent warnings. `notify = false` turns off desktop windows and Inbox messages.
 
 ## Memory and privacy
 
-Claude Code keeps long-term memory as notes in `~/.claude/projects/<your home folder>/memory/`. With `mirror_memory`
-(on by default), upkeep copies them to `~/.agents/memory/` and adds the memory index to the other agents'
-instructions, so they read the same facts. The copies are agent-sync's. It never touches other files in that folder.
+Claude Code keeps long-term memory as notes in `~/.claude/projects/<your home folder>/memory/`. When it has notes
+and another agent is enabled, upkeep asks if you want to share them. You can answer in the terminal or a desktop
+window. If the choice is still open, the Plannotator Inbox offers **Share** and **Don't share**.
+You can also run `agent-sync pending --approve memory-sharing` or `agent-sync pending --keep memory-sharing`.
+
+Upkeep saves your choice as `mirror_memory = true` or `mirror_memory = false`. You can set either value yourself
+to skip the prompt. While you have a choice waiting, upkeep keeps the notes in Claude Code and asks again on the
+next upkeep. A dry run shows the question without asking you to answer.
+
+If you share, upkeep copies eligible notes to `~/.agents/memory/` and adds the index to the other agents'
+instructions. Upkeep manages its own copies in that folder.
 
 The other agents send their instructions to their own companies, so some notes stay in Claude Code:
 
@@ -250,7 +270,7 @@ and change what you need. Every key is optional:
 | `skip_skills` | `[]` | your own skills that stay in the source tool only |
 | `allow_duplicate_skills` | `[]` | skill names a tool may load from two places without a warning, e.g. `["pdf"]` |
 | `mirror_instructions` | `false` | share global instructions across the enabled agents |
-| `mirror_memory` | `true` | share Claude Code's memory notes with the other agents (sensitive notes stay) |
+| `mirror_memory` | unset | ask once before sharing Claude Code's memory notes |
 | `private_memory` / `share_memory` | `[]` | memory notes to keep in Claude Code, or flagged notes to share anyway |
 | `status_line` | `true` | set up one status line in every CLI that supports it |
 | `keep_installed` | `[]` | items upkeep never removes or replaces, by key or name, e.g. `["cloudflare"]` |
@@ -260,7 +280,8 @@ and change what you need. Every key is optional:
 | `[program_updates]` | none | a program's own update command, e.g. `plannotator = ["plannotator", "update"]` |
 | `update_global_tools` | `false` | also update global npm, pipx and uv tools (`true`), or a list that may include `"homebrew"` |
 | `notify` | `true` | ask for approvals and show warnings in a macOS window and the Plannotator Inbox |
-| `backup_days` | `30` | how long backups of changed files are kept |
+| `backup_days` | `30` | how long you keep backup folders |
+| `backup_max_mb` | `500` | total backup size limit in MiB |
 | `warn_models` | `[]` | warn when a model name containing one of these appears, e.g. `["preview-"]` |
 | `update_clis` | `true` | update all enabled CLIs, disable updates with `false`, or choose a subset |
 | `[cli_commands]` | none | your own update command for a CLI, e.g. `codex = ["npm", "install", "-g", "@openai/codex@latest"]` |
@@ -272,8 +293,9 @@ and change what you need. Every key is optional:
 | `[agent_models]` | `opus` / `claude-opus-5-5-high-fast` / `gpt-6.2-sol` | models for package subagents. Gemini CLI inherits its model by default |
 | `[agent_notes]` | none | text added to the end of an agent's prompt in every tool, e.g. `poteto-agent = "..."` |
 
-A misspelled setting is an error, not silently ignored. On Linux the config and state follow `XDG_CONFIG_HOME`
-and `XDG_STATE_HOME` when set.
+Unknown settings are errors, including unknown keys in a table with fixed keys. Each `[[extra_steps]]` entry
+accepts `name`, `command`, and `timeout`. Put top-level settings above the first table. On Linux, the config and
+state follow `XDG_CONFIG_HOME` and `XDG_STATE_HOME` when set.
 
 ## Make it yours
 
@@ -320,16 +342,16 @@ The review writes only the settings you pick and apply, and in those files only 
 | Antigravity | `~/.gemini/config/skills/*`, `~/.gemini/config/agents/*.md`, `~/.agents/pstack-models.md`, `~/.gemini/config/mcp_config.json`, `~/.gemini/antigravity-cli/settings.json` (`statusLine`), Antigravity plugins (`agy plugin install`), `~/.gemini/GEMINI.md` (opt-in, memory index) |
 | All | `~/.agents/memory/*` (memory copies), MCP server programs and global tools through their package managers |
 
-State, backups (`backups/run-*`), pending removals and the package checkouts live in `~/.local/state/agent-sync/`. The log is `~/Library/Logs/agent-sync.log`
+State, backups (`backups/`), pending removals and the package checkouts live in `~/.local/state/agent-sync/`. The log is `~/Library/Logs/agent-sync.log`
 on macOS and `~/.local/state/agent-sync/agent-sync.log` on Linux. The schedule is
 `~/Library/LaunchAgents/io.github.agent-sync.plist` or `~/.config/systemd/user/agent-sync.{service,timer}`.
 
 ## Safety
 
-Read [SECURITY.md](SECURITY.md). In short: skill packages and the `skills` CLI run with your agents' full
-permissions, so only add packages you trust, and pin `skills_cli` if you don't want new releases picked up
-automatically. Every change is backed up first, nothing is removed until you approve it, and secret values never
-leave the tool they are in.
+Read [SECURITY.md](SECURITY.md). Skill packages and the `skills` CLI run with your agents' full permissions.
+Only add packages you trust. You can pin `skills_cli` to choose when it updates. Upkeep backs up your files
+before it changes them, asks you before removing installed items, and keeps detected secrets in their original
+tool.
 
 ## Support
 

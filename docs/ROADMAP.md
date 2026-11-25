@@ -58,8 +58,9 @@
 - [x] Each tool's own plugin version; MCP servers and plugins loaded once.
 - [x] Update every skill, Antigravity plugin, MCP server program, pinned MCP package and npm; global tools on
       request.
-- [x] Instructions shared by every agent; Claude Code's memory shared, with sensitive notes kept private.
-- [x] A backup before every change; removals only after approval by click, terminal or Plannotator Inbox.
+- [x] Share instructions across agents. You choose once whether to share Claude Code's memory.
+- [x] Back up your files before changing them. You approve removals in a desktop window, terminal, or Plannotator Inbox.
+- [x] Keep backups of changed files within the age and size limits. Clean up agent-sync's own state even when upkeep is skipped.
 - [x] One status line in Claude Code, Cursor CLI and Antigravity.
 
 Later:
