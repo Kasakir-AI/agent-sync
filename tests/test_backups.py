@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from agent_sync import backups, cli, mcp, schedule
+from agent_sync import backups, cli, mcp, memory, schedule, skills
 from agent_sync.config import Config
 from tests.test_agents import HELPER
 from tests.test_inventory import write
@@ -75,25 +75,30 @@ def test_upkeep_writers_share_one_pre_run_backup(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli.tools, "checkout", checkout)
     monkeypatch.setattr(mcp, "npm_latest", lambda _: "1.1.0")
     monkeypatch.setattr(mcp, "npm_released", lambda _: {"1.1.0": "2020-01-01T00:00:00Z"})
-    _, files, memory_dir = memory_setup(tmp_path)
+    source, files, memory_dir = memory_setup(tmp_path)
+    workspace = write(source, "workspace.md", "old memory\n")
+    gone = write(source, "gone.md", "removed memory\n")
+    memory.mirror(tmp_path, False, enabled=cfg.agents)
+    workspace.write_text("Prefer local worktrees.\n")
+    gone.unlink()
     files["claude"].write_text("Include the date.\n")
     old = [
         write(tmp_path, files["codex"].relative_to(tmp_path), "Codex note.\n"),
         write(tmp_path, ".agents/pstack-models.md", "feature: old\n"),
         write(tmp_path, ".claude/agents/helper.md", "old agent\n"),
         write(tmp_path, ".cursor/plugins/local/pack-agents/agents/dropped.md", "old copied agent\n"),
-        write(memory_dir, "workspace.md", "old memory\n"),
-        write(memory_dir, "gone.md", "removed memory\n"),
+        memory_dir / "workspace.md",
+        memory_dir / "gone.md",
         write(tmp_path, schedule.launcher_path(tmp_path).relative_to(tmp_path), schedule.LAUNCHER_MARK + "\n"),
         write(tmp_path, ".cursor/mcp.json", {"mcpServers": {"pin": {"command": "npx", "args": ["pack@1.0.0"]}}}),
         write(tmp_path, ".codex/config.toml", '[mcp_servers.pin]\ncommand = "npx"\nargs = ["pack@1.0.0"]\n'),
     ]
-    (memory_dir / ".agent-sync").touch()
     write(tmp_path, ".claude/rules/pstack-models.md", "feature: current\n")
     write(tmp_path, ".claude.json", {"mcpServers": {"mirror": {"url": "https://example.invalid/mcp"}}})
-    make_skill(tmp_path / ".claude/skills", "edited", "New skill")
-    make_skill(tmp_path / ".agents/skills", "edited", "Old skill")
-    old.append(write(tmp_path, ".agents/skills/edited/.agent-sync", "old marker\n"))
+    make_skill(tmp_path / ".claude/skills", "edited", "Old skill")
+    skills.mirror(tmp_path, "claude")
+    write(tmp_path, ".claude/skills/edited/SKILL.md", "---\nname: edited\ndescription: New skill\n---\nNew skill\n")
+    old.append(tmp_path / ".agents/skills/edited/.agent-sync")
     old.append(tmp_path / ".agents/skills/edited/SKILL.md")
     before = {file: file.read_bytes() for file in old}
     root = cfg.state_dir / "backups"

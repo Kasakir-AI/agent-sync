@@ -48,11 +48,20 @@ def tree_digest(folder: Path) -> str:
     return digest.hexdigest()
 
 
-def edited(dest: Path) -> bool:
-    """The copy's files differ from what agent-sync copied (known only for copies that recorded a digest)."""
+def edited(dest: Path, home: Path) -> bool:
+    """A digest or the previous source can establish that a copy is unchanged."""
     lines = marker_text(dest).splitlines()
     recorded = next((line.removeprefix(DIGEST) for line in lines[1:] if line.startswith(DIGEST)), None)
-    return recorded is not None and recorded != tree_digest(dest)
+    if recorded is not None:
+        return recorded != tree_digest(dest)
+    if not lines or not lines[0].startswith(COPY_MARK):
+        return True
+    source = lines[0].removeprefix(COPY_MARK)
+    if lines[0].startswith(PLUGIN_MARK):
+        source = lines[0].partition(": ")[2]
+    previous = Path(source)
+    return not (previous.is_absolute() and inside(home, previous) and previous.resolve() != dest.resolve()
+                and (previous / "SKILL.md").is_file() and tree_digest(previous) == tree_digest(dest))
 
 
 def folders(home: Path, enabled=DEFAULT_AGENTS) -> dict[str, Path]:
@@ -64,7 +73,7 @@ def locked(home: Path) -> dict[str, dict]:
     p = home / ".agents/.skill-lock.json"
     try:
         data = json.loads(p.read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         return {}
     entries = data.get("skills") if isinstance(data, dict) else None
     return {name: meta for name, meta in entries.items() if isinstance(meta, dict)} if isinstance(entries, dict) else {}
@@ -131,11 +140,14 @@ def plugin_skill_dirs(root: Path) -> dict[str, Path]:
         paths += [root / x for x in extra if isinstance(x, str) and inside(root, root / x)]
     out = {}
     for path in paths:
+        if not inside(root, path):
+            continue
         if (path / "SKILL.md").is_file():
-            out.setdefault(path.name, path)
+            if inside(root, path / "SKILL.md"):
+                out.setdefault(path.name, path)
             continue
         for d in sorted(path.iterdir()) if path.is_dir() else []:
-            if not d.name.startswith(".") and (d / "SKILL.md").is_file():
+            if (not d.name.startswith(".") and inside(root, d / "SKILL.md") and (d / "SKILL.md").is_file()):
                 out.setdefault(d.name, d)
     return out
 
@@ -179,7 +191,8 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
 
     def remove_copy(dest: Path, reason: str) -> None:
         key = f"skill-copy:{dest.parent.relative_to(home)}:{dest.name}"
-        what = f"skill {dest.name} from {dest.parent} ({reason}{'; you edited this copy' if edited(dest) else ''})"
+        what = (f"skill {dest.name} from {dest.parent} "
+                f"({reason}{'; you edited this copy' if edited(dest, home) else ''})")
         if pending.due(key, what) and not dry:
             backups.save(dest)
             shutil.rmtree(dest)
@@ -222,12 +235,11 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                     backups.save(dest)
                     (dest / MARKER).write_text(mark)       # same files from a new place (a plugin's new version)
                 continue
-            if dest.exists() and edited(dest):
-                key = f"skill-copy:{target.relative_to(home)}:{name}"
+            key = f"skill-copy:{target.relative_to(home)}:{name}"
+            if dest.exists() and edited(dest, home):
                 if not pending.due(key, f"your edits to the copy of skill {name} in {target} (its source changed; "
                                         "the new version replaces them)") or dry:
                     continue
-                pending.removed(key)
             if not dry:
                 backups.save(dest)
                 target.mkdir(parents=True, exist_ok=True)
@@ -238,6 +250,7 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                     if dest.exists():
                         shutil.rmtree(dest)
                     tmp.rename(dest)
+                pending.removed(key)
             changes.append(f"{verb('copied', 'would copy')} skill {name}{note} to {target}")
         for d in sorted(target.iterdir()) if target.is_dir() else []:
             if not (d / MARKER).is_file() or d.is_symlink() or d.name in wanted:

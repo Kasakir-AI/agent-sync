@@ -215,3 +215,47 @@ def test_a_skill_in_a_folder_whose_name_extends_the_copys_still_counts(tmp_path)
     seen = duplicates.views(tmp_path, enabled=("claude", "codex", "cursor"))
     assert duplicates.elsewhere(tmp_path, seen, shared, "foo", claude / "foo", readers=("codex",)) == [
         "Codex: ~/.agents/skills"]
+
+
+def test_plugin_skill_children_and_definition_links_cannot_escape_root(tmp_path):
+    root = make_plugin(tmp_path, "pack@market", ["inside"], manifest_skills=["custom"])
+    external = tmp_path / "external"
+    make_skill(external, "foreign")
+    (root / "skills/escaped").symlink_to(external / "foreign", target_is_directory=True)
+    (root / "custom").mkdir()
+    (root / "custom/escaped").symlink_to(external / "foreign", target_is_directory=True)
+    (root / "skills/escaped-definition").mkdir()
+    (root / "skills/escaped-definition/SKILL.md").symlink_to(external / "foreign/SKILL.md")
+
+    assert set(skills.plugin_skill_dirs(root)) == {"inside"}
+
+
+def test_a_legacy_skill_copy_with_unknown_previous_source_needs_approval(tmp_path):
+    claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    make_skill(claude, "notes", "new source")
+    make_skill(shared, "notes", "my own edit")
+    dest = shared / "notes"
+    (dest / skills.MARKER).write_text(f"{skills.COPY_MARK}{claude / 'notes'}\n")
+
+    state = tmp_path / "state"
+    with pending.during(state, [], lambda *_: None, False):
+        skills.mirror(tmp_path, "claude")
+    assert "my own edit" in (dest / "SKILL.md").read_text()
+    assert "your edits" in pending.load(state)["skill-copy:.agents/skills:notes"]["what"]
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        skills.mirror(tmp_path, "claude")
+    assert "new source" in (dest / "SKILL.md").read_text()
+
+
+def test_a_legacy_copy_identical_to_its_available_previous_source_can_refresh(tmp_path):
+    claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    previous = tmp_path / "previous"
+    make_skill(previous, "notes", "old source")
+    make_skill(shared, "notes", "old source")
+    make_skill(claude, "notes", "new source")
+    dest = shared / "notes"
+    (dest / skills.MARKER).write_text(f"{skills.COPY_MARK}{previous / 'notes'}\n")
+
+    assert skills.mirror(tmp_path, "claude") == [f"copied skill notes to {shared}"]
+    assert "new source" in (dest / "SKILL.md").read_text()
