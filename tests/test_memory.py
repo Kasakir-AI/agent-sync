@@ -179,3 +179,53 @@ def test_cli_upkeep_shares_instructions_then_memory(tmp_path, monkeypatch, capsy
     codex = files["codex"].read_text()
     assert codex.startswith("Keep replies brief.\n\n<!-- agent-sync: memory -->\n")
     assert "[Workspace preferences](~/.agents/memory/workspace.md)" in codex
+
+
+def test_only_copies_agent_sync_wrote_are_replaced_or_removed(tmp_path):
+    source, files, dest = setup(tmp_path)
+    (source / "gone.md").write_text("Old note.\n")
+    memory.mirror(tmp_path, False, enabled=TOOLS)
+    (dest / "mine.md").write_text("The user's own note.\n")          # never listed in the marker
+    (dest / "gone.md").write_text("Edited copy.\n")
+    (source / "gone.md").unlink()
+    (source / "mine.md").write_text("A new note of the same name.\n")
+    state = tmp_path / "state"
+    with pending.during(state, [], lambda *_: None, False):
+        lines = memory.mirror(tmp_path, False, enabled=TOOLS)
+    assert f"WARN  {dest / 'mine.md'} is not a copy agent-sync made; left alone" in lines
+    assert (dest / "mine.md").read_text() == "The user's own note.\n"
+    assert "you edited this copy" in pending.load(state)["memory:gone.md"]["what"]
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        memory.mirror(tmp_path, False, enabled=TOOLS)
+    assert not (dest / "gone.md").exists() and (dest / "mine.md").exists()
+
+
+def test_an_empty_memory_index_removes_the_memory_section(tmp_path):
+    source, files, _ = setup(tmp_path)
+    memory.mirror(tmp_path, False, enabled=("claude", "codex"))
+    assert "<!-- agent-sync: memory -->" in files["codex"].read_text()
+    (source / "MEMORY.md").write_text("\n")
+    memory.mirror(tmp_path, False, enabled=("claude", "codex"))
+    assert "agent-sync: memory" not in files["codex"].read_text()
+    (source / "MEMORY.md").unlink()
+    assert memory.mirror(tmp_path, False, enabled=("claude", "codex")) == []
+
+
+def test_a_codex_file_linked_to_claude_md_gets_no_memory_section(tmp_path):
+    _, files, _ = setup(tmp_path)
+    files["codex"].parent.mkdir(parents=True, exist_ok=True)
+    files["codex"].symlink_to(files["claude"])
+    memory.mirror(tmp_path, False, enabled=("claude", "codex"))
+    assert files["claude"].read_text() == "Keep replies brief.\n"
+
+
+def test_the_project_folder_name_replaces_every_non_ascii_character(tmp_path):
+    home = tmp_path / "café user"
+    home.mkdir()
+    source = home / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", str(home)) / "memory"
+    source.mkdir(parents=True)
+    (source / "MEMORY.md").write_text(INDEX)
+    (source / "workspace.md").write_text("Prefer local worktrees.\n")
+    memory.mirror(home, False, enabled=("claude", "codex"))
+    assert (home / ".agents/memory/workspace.md").exists()
