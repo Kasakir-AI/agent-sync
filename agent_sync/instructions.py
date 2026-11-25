@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
+from collections import Counter, defaultdict, deque
+from difflib import SequenceMatcher
 from hashlib import sha256
 from pathlib import Path
 
@@ -81,14 +82,6 @@ def rewords(tracked: list[str], present: set[str], visible: list[str], local: se
     return paired
 
 
-def seed_body(source: str, wanted: set[str]) -> str:
-    """A new file's text: the source's shared document in order, every wanted line however often it occurs, with the
-    source's paragraph breaks."""
-    lines = [line for line in source.splitlines() if not line.strip() or line.rstrip() in wanted]
-    body = "\n".join(lines).strip("\n")
-    return body + "\n" if body else ""
-
-
 FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 
 
@@ -113,8 +106,15 @@ def units(lines: list[str], hidden: set[int] | frozenset[int] = frozenset()) -> 
     return out
 
 
+def seed_body(source: str, wanted: set[str]) -> str:
+    lines = source.splitlines()
+    included = {row for text, rows in units(lines) if wanted.intersection(text.split("\n")) for row in rows}
+    body = "\n".join(line for row, line in enumerate(lines) if row in included or not line.strip()).strip("\n")
+    return body + "\n" if body else ""
+
+
 def update_body(body: str, drop: set[str], replacements: dict[str, str],
-                additions: dict[Path, set[str]], donors: dict[Path, str]) -> str:
+                additions: dict[Path, set[str]], donors: dict[Path, str], blocked: set[str]) -> str:
     """Apply deletions and rewords to the shared rows of `body`, then add each donor's new lines after the line
     they follow there. Lines count by occurrence (a second `---` is its own line) and only in shared rows."""
     lines = body.splitlines()
@@ -134,29 +134,39 @@ def update_body(body: str, drop: set[str], replacements: dict[str, str],
                 present.add(replacement)
 
     for donor, wanted in additions.items():
+        if not wanted:
+            continue
         source = donors[donor].splitlines()
-        counts: Counter[str] = Counter()
-        keyed = []                                    # (text, its occurrence number, rows) of each donor unit
-        for text, rows in units(source):
-            counts[text] += 1
-            keyed.append((text, counts[text], rows))
-        have = Counter(text for text, _ in units(out, local_rows(out)))
-        missing = [number > have[text] for text, number, _ in keyed]
-        new = [gone and any(part.rstrip() in wanted for part in text.split("\n"))
-               for (text, _, _), gone in zip(keyed, missing, strict=True)]
-        for index, (_, number, _) in enumerate(keyed):   # a repeated `---` or `- [ ]` goes with the new lines by it
-            if missing[index] and number > 1 and any(new[i] for i in (index - 1, index + 1) if 0 <= i < len(new)):
-                new[index] = True
+        donor_units = units(source)
+        target_units = units(out, local_rows(out))
+        target_texts = [text for text, _ in target_units]
+        ordered = SequenceMatcher(None, [text for text, _ in donor_units], target_texts, autojunk=False)
+        matches = {a + offset: b + offset for a, b, size in ordered.get_matching_blocks() for offset in range(size)}
+        used = set(matches.values())
+        elsewhere = defaultdict(deque)
+        for index, (text, _) in enumerate(target_units):
+            if index not in used:
+                elsewhere[text].append(index)
+        for index, (text, _) in enumerate(donor_units):
+            if index not in matches and elsewhere[text]:
+                matches[index] = elsewhere[text].popleft()
+
+        positions = [rows[-1] for _, rows in target_units]
+        first = matches[min(matches)] if matches else None
         anchor = None
-        for (text, number, rows), add in zip(keyed, new, strict=True):
-            if not add:
-                found = [rows for unit, rows in units(out, local_rows(out)) if unit == text]
-                if len(found) >= number:
-                    anchor = found[number - 1][-1]
-                continue
-            at = len(out) if anchor is None else anchor + 1
-            out[at:at] = [source[row] for row in rows]
-            anchor = at + len(rows) - 1
+        for index, (text, rows) in enumerate(donor_units):
+            if index in matches:
+                anchor = positions[matches[index]]
+            elif (parts := set(text.split("\n"))) & wanted and not parts & blocked:
+                if anchor is not None:
+                    at = anchor + 1
+                elif first is not None and text in target_texts:
+                    at = target_units[first][1][0]
+                else:
+                    at = len(out)
+                out[at:at] = [source[row] for row in rows]
+                positions = [position + len(rows) if position >= at else position for position in positions]
+                anchor = at + len(rows) - 1
 
     if out == lines:
         return body
@@ -174,22 +184,51 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
     groups = grouped_paths(locations)
     if not groups:
         return []
-    src = locations[source]
+    written = {}
+    for attempt in range(2):
+        try:
+            messages = _mirror_snapshot(home, locations[source], groups, dry, baselines, written)
+            break
+        except writes.Raced as raced:
+            pending.retry("instruction", "instructions")
+            if attempt:
+                pending.incomplete()
+                messages = [f"WARN  {raced}"]
+    return [*messages, *(f"{'would update' if dry else 'updated'} {path}" for path in written)]
+
+
+def _mirror_snapshot(home: Path, src: Path, groups: dict[Path, tuple[str, ...]], dry: bool,
+                     baselines: Path | None, written: dict[Path, tuple[bytes | None, bytes]]) -> list[str]:
+    from . import writes
+
     names = {path: str(path.relative_to(home)) for path in groups}
+    snapshot, original = {}, {}
     current = {}
     for path in groups:
         try:
-            current[path] = path.read_text() if path.exists() else ""
+            before = snapshot[path] = writes.read_bytes(path)
+            if path in written and before == written[path][1]:
+                before = written[path][0]
+            original[path] = before
+            current[path] = (before or b"").decode().replace("\r\n", "\n").replace("\r", "\n")
         except (OSError, UnicodeDecodeError) as error:
             if path != src:
                 raise
+            pending.incomplete()
             return [f"WARN  {src} could not be read ({error}); instructions are shared again once it can"]
     bodies = {path: own_text(split_front(text)[1] if "cursor" in groups[path] else text)
               for path, text in current.items()}
     public = {path: shared_body(body) for path, body in bodies.items()}
     visible = {path: keys(body) for path, body in public.items()}
     if not visible[src]:
+        pending.incomplete()
         return [f"WARN  {src} is missing or has no shared lines; agent-sync changes no instructions until it has"]
+
+    def check_snapshot() -> None:
+        for path, before in snapshot.items():
+            if writes.read_bytes(path) != before:
+                raise writes.Raced(path)
+
     stored = load_baselines(baselines) if baselines else {}
     entry = stored.get(KEY) if isinstance(stored.get(KEY), dict) else {}
     previous = {
@@ -207,12 +246,16 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
             messages.append(f"WARN  {path} has {len(rows)} line(s) that look like secrets ({kinds}); "
                             "they stay in that file only.")
     drop, replacements, held = set(), {}, {}
+    held_batch = set()
+    batch_key = None
     removal_keys = []
-    tracked = list(dict.fromkeys((*line_list(entry.get("lines")), *line_list(entry.get("conflicts")),
+    synced = line_list(entry.get("lines"))
+    synced_counts = Counter(synced)
+    tracked = list(dict.fromkeys((*synced, *line_list(entry.get("conflicts")),
                                  *(line for item in previous.values()
                                    for line in (*item.get("missing", []), *item.get("reworded", {}))))))
-    present = {path: set(lines) for path, lines in visible.items()}    # shared rows: what a tool shares
-    has = {path: set(keys(body)) for path, body in bodies.items()}       # any row: a line moved to a local section
+    present = {path: set(lines) for path, lines in visible.items()}
+    moved = {path: (set(keys(body)) - present[path]).intersection(tracked) for path, body in bodies.items()}
     if not tracked and recorded is None:
         reserved = set(tracked) | set(visible[src])
         known = {path: set(lines) - reserved for path, lines in visible.items()}
@@ -236,7 +279,7 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
                         match := partner(line, gone)) is not None:
                     known[path].discard(gone.pop(match))
                     known[path].add(line)
-        paired = {path: rewords(tracked, has[path], visible[path], known[path],
+        paired = {path: rewords(tracked, present[path], visible[path], known[path],
                                previous.get(names[path], {}).get("reworded", {}))
                   for path in known if path not in new_files}
         replacements = paired.get(src, {})
@@ -245,34 +288,56 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
         reserved = set(tracked) | {new for changes in paired.values() for new in changes.values()}
         for path, name in names.items():
             prior_rewords = previous.get(name, {}).get("reworded", {})
-            kept_local = set(prior_rewords.values()) & has[path]
+            kept_local = set(prior_rewords.values()) & present[path]
             reserved.update(kept_local)
             known[path].update(kept_local)
         deleted = [line for line in tracked
-                   if line not in present[src] and line not in replacements
+                   if line not in present[src] and line not in moved[src] and line not in replacements
                    and any(line in other for path, other in present.items() if path != src)]
         limit, share = MASS_DELETION
-        if len(deleted) > 1 and (len(deleted) > limit or len(deleted) > share * len(tracked)):
-            what = (f"{len(deleted)} shared instruction lines from the other tools ({names[src]} no longer has "
-                    f'them; first: "{deleted[0]}")')
-            if pending.due("instructions", what) and not dry:
-                drop.update(deleted)
-                removal_keys.append("instructions")
+        tracked_count = sum(max(1, synced_counts[line]) for line in tracked)
+        candidates = {}
+        kept_deletions = set()
+        for line in deleted:
+            key = f"instruction:{sha256(line.encode()).hexdigest()}"
+            if pending.keeps(key):
+                kept_deletions.add(line)
             else:
-                held.setdefault(names[src], {"missing": [], "reworded": {}})["missing"].extend(deleted)
+                candidates[key] = line
+        deleted_count = sum(max(1, synced_counts[line]) for line in candidates.values())
+        if candidates and not dry:
+            check_snapshot()
+        ordered = sorted(candidates.values())
+        digest = sha256("\n".join(ordered).encode()).hexdigest()[:12]
+        candidate_batch = f"instructions:{digest}"
+        mass = (deleted_count > limit or (tracked_count >= 5 or deleted_count > 1)
+                and deleted_count > share * tracked_count)
+        if candidates and (mass or entry.get("deletion_batch") == candidate_batch):
+            noun = "line" if deleted_count == 1 else "lines"
+            what = (f"{deleted_count} shared instruction {noun} from the other tools "
+                    f'({names[src]}, first: "{ordered[0]}")')
+            if not pending.due(candidate_batch, what):
+                held_batch.update(ordered)
+                kept_deletions.update(ordered)
+                batch_key = candidate_batch
+            else:
+                drop.update(ordered)
+                removal_keys.append(candidate_batch)
         else:
-            for line in deleted:
-                key = f"instruction:{sha256(line.encode()).hexdigest()}"
+            for key, line in candidates.items():
                 if pending.due(key, f'instruction "{line}" from the other tools') and not dry:
                     drop.add(line)
                     removal_keys.append(key)
                 else:
-                    held.setdefault(names[src], {"missing": [], "reworded": {}})["missing"].append(line)
+                    kept_deletions.add(line)
+        if kept_deletions:
+            held[names[src]] = {"missing": [line for line in deleted if line in kept_deletions], "reworded": {}}
         for path in (path for path in paired if path != src):
             changes = {replacements.get(old, old): new for old, new in paired[path].items()
                        if old not in drop and replacements.get(old) != new
                        and (old in present[src] or old in replacements)}
-            missing = [line for line in tracked if line not in has[path] and line not in paired[path]
+            missing = [line for line in tracked if line not in present[path] and line not in moved[path]
+                       and line not in paired[path]
                        and line in present[src]]
             if changes:
                 old, new = next(iter(changes.items()))
@@ -285,38 +350,53 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
             if missing or changes:
                 held[names[path]] = {"missing": missing, "reworded": changes}
         additions = {path: (set(lines) - reserved - known[path]) for path, lines in visible.items()}
+        for path, body in public.items():
+            counts = Counter(visible[path])
+            additions[path].update(line for line, rows in units(body.splitlines()) if len(rows) == 1
+                                   and line in synced_counts and counts[line] > synced_counts[line]
+                                   and line not in known[path])
         if new_files or set(groups) - paired.keys():
             additions[src].update(set(visible[src]) & set(tracked))
     seed = seed_body(public[src], additions[src])
     resulting = {}
+
     for path in groups:
         holds = held.get(names[path], {})
-        excluded = set(holds.get("missing", [])) | holds.get("reworded", {}).keys()
+        excluded = set(holds.get("missing", [])) | holds.get("reworded", {}).keys() | moved[path]
         incoming = {donor: lines - excluded if donor != path else lines for donor, lines in additions.items()}
+        body = bodies[path] or ("" if excluded else seed)
+        resulting[path] = update_body(body, drop, replacements, incoming, public, held_batch | drop | moved[path])
+        after = rendered(groups[path][0], current[path], resulting[path], src)
+        before = snapshot[path]
+        data = original[path] if after == current[path] else after.encode()
+        if data == before:
+            continue
+        data = data or b""
+        if not dry:
+            def change(seen: bytes | None, before=before, path=path, data=data) -> bytes:
+                if seen != before:
+                    raise writes.Raced(path)
+                return data
 
-        def change(text: str, path=path, excluded=excluded, incoming=incoming) -> str:
-            body = own_text(split_front(text)[1] if "cursor" in groups[path] else text)
-            resulting[path] = update_body(body if body or excluded else seed, drop, replacements, incoming, public)
-            return rendered(groups[path][0], text, resulting[path], src)
+            writes.update(path, change, check=check_snapshot)
+            snapshot[path] = data
+        written[path] = original[path], data
 
-        if dry:
-            changed = change(current[path]) != current[path]
-        else:
-            try:
-                changed = writes.update_text(path, change)
-            except writes.Raced as raced:
-                messages.append(f"WARN  {raced}")
-                resulting[path] = bodies[path]
-                continue
-        if changed:
-            messages.append(f"{'would update' if dry else 'updated'} {path}")
-        resulting.setdefault(path, bodies[path])
+    if not dry:
+        check_snapshot()
 
     if baselines and not dry:
         visible = {path: keys(shared_body(body)) for path, body in resulting.items()}
-        shared = set.intersection(*(set(lines) for lines in visible.values()))
+        shared_counts = Counter(visible[src])
+        for rows in visible.values():
+            shared_counts &= Counter(rows)
+        shared = shared_counts.keys()
         held_lines = {line for item in held.values() for line in (*item["missing"], *item["reworded"])}
-        lines = list(dict.fromkeys(line for line in (*visible[src], *tracked) if line in shared or line in held_lines))
+        visible_lines = {line for rows in visible.values() for line in rows}
+        held_lines |= set.union(*moved.values()) & visible_lines
+        kept_lines = dict.fromkeys(line for line in (*visible[src], *tracked) if line in shared or line in held_lines)
+        lines = [line for line in kept_lines for _ in range(
+            max(1, shared_counts[line], synced_counts[line] if line in held_lines else 0))]
         local = {names[path]: sorted((set(keys(body)) & known.get(path, set())) - shared)
                  for path, body in resulting.items()}
         updated = {**entry, "lines": lines, "local": local}
@@ -325,6 +405,10 @@ def mirror(home: Path, source: str, dry: bool = False, baselines: Path | None = 
             updated["held"] = held
         else:
             updated.pop("held", None)
+        if batch_key:
+            updated["deletion_batch"] = batch_key
+        else:
+            updated.pop("deletion_batch", None)
         if updated != entry:
             save_baselines(baselines, {**stored, KEY: updated})
     for key in removal_keys:

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from agent_sync import instructions, pending
+from agent_sync import instructions, pending, writes
 from agent_sync.registry import TOOLS
 from tests.test_pending import approve_current
 
@@ -202,20 +202,22 @@ def test_non_source_deletions_are_held_even_in_empty_files(tmp_path):
     assert "held" not in json.loads(baselines.read_text())[instructions.KEY]
 
 
-def test_lines_moved_into_local_sections_do_not_signal_deletion(tmp_path):
+@pytest.mark.parametrize("section", ["local", "private", "memory"])
+@pytest.mark.parametrize("moved_tool", ["claude", "codex"])
+def test_lines_moved_into_hidden_sections_are_neither_deleted_nor_restored(tmp_path, section, moved_tool):
     files = setup(tmp_path, "Keep replies brief.\nRun pytest.\n", "")
     baselines = tmp_path / "state/baselines.json"
     instructions.mirror(tmp_path, "claude", baselines=baselines)
-    codex = files["codex"]
-    local = ("<!-- agent-sync: local -->\nRun pytest.\nCodex-only note.\n"
-             "<!-- agent-sync: end local -->\n")
-    codex.write_text("Keep replies brief.\n" + local)
-    files["claude"].write_text("Keep replies brief.\nRun pytest.\nFormat with Ruff.\n")
-    instructions.mirror(tmp_path, "claude", baselines=baselines)
-    assert files["claude"].read_text() == "Keep replies brief.\nRun pytest.\nFormat with Ruff.\n"
-    assert files["cursor"].read_text().count("Run pytest.") == 1
-    assert codex.read_text() == "Keep replies brief.\nFormat with Ruff.\n" + local
-    assert json.loads(baselines.read_text())[instructions.KEY]["lines"] == ["Keep replies brief.", "Format with Ruff."]
+    moved = files[moved_tool]
+    local = (f"<!-- agent-sync: {section} -->\nRun pytest.\nCodex-only note.\n"
+             f"<!-- agent-sync: end {section} -->\n")
+    moved.write_text("Keep replies brief.\n" + local)
+    for _ in range(2):
+        with pending.during(baselines.parent, [], lambda *_: None, False):
+            assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+        assert pending.load(baselines.parent) == {}
+        assert moved.read_text() == "Keep replies brief.\n" + local
+        assert all(path.read_text().count("Run pytest.") == 1 for path in files.values())
 
 
 def test_source_reword_reaches_unedited_copies_when_codex_also_rewords(tmp_path):
@@ -332,8 +334,8 @@ def test_many_source_deletions_at_once_are_held_behind_one_question(tmp_path):
     state = tmp_path / "state"
     with pending.during(state, [], lambda *_: None, False):
         instructions.mirror(tmp_path, "claude", baselines=baselines)
-    assert list(pending.load(state)) == ["instructions"]
-    assert "4 shared instruction lines" in pending.load(state)["instructions"]["what"]
+    item, = pending.load(state).values()
+    assert "4 shared instruction lines" in item["what"]
     assert files["codex"].read_text() == source
     approve_current(state)
     with pending.during(state, [], lambda *_: None, False):
@@ -387,3 +389,119 @@ def test_seeding_and_additions_keep_code_blocks_and_repeated_lines_whole(tmp_pat
     codex = files["codex"].read_text()
     assert codex.count("```") == 4 and codex.count("---") == 3
     assert codex.endswith("Done.\n## Test\n```sh\nnpm test\n```\n---\n- [ ] check\n")
+
+
+@pytest.mark.parametrize("extra", ["", "Prepare release notes.\nInspect plugin metadata.\nWatch CI.\nRecord notes.\n"])
+def test_batch_wait_only_holds_changes_touching_the_deleted_line(tmp_path, extra):
+    shared = "Keep replies brief.\nCheck backup retention.\nCount loaded skills.\nVerify repository URLs.\n"
+    shared += extra
+    removed = "Enable auto-formatting.\n"
+    source = shared + removed
+    files = setup(tmp_path, source, "")
+    state = tmp_path / "state"
+    baselines = state / "baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    independent = "Run the tests.\n"
+    updated = shared.replace("Keep replies brief.", "Keep replies very brief.") + independent
+    files["claude"].write_text(updated)
+    files["codex"].write_text(source + removed)
+    with pending.during(state, [], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
+    item, = pending.load(state).values()
+    assert "1 shared instruction line" in item["what"]
+    assert files["claude"].read_text() == updated
+    assert files["codex"].read_text() == updated + removed * 2
+    assert files["cursor"].read_text().endswith(updated + removed)
+
+    approve_current(state)
+    with pending.during(state, [], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert files["codex"].read_text() == updated
+
+
+def test_batch_approval_matches_exact_deletion_set(tmp_path):
+    from hashlib import sha256
+
+    source = "".join(f"Rule {n}.\n" for n in range(1, 7))
+    files = setup(tmp_path, source, "")
+    state = tmp_path / "state"
+    baselines = state / "baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["claude"].write_text("Rule 1.\nRule 6.\n")
+    with pending.during(state, [], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
+    digest = sha256(b"Rule 2.\nRule 3.\nRule 4.\nRule 5.").hexdigest()[:12]
+    assert list(pending.load(state)) == [f"instructions:{digest}"]
+    approve_current(state)
+    files["claude"].write_text("Rule 1.\nRule 4.\n")
+    with pending.during(state, [], lambda *_: None, False):
+        instructions.mirror(tmp_path, "claude", baselines=baselines)
+    item, = pending.load(state).values()
+    assert not item["approved"]
+    assert files["codex"].read_text() == source
+
+
+def test_an_edited_shared_line_is_held_even_if_the_old_line_is_private(tmp_path):
+    old, new = "Run tests before pushing.", "Run all tests before pushing."
+    files = setup(tmp_path, old + "\n", "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    codex = files["codex"]
+    changed = f"{new}\n<!-- agent-sync: private -->\n{old}\n<!-- agent-sync: end private -->\n"
+    codex.write_text(changed)
+    warning, = instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert "rewords 1 shared line" in warning
+    assert codex.read_text() == changed
+    assert files["claude"].read_text() == old + "\n"
+
+
+@pytest.mark.parametrize("donor", ["claude", "codex"])
+@pytest.mark.parametrize("changed", ["# Setup\n---\n---\n# Build\n---\n# Test\n",
+                                     "---\n# Setup\n---\n# Build\n---\n# Test\n"])
+def test_a_standalone_repeat_is_mirrored_in_place(tmp_path, donor, changed):
+    source = "# Setup\n---\n# Build\n---\n# Test\n"
+    files = setup(tmp_path, source, "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files[donor].write_text(changed)
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert files["claude"].read_text() == files["codex"].read_text() == changed
+    assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+
+
+def test_first_seed_preserves_literal_comments_inside_code_fences(tmp_path):
+    source = "# Setup\n\n<!-- file note -->\n```html\n<!-- literal example -->\n\n<p>Hello</p>\n```\n"
+    files = setup(tmp_path, source, "")
+    instructions.mirror(tmp_path, "claude")
+    assert files["codex"].read_text() == source.replace("<!-- file note -->\n", "")
+
+
+@pytest.mark.parametrize(("changed_tool", "staging_tool"), [("claude", "codex"), ("codex", "codex"),
+                                                          ("claude", "cursor")])
+def test_instruction_retry_replans_after_file_changes_during_staging(tmp_path, monkeypatch, changed_tool, staging_tool):
+    old = "Run tests before pushing.\n"
+    first = "Run all tests before pushing.\n"
+    concurrent = "Run tests and lint before pushing.\n"
+    files = setup(tmp_path, old, "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["claude"].write_text(first)
+    stage = writes.stage
+    raced = False
+
+    def concurrent_edit(target, data, mode):
+        nonlocal raced
+        temp = stage(target, data, mode)
+        if target == files[staging_tool] and not raced:
+            raced = True
+            files[changed_tool].write_text(concurrent)
+        return temp
+
+    monkeypatch.setattr(writes, "stage", concurrent_edit)
+    notes = instructions.mirror(tmp_path, "claude", baselines=baselines)
+    assert files["codex"].read_text() == concurrent
+    if changed_tool == "codex":
+        assert any("rewords 1 shared line" in note for note in notes)
+        assert files["cursor"].read_text().endswith(first)
+    else:
+        assert files["cursor"].read_text().endswith(concurrent)
