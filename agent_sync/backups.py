@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
+import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -31,6 +33,13 @@ class Run:
             copy(path, self.home, self.folder, seen=self.seen)
         self.seen.add(path)
 
+    def finish(self) -> None:
+        """Remove the run's folder when it holds no file (every save found nothing to keep)."""
+        if self.folder is not None and self.folder.is_dir() and not any(
+                p.is_file() or p.is_symlink() for p in self.folder.rglob("*")):
+            shutil.rmtree(self.folder)
+            self.folder = None
+
 
 current: ContextVar[Run | None] = ContextVar("backups", default=None)
 
@@ -55,6 +64,10 @@ def copy(path: Path, home: Path, folder: Path, *, seen: set[Path] | None = None)
         return
     dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.is_dir() and not path.is_symlink():
+        inside = [other for other in seen or () if other.is_relative_to(path) and other != path]
+        if not inside and not (dest.exists() or dest.is_symlink()) and clone(path, dest):
+            return
+
         def ignore(source: str, names: list[str]) -> set[str]:
             return {name for name in names if Path(source) / name in (seen or ())}
 
@@ -65,6 +78,21 @@ def copy(path: Path, home: Path, folder: Path, *, seen: set[Path] | None = None)
         except OSError:
             dest.unlink(missing_ok=True)
             raise
+
+
+def clone(path: Path, dest: Path) -> bool:
+    """Copy a folder as an APFS clone (macOS clonefile: the copy shares the original's blocks, so it costs almost no
+    space until one of them changes). False when it can't, after removing any part copy."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        done = subprocess.run(["/bin/cp", "-c", "-R", "-P", str(path), str(dest)], capture_output=True,
+                              timeout=600).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        done = False
+    if not done and (dest.exists() or dest.is_symlink()):
+        shutil.rmtree(dest, ignore_errors=True)
+    return done
 
 
 def save(path: Path, *, follow: bool = False) -> None:
@@ -96,3 +124,4 @@ def during(home: Path, root: Path, days: int, *, now: datetime | None = None):
         yield run
     finally:
         current.reset(token)
+        run.finish()

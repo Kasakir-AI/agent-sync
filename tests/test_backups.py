@@ -124,3 +124,20 @@ def test_upkeep_writers_share_one_pre_run_backup(tmp_path, monkeypatch, capsys):
     for path in awaiting_approval:
         assert not path.exists()
         assert (removal_backup / path.relative_to(tmp_path)).read_bytes() == before[path]
+
+
+def test_a_folder_backup_keeps_links_and_an_empty_run_folder_goes(tmp_path):
+    home, root = tmp_path / "home", tmp_path / "backups"
+    plugin = write(home, "plugins/notes/1.0.0/SKILL.md", "notes").parent
+    (plugin / "latest").symlink_to("SKILL.md")
+    with backups.during(home, root, 30, now=datetime(2026, 11, 1)):
+        backups.save(plugin)
+        plugin.joinpath("SKILL.md").write_text("changed")
+    saved = root / "run-20261101-000000/plugins/notes/1.0.0"
+    assert (saved / "SKILL.md").read_text() == "notes" and (saved / "latest").readlink().name == "SKILL.md"
+
+    empty = home / "empty"
+    empty.mkdir()
+    with backups.during(home, root, 30, now=datetime(2026, 11, 2)):
+        backups.save(empty)
+    assert [folder.name for folder in root.iterdir()] == ["run-20261101-000000"]

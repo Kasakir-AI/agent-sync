@@ -145,6 +145,8 @@ def run(force: bool, echo: bool, dry: bool = False, *, approvals: tuple[str, ...
             removals.seen[key]["approved"] = True
         acknowledgements.save(warnings if acknowledged else [])
         stamp.touch()
+        if saved:
+            saved.finish()
         summary = f", backups: {saved.folder}" if saved and saved.folder else ""
         log("done", f"agent-sync finished: {log.summary()}{summary}")
         return 1 if log.problems else 0

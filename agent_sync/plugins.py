@@ -124,12 +124,13 @@ def own_versions(home: Path, dry: bool, log, *, enabled=DEFAULT_AGENTS, state_di
     available = None
 
     def command(action: str, pid: str) -> bool:
+        if not all(tools.safe_id(part) for part in pid.partition("@")[::2]):
+            log("WARN", f"skipped Codex {action} of plugin {pid!r}: not a plugin id agent-sync passes to a command")
+            return False
         args = ["codex", "plugin", action, pid]
         backups.save(home / ".codex/config.toml", follow=True)
         name, _, marketplace = pid.partition("@")
-        if name and marketplace and all(part not in {".", ".."} and "/" not in part
-                                        for part in (name, marketplace)):
-            backups.save(home / ".codex/plugins/cache" / marketplace / name)
+        backups.save(home / ".codex/plugins/cache" / marketplace / name)
         return tools.act(log, False, f"Codex {action} {pid}", args, run=run)
 
     def switch(old: inventory.Plugin, candidate: inventory.Plugin) -> None:

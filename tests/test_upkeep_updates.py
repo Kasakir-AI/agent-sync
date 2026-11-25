@@ -1,5 +1,4 @@
 import json
-from stat import S_ISUID
 from types import SimpleNamespace
 
 import pytest
@@ -83,6 +82,11 @@ def test_run_updates_global_skills_once_after_packages(tmp_path, monkeypatch, co
     ("1.9.0", "1.10.0", "install"),
     ("1.9.0", "1.9.0", "current"),
     ("1.9.0-agy.aaa", "1.9.0-agy.bbb", "install"),
+    ("1.9.0-beta.1", "1.9.0", "install"),
+    ("1.9.0", "1.9.0-agy.1", None),
+    ("1.9.0", "1.10.0-beta.1", None),
+    ("1.9.0", "1.9.0-rc.1", None),
+    ("1.9.0-agy.2", "1.9.0", None),
     ("2.0.0", "1.99.0", None),
     ("2.0.0", None, None),
     ("2.0.0", "bad json", None),
@@ -145,7 +149,7 @@ def test_mcp_brew_skips_another_accounts_install(tmp_path, monkeypatch, commands
 
 @pytest.mark.parametrize("dry", [False, True])
 @pytest.mark.parametrize("custom_pipx_home", [False, True])
-def test_mcp_resolves_npm_pipx_uv_and_own_updaters(tmp_path, monkeypatch, commands, dry, custom_pipx_home):
+def test_mcp_resolves_npm_pipx_uv_and_listed_own_updaters(tmp_path, monkeypatch, commands, dry, custom_pipx_home):
     pipx = "pipx-other" if custom_pipx_home else ".local/pipx"
     if custom_pipx_home:
         monkeypatch.setenv("PIPX_HOME", str(tmp_path / pipx))
@@ -156,33 +160,27 @@ def test_mcp_resolves_npm_pipx_uv_and_own_updaters(tmp_path, monkeypatch, comman
     program(tmp_path, "pix", f"{pipx}/venvs/pix-package/bin/pix")
     program(tmp_path, "tool-uv", ".local/share/uv/tools/tool-uv-package/bin/tool-uv")
     own = program(tmp_path, "plannotator", ".local/bin/plannotator").resolve()
-    standalone = program(tmp_path, "standalone")
-    unowned = program(tmp_path, "unowned")
+    program(tmp_path, "standalone")
     (tmp_path / "bin/alias").symlink_to(own)
     servers(tmp_path, one="one", two="two", current="current", pipx="pix", uv="tool-uv", own="plannotator",
-            repeated="alias", standalone="standalone", unowned="unowned")
+            repeated="alias", standalone="standalone")
     commands.output.update({
         NPM_ROOT: str(tmp_path / "global") + "\n",
         NPM_OUTDATED: json.dumps({"one": {}, "@org/two": {}}),
-        (str(own), "--help"): "Usage\n  plannotator update [--check]\n",
-        (str(standalone), "--help"): "Commands\n  standalone self-update\n",
-        (str(unowned), "--help"): "Usage: updates are available elsewhere\n",
     })
-    tools.update_mcp_programs(commands.log, Config(home=tmp_path), dry)
-    expected = [
+    cfg = Config(home=tmp_path, program_updates={"plannotator": ["plannotator", "update"]})
+    tools.update_mcp_programs(commands.log, cfg, dry)
+    if dry:                                            # a dry run runs nothing, not even a lookup
+        assert commands.read == commands.ran == []
+        assert ("dry", "would run: plannotator update  (plannotator update (MCP server own))") in commands.lines
+        assert any("would update pix-package (pipx)" in message for _, message in commands.lines)
+        return
+    assert commands.read == [NPM_ROOT, NPM_OUTDATED]   # no program is probed with --help
+    assert commands.ran == [
         ["npm", "install", "-g", "one@latest"], ["npm", "install", "-g", "@org/two@latest"],
         ["pipx", "upgrade", "pix-package"], ["uv", "tool", "upgrade", "tool-uv-package"],
-        [str(own), "update"], [str(standalone), "self-update"],
+        ["plannotator", "update"],
     ]
-    assert commands.read == [NPM_ROOT, NPM_OUTDATED, (str(own), "--help"),
-                             (str(standalone), "--help"), (str(unowned), "--help")]
-    if dry:
-        assert commands.ran == []
-        assert [message.split("  (")[0] for kind, message in commands.lines if kind == "dry"] == [
-            f"would run: {' '.join(args)}" for args in expected
-        ]
-    else:
-        assert commands.ran == expected
 
 
 def test_mcp_ignores_runners_agent_clis_apps_and_disabled_agents(tmp_path, commands):
@@ -308,27 +306,61 @@ def test_global_tools_run_between_mcp_and_clis_and_reuse_manager_state(tmp_path,
     ]
 
 
-def test_mcp_own_updater_validates_resolved_path_mode_and_owner_before_probing(tmp_path, monkeypatch, commands):
-    home = tmp_path / "home"
-    allowed = program(home, "allowed")
-    setuid = program(home, "setuid")
-    other_owner = program(home, "other-owner")
-    outside = program(tmp_path / "outside", "outside")
-    (home / "bin/escaped").symlink_to(outside)
-    servers(home, allowed=str(allowed), setuid=str(setuid), other_owner=str(other_owner),
-            escaped=str(home / "bin/escaped"))
-    original_stat = type(other_owner).stat
+def test_mcp_programs_never_update_interpreters_or_switched_off_servers(tmp_path, commands):
+    for name in ("python3.13", "java", "ruby", "bash"):
+        program(tmp_path, name, f"brew/Cellar/{name}/1/bin/{name}")
+    program(tmp_path, "off", "brew/Cellar/off/1/bin/off")
+    program(tmp_path, "disabled", "brew/Cellar/disabled/1/bin/disabled")
+    program(tmp_path, "python", "brew/Cellar/python@3.13/3.13.1/bin/python3.13")   # a link named python
+    servers(tmp_path, py="python3.13", java="java", ruby="ruby", sh="bash", link="python", disabled="disabled")
+    write(tmp_path, ".codex/config.toml", '[mcp_servers.off]\ncommand = "off"\nenabled = false\n')
+    data = json.loads((tmp_path / ".claude.json").read_text())
+    data["mcpServers"]["disabled"]["disabled"] = True
+    (tmp_path / ".claude.json").write_text(json.dumps(data))
+    commands.output[BREW_FORMULAE] = "python@3.13\njava\nruby\nbash\noff\ndisabled\n"
+    tools.update_mcp_programs(commands.log, Config(home=tmp_path), False)
+    assert commands.read == commands.ran == []
 
-    def stat(path, *args, **kwargs):
-        real = original_stat(path, *args, **kwargs)
-        if path == other_owner:
-            return SimpleNamespace(st_mode=real.st_mode, st_uid=100_000)
-        if path == setuid:
-            return SimpleNamespace(st_mode=real.st_mode | S_ISUID, st_uid=real.st_uid)
-        return real
 
-    monkeypatch.setattr(type(other_owner), "stat", stat)
-    commands.output[(str(allowed), "--help")] = "  allowed update"
-    tools.update_mcp_programs(commands.log, Config(home=home), False)
-    assert commands.read == [(str(allowed), "--help")]
-    assert commands.ran == [[str(allowed), "update"]]
+def test_global_homebrew_tools_skip_another_accounts_homebrew(tmp_path, monkeypatch, commands):
+    program(tmp_path, "brew", "brew/bin/brew")
+    monkeypatch.setattr(tools, "brew_writable", lambda prefix: False)
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["homebrew"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == [] and "another account" in commands.lines[0][1]
+
+
+def test_antigravity_ids_that_could_be_flags_or_paths_are_never_passed_on(tmp_path, commands):
+    program(tmp_path, "agy")
+    config = {"plugins": {"-rf": {"installedFrom": {"marketplace": "team", "version": "1.0.0"}},
+                          "notes": {"installedFrom": {"marketplace": "../escape", "version": "1.0.0"}}}}
+    write(tmp_path, ".gemini/config/config.json", json.dumps(config))
+    for market in ("team", "escape"):
+        write(tmp_path, f".gemini/antigravity-cli/cache/marketplaces/{market}/marketplace.json",
+              json.dumps({"plugins": [{"name": "-rf", "version": "2.0.0"}, {"name": "notes", "version": "2.0.0"}]}))
+    tools.update_plugins(commands.log, home=tmp_path, enabled=["antigravity"])
+    assert commands.ran == []
+
+
+def test_claude_plugins_update_only_at_user_scope_and_back_up_their_state(tmp_path, monkeypatch, commands):
+    from datetime import datetime
+
+    from agent_sync import backups
+    from tests.test_skills import make_plugin
+
+    program(tmp_path, "claude")
+    write(tmp_path, ".claude.json", "{}")
+    root = make_plugin(tmp_path, "notes@team", ["write"])
+    write(root, "big.bin", "x" * 1000)
+    other = make_plugin(tmp_path, "other@team", ["read"])
+    commands.output[("claude", "plugin", "list", "--json")] = json.dumps([
+        {"id": "notes@team", "scope": "user"}, {"id": "proj@team", "scope": "project"},
+        {"id": "--help", "scope": "user"}, {"id": "a/b@team", "scope": "user"}])
+    with backups.during(tmp_path, tmp_path / "backups", 30, now=datetime(2026, 11, 1)) as run:
+        tools.update_plugins(commands.log, home=tmp_path, enabled=["claude"])
+    assert commands.ran == [["claude", "plugin", "marketplace", "update"], ["claude", "plugin", "update", "notes@team"]]
+    saved = run.folder
+    assert (saved / ".claude.json").exists() and (saved / ".claude/plugins/installed_plugins.json").exists()
+    assert (saved / root.relative_to(tmp_path) / "big.bin").read_text() == "x" * 1000   # the plugin being updated
+    assert not (saved / other.relative_to(tmp_path)).exists()                          # not the others
+    assert not (saved / ".claude/plugins/marketplaces").exists()

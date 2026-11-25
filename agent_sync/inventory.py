@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import duplicates, mcp, skills
-from .registry import DEFAULT_AGENTS
+from .registry import DEFAULT_AGENTS, inside
 
 NPM_SPEC = re.compile(r"(?P<package>(?:@[\w.-]+/)?[\w][\w.-]*)@(?P<version>\d+\.\d+\.\d+"
                       r"(?:-[\w.-]+)?)")
@@ -71,15 +71,19 @@ def settings(path: Path) -> dict:
 
 
 def plugin_servers(root: Path, manifest: dict, manifest_path: Path) -> Iterator[tuple[Path, str, dict]]:
+    """Each MCP server a plugin brings. A server file that is missing, malformed or outside the plugin is skipped."""
     declared = manifest.get("mcpServers")
     sources = {root / file: None for file in MCP_FILES if (root / file).is_file()}
-    if isinstance(declared, str):
+    if isinstance(declared, str) and inside(root, root / declared):
         sources[root / declared] = None
     if isinstance(declared, dict):
         sources[manifest_path] = declared
     for path, data in sources.items():
         if data is None:
-            data = object_at(path)
+            try:
+                data = object_at(path)
+            except (OSError, ValueError):
+                continue
             data = data.get("mcpServers", data)
         if isinstance(data, dict):
             for name, server in sorted(data.items()):
@@ -98,7 +102,7 @@ def describe(tool: str, pid: str, root: Path, version: str, loads: bool) -> Plug
     interface = manifest.get("interface")
     display = interface.get("displayName") if isinstance(interface, dict) else None
     if tool == "codex" and not display and (root / ".app.json").is_file():
-        apps = object_at(root / ".app.json").get("apps")
+        apps = settings(root / ".app.json").get("apps")
         if isinstance(apps, dict):
             display = next(iter(apps), None)
     display = display or manifest.get("name") or name

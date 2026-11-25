@@ -11,10 +11,9 @@ from dataclasses import dataclass, field
 from functools import cache
 from importlib import metadata
 from pathlib import Path
-from stat import S_ISREG, S_ISUID
 
-from . import __version__, backups, mcp, registry
-from .registry import DEFAULT_AGENTS, TOOLS, Tool
+from . import __version__, backups, mcp
+from .registry import DEFAULT_AGENTS, TOOLS, Tool, inside
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|[─-◿]")
 # Where the CLIs usually live, added after your own PATH (a schedule starts with a bare PATH).
@@ -118,6 +117,13 @@ def brew_writable(prefix: Path) -> bool:
     return all(os.access(prefix / d, os.W_OK) for d in ("Caskroom", "Cellar", "bin") if (prefix / d).exists())
 
 
+def safe_id(value: object) -> bool:
+    """A plugin, extension or marketplace id that can go to a CLI as one argument and into a path as one name:
+    nothing a CLI reads as a flag, no folder separators or parent references, no spaces."""
+    return (isinstance(value, str) and bool(value) and not value.startswith("-") and "/" not in value
+            and ".." not in value and not any(char.isspace() for char in value))
+
+
 def act(log, dry: bool, label: str, args: list[str], timeout: int = 900, *, run=None) -> bool:
     """Run a command that changes something, or with dry=True only say what would run."""
     if dry:
@@ -169,6 +175,10 @@ def update_global_tools(log, cfg, dry: bool, *, state: UpdateState) -> None:
             for package in sorted(outdated_npm(state) - state.npm_upgraded):
                 upgrade_npm(log, dry, package, state, label=f"{label} ({package})")
         elif manager == "homebrew":
+            prefix = Path(os.path.realpath(shutil.which("brew", path=PATH))).parents[1]
+            if not brew_writable(prefix):
+                log("skip", f"Homebrew in {prefix} belongs to another account; update its tools from that account")
+                continue
             refresh_brew(log, dry, state)
             act(log, dry, label, ["brew", "upgrade"])
         else:
@@ -268,29 +278,28 @@ def update_prerequisites(log, dry: bool = False, *, state: UpdateState | None = 
         upgrade_npm(log, dry, "npm", state)
 
 
-MCP_RUNNERS = {"npx", "npm", "pnpm", "bunx", "bun", "uvx", "uv", "node", "python", "python3", "deno", "docker"}
+# Interpreters and runners an MCP server starts its code with: updating one (`brew upgrade python@3.13`) is not the
+# server's update, so agent-sync never does it for a server.
+INTERPRETERS = re.compile(r"python\d*(?:\.\d+)?|ruby|java|node|bash|zsh|sh|perl|php|go|deno|bun|bunx|docker|uv|uvx"
+                          r"|npx|npm|pnpm|pnpx")
 
 
 def mcp_commands(cfg):
-    """Yield the name and resolved executable of each stdio server."""
-    skip = MCP_RUNNERS | {tool.command for tool in TOOLS.values()}
-    for readers in registry.grouped_paths(registry.paths(cfg.home, cfg.agents, "mcp")).values():
-        try:
-            servers = mcp.read(cfg.home, readers[0])
-        except (OSError, ValueError, AttributeError):
-            continue
-        if not isinstance(servers, dict):
-            continue
+    """Yield the name, executable and resolved executable of each switched-on stdio server's own program."""
+    clis = {tool.command for tool in TOOLS.values()}
+    for _, _, _, _, servers in mcp.settings_files(cfg.home, cfg.agents):
         for name, server in servers.items():
-            cmd = server.get("command") if isinstance(server, dict) and not server.get("url") else None
-            if not isinstance(cmd, str) or not cmd or Path(cmd).name in skip:
+            if server.get("enabled", True) is False or server.get("disabled") is True or server.get("url"):
+                continue
+            cmd = server.get("command")
+            if not isinstance(cmd, str) or not cmd or Path(cmd).name in clis or INTERPRETERS.fullmatch(Path(cmd).name):
                 continue
             found = shutil.which(cmd, path=PATH)
             if not found:
                 continue
             executable, real = Path(found), Path(os.path.realpath(found))
-            if real.name in skip or any(part.lower().endswith(".app")
-                                        for part in (*executable.parts[:-1], *real.parts[:-1])):
+            if real.name in clis or INTERPRETERS.fullmatch(real.name) or any(
+                    part.lower().endswith(".app") for part in (*executable.parts[:-1], *real.parts[:-1])):
                 continue
             yield name, executable, real
 
@@ -303,34 +312,16 @@ def package_under(real: Path, root: Path | None, manager: str) -> tuple[str, str
     return (manager, "/".join(parts[:size]), None) if len(parts) > size else None
 
 
-def can_self_update(real: Path, home: Path) -> bool:
-    if not any(real.is_relative_to(root) for root in (home.resolve(), Path("/usr/local"), Path("/opt"))):
-        return False
-    try:
-        stat = real.stat()
-    except OSError:
-        return False
-    return S_ISREG(stat.st_mode) and not (stat.st_mode & S_ISUID) and stat.st_uid in (0, os.getuid())
-
-
-def update_own_program(log, dry: bool, name: str, cmd: Path) -> None:
-    help_text = raw([str(cmd), "--help"], timeout=30)
-    match = re.search(rf"^\s*{re.escape(cmd.name)} ((?:self-)?update)\b", help_text, re.MULTILINE)
-    if match:
-        if not dry:
-            backups.save(cmd)
-        act(log, dry, f"{cmd.name} update (MCP server {name})", [str(cmd), match[1]])
-
-
 def update_mcp_programs(log, cfg, dry: bool, *, state: UpdateState | None = None) -> None:
-    """Update installed executables used by enabled agents' stdio servers."""
+    """Update the programs enabled agents' stdio servers run: a Homebrew, npm, pipx or uv package when it is
+    outdated, or a program listed in `program_updates` with its own command. A dry run runs nothing."""
     state = state or UpdateState()
     pipx = (Path(os.environ.get("PIPX_HOME") or cfg.home / ".local/pipx") / "venvs").resolve()
     uv = (cfg.home / ".local/share/uv/tools").resolve()
 
     @cache
     def npm_root() -> Path | None:
-        if not shutil.which("npm", path=PATH):
+        if dry or not shutil.which("npm", path=PATH):
             return None
         root = raw(["npm", "root", "-g"]).strip()
         return Path(os.path.realpath(root)) if root else None
@@ -353,21 +344,27 @@ def update_mcp_programs(log, cfg, dry: bool, *, state: UpdateState | None = None
         if real in seen_paths:
             continue
         seen_paths.add(real)
+        own = cfg.program_updates.get(cmd.name) or cfg.program_updates.get(real.name)
+        if own:
+            act(log, dry, f"{cmd.name} update (MCP server {name})", list(own))
+            continue
         managed = next((match for resolve in package_resolvers if (match := resolve(real))), None)
         if managed is None:
-            if can_self_update(real, cfg.home):
-                update_own_program(log, dry, name, real)
             continue
         kind, package, prefix = managed
         key = (kind, package)
         if key in seen_packages:
             continue
         seen_packages.add(key)
+        if prefix and not brew_writable(prefix):
+            log("skip", f"{cmd.name} comes from Homebrew in {prefix}, which another account owns; "
+                        "update it from that account")
+            continue
+        if dry:
+            log("dry", f"would update {package} ({'Homebrew' if prefix else kind}) if it is outdated, "
+                       f"for MCP server {name}")
+            continue
         if prefix:
-            if not brew_writable(prefix):
-                log("skip", f"{cmd.name} comes from Homebrew in {prefix}, which another account owns; "
-                            "update it from that account")
-                continue
             refresh_brew(log, dry, state, quiet=True)
             if full_name := brew_outdated(kind).get(package):
                 act(log, dry, f"{package} upgrade (Homebrew, for MCP server {name})",
@@ -458,6 +455,28 @@ def version_triplet(version: object) -> tuple[int, ...]:
     return tuple(map(int, match.groups())) if match else ()
 
 
+BUILD = "-agy."   # Antigravity's rebuilds of one release: 1.2.3-agy.1, 1.2.3-agy.2
+
+
+def catalog_newer(installed: object, available: object) -> bool:
+    """The catalog's version is newer than the installed one: a higher X.Y.Z; for equal numbers, the release of an
+    installed prerelease or another Antigravity build of it. Never a move from a release to a prerelease."""
+    old, new = version_triplet(installed), version_triplet(available)
+    if not old or not new or installed == available:
+        return False
+    old_suffix, new_suffix = re.sub(r"^\d+\.\d+\.\d+", "", installed), re.sub(r"^\d+\.\d+\.\d+", "", available)
+
+    def prerelease(suffix: str) -> bool:
+        return bool(suffix) and not suffix.startswith(BUILD)
+
+    if prerelease(new_suffix) and not prerelease(old_suffix):
+        return False
+    if new != old:
+        return new > old
+    return (prerelease(old_suffix) and not new_suffix) or (
+        old_suffix.startswith(BUILD) and new_suffix.startswith(BUILD))
+
+
 def update_antigravity_plugins(log, dry: bool, home: Path) -> None:
     """Install newer versions from Antigravity's cached marketplaces."""
     config = read_json_object(home / ".gemini/config/config.json")
@@ -465,9 +484,13 @@ def update_antigravity_plugins(log, dry: bool, home: Path) -> None:
     if not isinstance(installed, dict):
         return
 
+    cache_root = home / ".gemini/antigravity-cli/cache/marketplaces"
+
     @cache
     def catalog(marketplace: str) -> dict:
-        path = home / ".gemini/antigravity-cli/cache/marketplaces" / marketplace / "marketplace.json"
+        path = cache_root / marketplace / "marketplace.json"
+        if not inside(cache_root, path):
+            return {}
         entries = read_json_object(path).get("plugins")
         if not isinstance(entries, list):
             return {}
@@ -480,34 +503,35 @@ def update_antigravity_plugins(log, dry: bool, home: Path) -> None:
         if not isinstance(source, dict):
             continue
         marketplace, version = source.get("marketplace"), source.get("version")
-        if not isinstance(marketplace, str) or not marketplace:
+        if not safe_id(marketplace) or not safe_id(name):
             continue
         latest = catalog(marketplace).get(name)
-        old, new = version_triplet(version), version_triplet(latest)
-        if not old or not new:
-            continue
-        if latest == version:
+        if latest == version and version_triplet(version):
             current += 1
-        elif new >= old:
-            backup_plugins(home, "antigravity", dry)
+        elif catalog_newer(version, latest):
+            backup_plugins(home, "antigravity", dry, (home / ".gemini/config/plugins" / name,))
             act(log, dry, f"Antigravity plugin {name}", ["agy", "plugin", "install", f"{name}@{marketplace}"])
     if current:
         log("ok", f"Antigravity plugins are current ({current})")
 
 
-PLUGIN_PATHS = {
-    "claude": (".claude/plugins", ".claude/settings.json", ".claude.json"),
-    "codex": (".codex/plugins", ".codex/config.toml"),
-    "cursor": (".cursor/plugins", ".cursor/cli-config.json"),
-    "gemini": (".gemini/extensions", ".gemini/settings.json"),
-    "antigravity": (".gemini/config/plugins", ".gemini/config/config.json"),
+PLUGIN_STATE = {   # the files each tool's plugin commands rewrite
+    "claude": (".claude/plugins/installed_plugins.json", ".claude/plugins/known_marketplaces.json",
+               ".claude/settings.json", ".claude.json"),
+    "codex": (".codex/config.toml",),
+    "cursor": (".cursor/cli-config.json",),
+    "gemini": (".gemini/settings.json", ".gemini/extensions/extension-enablement.json"),
+    "antigravity": (".gemini/config/config.json",),
 }
 
 
-def backup_plugins(home: Path, tool: str, dry: bool) -> None:
+def backup_plugins(home: Path, tool: str, dry: bool, folders: tuple[Path, ...] = ()) -> None:
+    """Save the state files the tool's plugin commands rewrite, and the folders a command replaces or removes."""
     if not dry:
-        for relative in PLUGIN_PATHS[tool]:
+        for relative in PLUGIN_STATE[tool]:
             backups.save(home / relative, follow=True)
+        for folder in folders:
+            backups.save(folder)
 
 
 def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=DEFAULT_AGENTS) -> None:
@@ -515,6 +539,8 @@ def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=
     Codex: refresh the Git plugin marketplaces you added; its installed plugins follow them.
     Cursor: refresh the plugin marketplaces you added (Cursor manages its built-in ones itself).
     A dry run skips a CLI that never started in this account (it has no plugins yet)."""
+    from . import skills as installed_skills
+
     home = home or Path.home()
 
     def usable(tool: str) -> bool:
@@ -528,21 +554,26 @@ def update_plugins(log, dry: bool = False, home: Path | None = None, *, enabled=
             plugins = json.loads(raw(["claude", "plugin", "list", "--json"]) or "[]")
         except ValueError:
             plugins = []
-        for plugin in plugins:
-            if plugin.get("scope") in ("user", "project") and "@" in plugin.get("id", ""):
-                act(log, dry, f"Claude Code plugin {plugin['id']}", ["claude", "plugin", "update", plugin["id"]])
+        installs = {pid: root for pid, (root, _, _) in installed_skills.plugin_installs(home).items()}
+        for plugin in plugins if isinstance(plugins, list) else ():
+            pid = plugin.get("id") if isinstance(plugin, dict) else None
+            # a project-scope plugin can only be updated inside its project
+            if safe_id(pid) and "@" in pid and plugin.get("scope") == "user":
+                backup_plugins(home, "claude", dry, tuple(filter(None, [installs.get(pid)])))
+                act(log, dry, f"Claude Code plugin {pid}", ["claude", "plugin", "update", pid])
     if usable("codex"):
         backup_plugins(home, "codex", dry)
         act(log, dry, "Codex plugin marketplaces", ["codex", "plugin", "marketplace", "upgrade"])
     if usable("cursor"):
         for line in raw(["cursor-agent", "plugin", "marketplace", "list"]).splitlines():
             parts = line.split()
-            if len(parts) >= 3 and parts[1] == "user" and parts[2].startswith(("https://", "git@")):
+            if (len(parts) >= 3 and parts[1] == "user" and parts[2].startswith(("https://", "git@"))
+                    and safe_id(parts[0])):
                 backup_plugins(home, "cursor", dry)
                 act(log, dry, f"Cursor plugin marketplace {parts[0]}",
                     ["cursor-agent", "plugin", "marketplace", "update", parts[0]])
     if usable("gemini"):
-        backup_plugins(home, "gemini", dry)
+        backup_plugins(home, "gemini", dry, (home / ".gemini/extensions",))
         act(log, dry, f'{TOOLS["gemini"].name} extensions', [TOOLS["gemini"].command, "extensions", "update", "--all"])
     if "antigravity" in enabled and shutil.which(TOOLS["antigravity"].command, path=PATH):
         update_antigravity_plugins(log, dry, home)

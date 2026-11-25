@@ -94,3 +94,11 @@ def grouped_paths(mapping: dict[str, Path]) -> dict[Path, tuple[str, ...]]:
     for tool, path in mapping.items():
         groups[path] = (*groups.get(path, ()), tool)
     return groups
+
+
+def inside(root: Path, path: Path) -> bool:
+    """`path` resolves to a place within `root` (links followed): a path a manifest names can't leave its plugin."""
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except (OSError, RuntimeError):
+        return False

@@ -24,7 +24,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from . import backups, pending
-from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, paths
+from .registry import DEFAULT_AGENTS, TOOLS, grouped_paths, inside, paths
 
 EXTRA_ROOTS = {"codex": ".codex/skills", "cursor": ".cursor/skills", "gemini": ".gemini/skills"}
 
@@ -107,7 +107,7 @@ def plugin_skill_dirs(root: Path) -> dict[str, Path]:
     if isinstance(extra, str):
         extra = [extra]
     if isinstance(extra, list):
-        paths += [root / x for x in extra if isinstance(x, str)]
+        paths += [root / x for x in extra if isinstance(x, str) and inside(root, root / x)]
     out = {}
     for path in paths:
         if (path / "SKILL.md").is_file():
