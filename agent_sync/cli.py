@@ -423,7 +423,7 @@ def show_inventory() -> int:
                 + mcp.pins(home, True, enabled=enabled, keep=cfg.keep_mcp_versions, latest=latest,
                            released=npm.released, major=cfg.mcp_major_updates))
     with pending.during(cfg.state_dir, cfg.keep_installed, lambda _, text: problems.append(text), True) as removals:
-        problems.extend(mcp.dedupe(home, True, enabled=enabled))
+        problems.extend(mcp.dedupe(home, True, enabled=enabled, source=cfg.source))
         problems.extend(f"approval required to remove {what}" for what in removals.questions().values())
     for line in problems or ["None"]:
         print(f"  {line}")

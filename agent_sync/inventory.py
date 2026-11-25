@@ -230,10 +230,9 @@ def plugins(home: Path, enabled=DEFAULT_AGENTS, *, include_disabled: bool = Fals
         return read_plugins(home, enabled, include_disabled)
     found = {}
     for tool in (tool for tool in READERS if tool in enabled):
-        key = (home, tool, include_disabled)
-        if key not in cache:
-            cache[key] = read_plugins(home, (tool,), include_disabled)[tool]
-        found[tool] = list(cache[key])
+        if (home, tool) not in cache:
+            cache[home, tool] = read_plugins(home, (tool,), True)[tool]
+        found[tool] = [plugin for plugin in cache[home, tool] if include_disabled or plugin.loads]
     return found
 
 
