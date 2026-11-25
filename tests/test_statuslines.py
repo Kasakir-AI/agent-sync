@@ -29,16 +29,21 @@ def write(home, tool, text):
     return path
 
 
-def upkeep(home, *enabled, dry=False, keep=(), now=100, approvals=()):
+def upkeep(home, *enabled, dry=False, keep=(), now=100):
     cfg = Config(home=home, agents=list(enabled), keep_installed=list(keep))
     root = cfg.state_dir / "backups"
     logs = []
     with (nullcontext() if dry else backups.during(home, root, cfg.backup_days)), pending.during(
-        cfg.state_dir, cfg.keep_installed, lambda kind, line: logs.append((kind, line)), dry,
-        now=now, approvals=approvals,
+        cfg.state_dir, cfg.keep_installed, lambda kind, line: logs.append((kind, line)), dry, now=now,
     ) as run:
         lines = statuslines.apply(home, dry, cfg, run)
     return lines, logs
+
+
+def approve(monkeypatch, home, key):
+    """What `agent-sync pending --approve KEY` (or a click in the dialog or the Inbox) records."""
+    monkeypatch.setattr(cli, "load", lambda: Config(home=home))
+    assert cli.main(["pending", "--approve", key]) == 0
 
 
 def install_executable(directory):
@@ -98,22 +103,26 @@ def test_updates_managed_path_to_stable_homebrew_link(tmp_path, monkeypatch, old
 def test_existing_status_line_requires_approval_and_keep_wins(tmp_path, monkeypatch, tool, original):
     monkeypatch.setattr(tools, "PATH", str(tmp_path / "empty-bin"))
     path = write(tmp_path, tool, original)
-    lines, logs = upkeep(tmp_path, tool)
-    assert not lines and len(logs) == 1 and "approval required to replace your" in logs[0][1]
-    state_path = Config(home=tmp_path).state_dir / "pending-removals.json"
     key = f"statusline:{tool}"
-    token = json.loads(state_path.read_text())[key]["approval"]
-    assert f"agent-sync run --force --approve-status-line {token}" in logs[0][1]
-    assert upkeep(tmp_path, tool, now=100 + pending.WAIT * 2)[0] == []
-    assert upkeep(tmp_path, tool, keep=[key], approvals=(token,)) == ([], [])
+    lines, logs = upkeep(tmp_path, tool)
+    assert not lines and len(logs) == 1 and logs[0][0] == "WARN"
+    assert "approval required" in logs[0][1] and "status line" in logs[0][1]
+    state_path = Config(home=tmp_path).state_dir / "pending-removals.json"
+    assert json.loads(state_path.read_text())[key]["approved"] is False
+    assert upkeep(tmp_path, tool, now=10_000)[0] == []           # waiting is not approving
+    assert path.read_text() == original
+
+    assert upkeep(tmp_path, tool, keep=[key]) == ([], [])        # keep: never asked, never changed
     assert path.read_text() == original
     assert list(tmp_path.glob(".local/state/agent-sync/backups/run-*")) == []
 
-    lines, logs = upkeep(tmp_path, tool, approvals=(token,), dry=True)
+    upkeep(tmp_path, tool)
+    approve(monkeypatch, tmp_path, key)
+    lines, logs = upkeep(tmp_path, tool, dry=True)
     assert lines == [f"dry  would update {PATHS[tool]} ({'Codex' if tool == 'codex' else 'Claude Code'} status line)"]
-    assert not logs and path.read_text() == original and not json.loads(state_path.read_text())
+    assert [kind for kind, _ in logs] == ["dry"] and path.read_text() == original
 
-    assert len(upkeep(tmp_path, tool, approvals=(token,))[0]) == 1
+    assert len(upkeep(tmp_path, tool)[0]) == 1
     if tool == "codex":
         assert tomllib.loads(path.read_text())["tui"] == {"status_line": CODEX, "notifications": True}
         assert " # keep this comment" in path.read_text()
@@ -129,13 +138,13 @@ def test_existing_status_line_requires_approval_and_keep_wins(tmp_path, monkeypa
 def test_approval_is_bound_to_the_replacement_that_was_shown(tmp_path, monkeypatch):
     monkeypatch.setattr(tools, "PATH", str(tmp_path / "empty-bin"))
     path = write(tmp_path, "claude", '{"statusLine":{"type":"command","command":"original"}}')
-    _, logs = upkeep(tmp_path, "claude")
-    token = logs[0][1].split("`")[1].split()[-1]
+    upkeep(tmp_path, "claude")
+    approve(monkeypatch, tmp_path, "statusline:claude")
     changed = '{"statusLine":{"type":"command","command":"unreviewed"}}'
     path.write_text(changed)
-    lines, logs = upkeep(tmp_path, "claude", approvals=(token,))
-    assert not lines and "unreviewed" in logs[0][1]
-    assert token not in logs[0][1] and path.read_text() == changed
+    lines, logs = upkeep(tmp_path, "claude")
+    assert not lines and logs[0][0] == "WARN" and "unreviewed" in logs[0][1]
+    assert path.read_text() == changed
 
 
 @pytest.mark.parametrize("text", [
@@ -187,7 +196,7 @@ def test_status_line_defaults_on_and_can_be_disabled(tmp_path):
         parse('status_line = "false"', path, tmp_path)
 
 
-def test_cli_approves_the_logged_token(tmp_path, monkeypatch, capsys):
+def test_cli_approval_replaces_the_status_line_at_the_next_run(tmp_path, monkeypatch, capsys):
     cfg = Config(home=tmp_path, agents=["claude"], skill_packages=[], mirror_skills=False, mirror_roles=False,
                  mirror_mcp=False, update_plugins=False, update_mcp_programs=False, update_global_tools=False,
                  update_clis=False, update_self=False)
@@ -197,9 +206,9 @@ def test_cli_approves_the_logged_token(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(tools, "PATH", str(tmp_path / "empty-bin"))
     path = write(tmp_path, "claude", '{"statusLine":{"type":"command","command":"custom"}}')
     assert cli.main(["run", "--force", "--echo"]) == 0
-    line = next(line for line in capsys.readouterr().out.splitlines() if "--approve-status-line" in line)
-    command = shlex.split(line.split("`")[1])
-    assert cli.main(command[1:]) == 0
+    assert json.loads(path.read_text())["statusLine"]["command"] == "custom"
+    assert cli.main(["pending", "--approve", "statusline:claude"]) == 0
+    assert cli.main(["run", "--force", "--echo"]) == 0
     command = json.loads(path.read_text())["statusLine"]["command"]
     result = subprocess.run(["/bin/sh", "-c", command], cwd=tmp_path, check=True, text=True, capture_output=True,
                             input='{"model":{"display_name":"Opus"}}')
