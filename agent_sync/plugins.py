@@ -50,6 +50,8 @@ def codex_catalog() -> list[CatalogEntry]:
 
 
 def twice(home: Path, *, enabled=DEFAULT_AGENTS) -> list[str]:
+    """A line per plugin a tool loads from two marketplaces. A pair whose removal already waits for approval gets
+    an info line instead of a second warning."""
     lines = []
     for tool, found in inventory.plugins(home, enabled).items():
         families: dict[str, list[inventory.Plugin]] = {}
@@ -58,7 +60,12 @@ def twice(home: Path, *, enabled=DEFAULT_AGENTS) -> list[str]:
         for family, group in families.items():
             if len({p.marketplace for p in group}) > 1:
                 copies = ", ".join(f"{p.id} {p.version}".rstrip() for p in group)
-                lines.append(f"{TOOLS[tool].name} loads plugin {family} twice: {copies}")
+                waiting = [p.id for p in group if pending.asked(f"plugin:{tool}:{p.id}")]
+                if waiting:
+                    lines.append(f"info  {TOOLS[tool].name} loads plugin {family} twice until you approve removing "
+                                 f"{', '.join(waiting)}: waiting for your approval")
+                else:
+                    lines.append(f"{TOOLS[tool].name} loads plugin {family} twice: {copies}")
     return lines
 
 
@@ -91,8 +98,26 @@ def skill_problem(old: inventory.Plugin, candidate: inventory.Plugin) -> str:
     return f"it lacks {len(missing)} of its skills ({names})"
 
 
+def parts_problem(old: inventory.Plugin, candidate: inventory.Plugin) -> str:
+    missing = sorted(old.parts - candidate.parts)
+    if not missing:
+        return ""
+    names = ", ".join(part.replace(":", " ") for part in missing[:8]) + (", ..." if len(missing) > 8 else "")
+    return f"it lacks {'one' if len(missing) == 1 else len(missing)} of its commands, agents or hooks ({names})"
+
+
+def counterpart(old: inventory.Plugin, candidate: inventory.Plugin) -> bool:
+    """`candidate` is Codex's own version of `old`: the same family, or (a Codex app with another display name)
+    at least half of `old`'s skills by name."""
+    if candidate.made_for != "codex" or candidate.id == old.id:
+        return False
+    shared = len(old.skill_names & candidate.skill_names)
+    return candidate.family == old.family or (bool(old.skill_names) and shared * 2 >= len(old.skill_names))
+
+
 def replacement_problem(old: inventory.Plugin, candidate: inventory.Plugin) -> str:
-    if reason := version_problem(old.version, candidate.version) or skill_problem(old, candidate):
+    if reason := (version_problem(old.version, candidate.version) or skill_problem(old, candidate)
+                  or parts_problem(old, candidate)):
         return reason
     endpoints = {inventory.endpoint(server) for _, server in candidate.servers}
     for name, server in old.servers:
@@ -143,10 +168,10 @@ def own_versions(home: Path, dry: bool, log, *, enabled=DEFAULT_AGENTS, state_di
             log("info", f"Codex has both {label(old)} and {label(candidate)} installed")
 
     for old in loaded:
-        if old.made_for != "claude":
+        if old.made_for != "claude" or pending.keeps(f"plugin:codex:{old.id}"):
             continue
         skipped = choices.get(old.id, {})
-        own = [p for p in loaded if p.family == old.family and p.made_for == "codex"]
+        own = [p for p in loaded if counterpart(old, p)]
         if own:
             own.sort(key=lambda p: numbers(p.version), reverse=True)
             options = [(p, replacement_problem(old, p)) for p in own]

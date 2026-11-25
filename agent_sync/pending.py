@@ -76,6 +76,12 @@ def keeps(key: str) -> bool:
     return run is not None and run.keeps(key)
 
 
+def asked(key: str) -> bool:
+    """This run asked for approval to remove `key` and has none yet."""
+    run = current.get()
+    return run is not None and key in run.seen and not run.seen[key]["approved"]
+
+
 def due(key: str, what: str) -> bool:
     run = current.get()
     return run is not None and run.due(key, what)

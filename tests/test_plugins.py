@@ -163,3 +163,44 @@ def test_twice_ignores_a_switched_off_plugin(tmp_path):
     assert plugins.twice(tmp_path) == [f"Codex loads plugin netlify twice: {OLD} 1.7.0, {NEW} 1.9.0"]
     write(tmp_path, ".codex/config.toml", f'[plugins."{OLD}"]\nenabled = false\n')
     assert plugins.twice(tmp_path) == []
+
+
+def test_a_kept_plugin_is_never_replaced_from_the_catalog(tmp_path):
+    old_plugin(tmp_path)
+    entry = plugins.CatalogEntry(NEW, "netlify", "openai-curated-remote", "1.9.0", False)
+    with pending.during(tmp_path / "state", [f"plugin:codex:{OLD}"], lambda *_: None, False):
+        plugins.own_versions(tmp_path, False, lambda *_: None, state_dir=tmp_path / "state",
+                             catalog=lambda: [entry], run=lambda _: pytest.fail("would add a plugin"))
+
+
+def test_a_codex_app_with_another_name_counts_when_it_has_half_the_skills(tmp_path):
+    root = old_plugin(tmp_path)
+    make_skill(root / "skills", "netlify-deploy")
+    app = codex_plugin(tmp_path, "app-0a1b@openai-curated-remote", "1.7.0", remote=True,
+                       metadata={"interface": {"displayName": "Deploy Tools"}, "version": "1.7.0"})
+    make_skill(app / "skills", "netlify-functions")
+    logs = []
+    with pending.during(tmp_path / "state", [], lambda *line: logs.append(line), False):
+        plugins.own_versions(tmp_path, False, lambda *line: logs.append(line), state_dir=tmp_path / "state",
+                             catalog=lambda: pytest.fail("already installed"), run=lambda _: (0, ""))
+    assert any("lacks one of its skills (netlify-deploy)" in message for _, message in logs)
+
+
+def test_a_replacement_that_lacks_a_command_or_hooks_is_not_taken(tmp_path):
+    root = old_plugin(tmp_path)
+    write(root, "commands/deploy.md", "deploy")
+    write(root, "hooks/hooks.json", "{}")
+    own_plugin(tmp_path)
+    logs = []
+    plugins.own_versions(tmp_path, False, lambda *line: logs.append(line), state_dir=tmp_path / "state",
+                         run=lambda _: pytest.fail("would remove a plugin"))
+    assert "lacks 2 of its commands, agents or hooks (command deploy, hooks)" in logs[0][1]
+
+
+def test_twice_says_once_that_a_pending_removal_waits_for_approval(tmp_path):
+    old_plugin(tmp_path)
+    own_plugin(tmp_path)
+    with pending.during(tmp_path / "state", [], lambda *_: None, False):
+        assert not pending.due(f"plugin:codex:{OLD}", f"Codex plugin {OLD}")
+        assert plugins.twice(tmp_path) == [
+            f"info  Codex loads plugin netlify twice until you approve removing {OLD}: waiting for your approval"]

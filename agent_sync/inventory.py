@@ -41,6 +41,16 @@ class Plugin:
     skills: int
     skill_dirs: tuple[Path, ...] = ()
     server_files: tuple[Path, ...] = ()
+    parts: frozenset[str] = frozenset()   # its commands, agents and hooks: "command:x", "agent:y", "hooks"
+
+
+def plugin_parts(root: Path, manifest: dict) -> frozenset[str]:
+    """What a plugin brings besides skills and MCP servers: commands/*.md, agents/*.md|.toml and hooks."""
+    found = {f"command:{path.stem}" for path in root.glob("commands/*.md")}
+    found |= {f"agent:{path.stem}" for path in root.glob("agents/*") if path.suffix in (".md", ".toml")}
+    if manifest.get("hooks") or (root / "hooks/hooks.json").is_file():
+        found.add("hooks")
+    return frozenset(found)
 
 
 def family(name: str) -> str:
@@ -120,7 +130,7 @@ def describe(tool: str, pid: str, root: Path, version: str, loads: bool) -> Plug
     return Plugin(tool, pid, name, market, str(version), root, family(str(display)),
                   frozenset(duplicates.skill_name(d) for d in dirs), loads, made_for,
                   tuple((n, v) for n, (_, v) in servers.items()), len(dirs), dirs,
-                  tuple(file for file, _ in servers.values()))
+                  tuple(file for file, _ in servers.values()), plugin_parts(root, manifest))
 
 
 def claude_plugins(home: Path) -> Iterator[tuple[str, Path, str, bool]]:
