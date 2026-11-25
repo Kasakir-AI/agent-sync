@@ -1,15 +1,15 @@
 # agent-sync
 
-Keep **Claude Code**, **Codex** and **Cursor** in step on one Mac (or Linux machine). Pick one of them as the source of truth, and
-agent-sync makes the other two match it, once a day:
+agent-sync keeps your agents in step on macOS and Linux. It supports **Claude Code**, **Codex**, **Cursor**,
+**Gemini CLI**, and **Antigravity**. Choose which agents to keep in step and which one provides the settings they
+share.
 
-- **Skill packages** (for example [pstack](https://github.com/backnotprop/pstack)) are installed and updated for
-  all three tools from one shared copy, with the [`skills`](https://www.npmjs.com/package/skills) CLI. When two
-  packages ship a skill with the same name, the package listed first in `skill_packages` keeps it.
-- **Agents** that ship with a package (`agents/*.md`) are mirrored into each tool's own format: Claude Code
-  `~/.claude/agents`, Codex `~/.codex/agents/*.toml`, and a small local Cursor plugin, because Cursor only reads
-  custom agents from projects and plugins. Each tool's copy runs on a model you choose for that tool, and you can
-  add your own notes to an agent's prompt. Skills a package stops shipping are uninstalled.
+- **Skill packages** such as [pstack](https://github.com/backnotprop/pstack) are installed and updated for the
+  enabled agents using the [`skills` CLI](https://www.npmjs.com/package/skills). When two packages ship a skill
+  with the same name, the first package in `skill_packages` keeps it. Upkeep removes skills a package drops.
+- **Package subagents** (`agents/*.md`) are written in each enabled agent's format. Cursor gets a local
+  subagent plugin. You can set models for Claude Code, Codex, Cursor, and Gemini CLI and add notes to the
+  subagent prompts. Antigravity chooses its own model.
 - **Your own skills** (the ones you made in the source tool, not from a package) are copied to the other tools.
   A copy is marked as agent-sync's, so it follows the source and goes away with it; a folder you made by hand in
   the other tool is never touched.
@@ -28,16 +28,15 @@ agent-sync makes the other two match it, once a day:
   an app rewrites on its updates (Codex's `node_repl`). A copy that points at files that no longer exist, or that
   differs only in an older app version (a versioned folder or a `*VERSION` setting), is brought up to the newest
   working copy, and the original is backed up.
-- **Global instructions** (optional): `CLAUDE.md` is merged into Codex's `AGENTS.md` and copied into a Cursor rule
-  that always applies, or `AGENTS.md` the other way round. The merge adds new lines and replaces changed ones, and
-  a line you delete from the source leaves the other file too. Lines only the other file has stay as its own notes.
-  A shared line you reword in the other file (or Codex rewords when it remembers something) is kept, and the run
-  warns until the source has the same wording, so make lasting changes in the source.
-- **Plugins**: Claude Code's plugin marketplaces and the plugins you installed, the Git plugin marketplaces you
-  added to Codex, and the Cursor plugin marketplaces you added (Cursor manages its built-in ones itself).
-- **The three CLIs** are updated: Claude Code and Cursor Agent through Homebrew when installed that way,
-  otherwise through their own updaters, and Codex with `codex update`. git and Node (which runs the `skills`
-  tool) are upgraded too when Homebrew installed them.
+- **Global instructions** (optional) follow the source into the other agents' instruction files. Gemini CLI and
+  Antigravity share `~/.gemini/GEMINI.md`. Cursor receives an always-applied rule. Changes and deletions in the
+  source carry over, while local notes stay in each file. If you reword a shared line in another file, upkeep
+  keeps your wording and reminds you to make the same change in the source.
+- **Plugins and extensions** are updated for enabled agents. Upkeep refreshes Claude Code's plugins and
+  marketplaces, Git plugin marketplaces in Codex, user marketplaces in Cursor, and Gemini CLI extensions.
+- **CLIs** are updated through Homebrew when it installed them or through their own update commands. Gemini CLI
+  uses npm outside Homebrew. Antigravity uses `agy update`. Upkeep also upgrades git and Node when Homebrew
+  installed them.
 - **agent-sync itself** is updated the way you installed it: `brew upgrade` for the Homebrew formula,
   `pipx upgrade`, or the newest release from GitHub for an install from the repository.
 - **A double-click launcher** (macOS, optional): "Agent Upkeep" on the Desktop runs the upkeep with every step on
@@ -60,7 +59,7 @@ git+https://github.com/Kasakir-AI/agent-sync.git`, then link `~/.local/share/age
 folder on your PATH. 
 ```sh
 brew install kasakir-ai/tap/agent-sync      # or: pipx install git+https://github.com/Kasakir-AI/agent-sync.git
-agent-sync setup                  # install whatever is missing: git, Node, Claude Code, Codex, Cursor Agent
+agent-sync setup                  # discover agents and install missing prerequisites and enabled CLIs
 agent-sync config                 # change the settings by answering questions (optional)
 agent-sync review                 # compare settings across the tools and choose which versions to keep
 agent-sync run --dry-run          # see what it would change first
@@ -70,21 +69,38 @@ agent-sync install --launcher     # schedule it (hourly + at login, works once a
 agent-sync launcher               # just the Desktop launcher, if you want it without reinstalling
 ```
 
-`agent-sync setup` installs only what is missing, and asks first (`--dry-run` lists it, `--yes` skips the
-question). On a Mac without Homebrew it installs Homebrew first (that needs an administrator's password); then
-git, Node and the three CLIs come from Homebrew, the CLIs as the casks `claude-code`, `codex` and `cursor-cli`.
-Where Homebrew isn't available to your account, the CLIs come from their official per-user installers into
-`~/.local/bin` (no administrator needed), and setup tells you how to get git or Node. The daily run never
-installs anything; it notes a missing CLI instead.
+In a terminal, `agent-sync setup` first offers to add installed agents you haven't enabled. It then offers to
+install missing prerequisites and CLIs for all enabled agents. With `--dry-run` it lists the installation plan.
+With `--yes` it installs from the current list without prompting.
 
-On Linux, `agent-sync install` sets up a systemd user timer instead; run `loginctl enable-linger` if it should also
-run while you are logged out.
+On macOS, installing Homebrew requires an administrator. Once Homebrew is available, setup uses its
+`claude-code`, `codex`, and `cursor-cli` casks. Gemini CLI uses the `gemini-cli` formula. Setup uses each CLI's
+official installer when Homebrew is unavailable to your account. Antigravity always uses its official installer.
 
-`agent-sync run --dry-run` shows everything a run would change (files it would write, commands it would run)
-and changes nothing: no log, no state, no package cache. `agent-sync status` shows the last run, the log
-location and the installed CLI versions, and which Claude Code plugins have skills you could offer to Codex and
-Cursor. `agent-sync uninstall` removes the schedule and the launcher (and switches the launcher setting off, so
-the next run doesn't bring it back).
+On Linux, `agent-sync install` sets up a systemd user timer. Run `loginctl enable-linger` if it should also run
+while you are logged out.
+
+`agent-sync run --dry-run` lists the files it would change and the commands it would run.
+`agent-sync status` shows the last run, the log location, and the enabled CLI versions.
+`agent-sync uninstall` removes the schedule and the launcher and turns off the launcher setting.
+
+## Choose your agents
+
+`agent-sync agents` shows which agents are installed, which are in step, and which is the source. In a terminal,
+it offers to add installed agents that are outside sync. The **Agents** section in `agent-sync config` also lets
+you change the list.
+
+```sh
+agent-sync agents add gemini antigravity
+agent-sync agents remove cursor
+```
+
+Claude Code, Codex, and Cursor are enabled by default. You can add an agent before installing it and then run
+`agent-sync setup`. Removing an agent stops upkeep of its own files and leaves them in place. A shared file
+continues to receive updates while an enabled agent uses it.
+
+Choose a new source under **Source tool** in `agent-sync config` before removing the current source. Any
+enabled agent can be the source, and Cursor skips the optional global instructions mirror when it is the source.
 
 ## Review differences
 
@@ -141,8 +157,7 @@ backups follow `XDG_STATE_HOME` when it is set.
 ## Configure
 
 The easy way: run `agent-sync config` (or `agent-sync settings`). It shows every setting with its current value,
-explains each one with examples, and asks what you want to change: the source tool, skill packages, which
-plugins' skills go to Codex and Cursor, which parts to keep in step, agent models and notes, model warnings,
+explains each one with examples, and asks what you want to change: the enabled agents, the source tool, skill packages, which parts to keep in step, agent models and notes, model warnings,
 update and install commands, extra steps, and the pstack model roles. It also opens your global instructions in
 your editor. Nothing is written until you save; saving keeps the comments in your file, leaves the old one next to
 it as `config.toml.bak`, and then offers a dry run so you can see what the next upkeep would do.
@@ -152,8 +167,9 @@ and change what you need. Every key is optional:
 
 | key | default | what it does |
 | --- | --- | --- |
-| `source` | `"claude"` | the tool the others mirror |
-| `skill_packages` | `["backnotprop/pstack"]` | GitHub skill packages to install for all three tools |
+| `source` | `"claude"` | the enabled agent the others mirror |
+| `agents` | `["claude", "codex", "cursor"]` | the agents to keep in step |
+| `skill_packages` | `["backnotprop/pstack"]` | GitHub skill packages to install for the enabled agents |
 | `skills_cli` | `"skills@latest"` | the `skills` CLI version (pin one to hold it) |
 | `remove_dropped_skills` | `true` | uninstall skills a package no longer ships |
 | `mirror_roles` / `mirror_mcp` / `mirror_skills` / `update_plugins` | `true` | switch parts off |
@@ -161,14 +177,14 @@ and change what you need. Every key is optional:
 | `allow_duplicate_skills` | `[]` | skill names a tool may load from two places without a warning, e.g. `["pdf"]` |
 | `mirror_instructions` | `false` | copy the source tool's global instructions to the others |
 | `warn_models` | `[]` | warn when a model name containing one of these appears, e.g. `["preview-"]` |
-| `update_clis` | `true` | `false`, or a list such as `["claude", "codex"]` |
+| `update_clis` | `true` | update all enabled CLIs, disable updates with `false`, or choose a subset |
 | `[cli_commands]` | none | your own update command for a CLI, e.g. `codex = ["npm", "install", "-g", "@openai/codex@latest"]` |
-| `[install_commands]` | none | your own install command for `agent-sync setup`, per item: `homebrew`, `git`, `node`, `claude`, `codex`, `cursor` |
+| `[install_commands]` | none | your own install command for `agent-sync setup`, by agent ID or for `homebrew`, `git`, and `node` |
 | `[[extra_steps]]` | none | your own commands, run at the end of every upkeep |
 | `update_self` | `true` | update agent-sync itself (Homebrew, pipx, or a pip install from GitHub, which updates to the newest release) |
 | `launcher` | `false` | keep the double-click "Agent Upkeep" on the Desktop and up to date (macOS); `install --launcher` and `agent-sync launcher` switch it on |
 | `log_days` | `7` | how long log lines are kept |
-| `[agent_models]` | `opus` / `claude-opus-5-5-high-fast` / `gpt-6.2-sol` | the model each tool's copy of an agent uses |
+| `[agent_models]` | `opus` / `claude-opus-5-5-high-fast` / `gpt-6.2-sol` | models for package subagents. Gemini CLI inherits its model by default |
 | `[agent_notes]` | none | text added to the end of an agent's prompt in every tool, e.g. `poteto-agent = "..."` |
 
 A misspelled setting is an error, not silently ignored. On Linux the config and state follow `XDG_CONFIG_HOME`
@@ -182,7 +198,7 @@ and `XDG_STATE_HOME` when set.
   commands, notes on agents, or extra steps at the end.
 - **Try changes safely.** `agent-sync run --dry-run` after every config change shows exactly what would happen
   (`agent-sync config` offers it after you save).
-- **Change the code.** Each part is one small module in `agent_sync/` with no dependencies: `agents.py` (agent
+- **Change the code.** The supported agents and their settings paths are in `agent_sync/registry.py`. See `agents.py` (agent
   formats per tool), `skills.py` (your own skills, package skills), `duplicates.py` (skills a tool loads twice),
   `roles.py` (pstack model roles), `mcp.py` (MCP servers), `instructions.py` (global instructions), `tools.py`
   (skill packages, plugins, CLI updates, extra steps), `checks.py` (warnings), `schedule.py` (launchd, systemd,
@@ -208,9 +224,11 @@ The review writes only the settings you pick and apply, and in those files only 
 
 | tool | files |
 | --- | --- |
-| Claude Code | `~/.claude/skills/*` (links and copies), `~/.claude/agents/*.md`, `~/.claude/rules/pstack-models.md`, `~/.claude.json` (`mcpServers`), `~/.claude/CLAUDE.md` (block, opt-in) |
-| Codex | `~/.agents/skills/*`, `~/.codex/agents/*.toml`, `~/.agents/pstack-models.md`, `~/.codex/config.toml` (`[mcp_servers.*]`, appended), `~/.codex/AGENTS.md` (block, opt-in) |
+| Claude Code | `~/.claude/skills/*` (links and copies), `~/.claude/agents/*.md`, `~/.claude/rules/pstack-models.md`, `~/.claude.json` (`mcpServers`), `~/.claude/CLAUDE.md` (opt-in) |
+| Codex | `~/.agents/skills/*`, `~/.codex/agents/*.toml`, `~/.agents/pstack-models.md`, `~/.codex/config.toml` (`[mcp_servers.*]`, appended), `~/.codex/AGENTS.md` (opt-in) |
 | Cursor | `~/.agents/skills/*`, `~/.cursor/plugins/local/<package>-agents/`, `~/.cursor/rules/pstack-models.mdc`, `~/.cursor/mcp.json`, `~/.cursor/rules/agent-sync-instructions.mdc` (opt-in) |
+| Gemini CLI | `~/.agents/skills/*`, `~/.gemini/agents/*.md`, `~/.agents/pstack-models.md`, `~/.gemini/settings.json` (`mcpServers`), `~/.gemini/GEMINI.md` (opt-in) |
+| Antigravity | `~/.gemini/config/skills/*`, `~/.gemini/config/agents/*.md`, `~/.agents/pstack-models.md`, `~/.gemini/config/mcp_config.json`, `~/.gemini/GEMINI.md` (opt-in) |
 
 State and the package checkouts live in `~/.local/state/agent-sync/`. The log is `~/Library/Logs/agent-sync.log`
 on macOS and `~/.local/state/agent-sync/agent-sync.log` on Linux. The schedule is

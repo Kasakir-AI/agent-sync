@@ -1,4 +1,4 @@
-"""agent-sync: keep Claude Code, Codex and Cursor in step.
+"""agent-sync: keep your agents in step.
 
     agent-sync run [--force] [--echo]   do the upkeep (only when the last run is 20+ hours old, unless --force;
                                         prints each step when started from a terminal)
@@ -9,9 +9,12 @@
     agent-sync launcher                 put the double-click "Agent Upkeep" on the Desktop (macOS); every run
                                         then keeps it there and up to date
     agent-sync uninstall                remove the schedule and the launcher
-    agent-sync setup [--dry-run] [--yes] install what is missing: Homebrew, git, Node, Claude Code, Codex, Cursor
+    agent-sync setup [--dry-run] [--yes] discover agents and install missing prerequisites and enabled CLIs
     agent-sync config                   change the settings by answering questions (also: agent-sync settings)
-    agent-sync status                   last run, log location, installed versions
+    agent-sync agents                   list supported agents and offer to enable installed agents
+    agent-sync agents add <id>...       choose agents to keep in step
+    agent-sync agents remove <id>...    stop keeping agents in step and leave their files in place
+    agent-sync status                   last run, log location, enabled CLI versions
     agent-sync review [--no-open]        compare settings and choose which versions to keep in a local page
     agent-sync review --list             print the comparison and recommendations in the terminal
 """
@@ -301,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--launcher", action="store_true", help="also put a double-click launcher on the Desktop (macOS)")
     sub.add_parser("launcher", help="put the double-click launcher on the Desktop and keep it up to date (macOS)")
     sub.add_parser("uninstall", help="remove the schedule and the launcher")
-    s = sub.add_parser("setup", help="install what is missing (Homebrew, git, Node and the three CLIs)")
+    s = sub.add_parser("setup", help="discover agents and install missing prerequisites and enabled CLIs")
     s.add_argument("--dry-run", action="store_true", help="only list what is missing and how it would be installed")
     s.add_argument("--yes", action="store_true", help="don't ask before installing")
     sub.add_parser("config", aliases=["settings"], help="change the settings by answering questions")

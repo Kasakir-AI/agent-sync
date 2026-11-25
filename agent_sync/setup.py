@@ -1,8 +1,8 @@
-"""`agent-sync setup`: install what agent-sync and the three tools need, when it is missing.
+"""`agent-sync setup`: discover agents and install missing prerequisites and enabled CLIs.
 
-In order: Homebrew (macOS), git, Node (for npx), Claude Code, Codex, Cursor Agent. Each comes from Homebrew when
-this account can use it (the same casks agent-sync upgrades later), otherwise from the tool's official per-user
-installer, which needs no administrator rights. `install_commands` in the config replaces the command for an item.
+Install Homebrew on macOS when needed, then git, Node, and the enabled CLIs. Use Homebrew when the account can
+write to it and the CLI is available there. Otherwise use the CLI's official installer.
+`install_commands` in the config replaces the command for an item.
 Installing Homebrew asks for an administrator's password, so it only happens in an interactive terminal.
 """
 from __future__ import annotations

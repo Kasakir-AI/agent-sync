@@ -1,4 +1,4 @@
-"""Compare user settings across the three tools: read every version of each setting, judge how they differ and
+"""Compare user settings across enabled agents: read every version of each setting, judge how they differ and
 recommend one. Line comparison is in textmerge, and writing the chosen version is in writes."""
 from __future__ import annotations
 

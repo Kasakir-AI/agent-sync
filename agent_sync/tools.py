@@ -1,4 +1,4 @@
-"""Shell-outs: skill packages (npx skills), the package checkout, and the three agent CLIs."""
+"""Shell-outs: skill packages (npx skills), the package checkout, and agent CLIs."""
 from __future__ import annotations
 
 import json

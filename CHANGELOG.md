@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Keep any selection of Claude Code, Codex, Cursor, Gemini CLI, and Antigravity in step. Existing settings still
+  use the first three by default.
+- Run `agent-sync agents` to see which agents are installed and add them. Use `agents add`, `agents remove`,
+  or the **Agents** section in `agent-sync config` to change the list. Removing an agent keeps its files.
+- Setup offers to add installed agents and installs missing enabled CLIs. Review shows shared settings once
+  with the names of the enabled agents that use them.
+
 ## 0.7.1 (2026-11-24)
 
 - A shared instruction you reword in Codex's `AGENTS.md` (or that Codex rewords when it remembers something) is no
