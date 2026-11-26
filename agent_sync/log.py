@@ -8,6 +8,7 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta
 from hashlib import sha256
+from itertools import pairwise
 from pathlib import Path
 
 from .textmerge import load_baselines, save_baselines
@@ -69,10 +70,12 @@ class Log:
             text = self.path.read_text()
         except FileNotFoundError:
             return []
-        # A run with a failed check may have missed repeating a warning, so its older warnings stay.
-        if len(ends := [match.end() for match in RUN_END.finditer(text)]) > 1 \
-                and not FAILURE.search(text, ends[-2], ends[-1]):
-            text = text[ends[-2]:]
+        # Start at the newest run without a failed check: a failed check may have missed repeating a warning.
+        ends = [0, *(match.end() for match in RUN_END.finditer(text))]
+        for start, end in reversed(list(pairwise(ends))):
+            if not FAILURE.search(text, start, end):
+                text = text[start:]
+                break
         cutoff = (datetime.now() - timedelta(days=days)).strftime(STAMP)
         return [match[2].replace("\n\t", "\n") for match in WARNING.finditer(text) if match[1] >= cutoff]
 

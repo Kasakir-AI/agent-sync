@@ -329,3 +329,15 @@ def test_a_failed_check_keeps_the_warnings_it_could_not_repeat(upkeep, capsys):
 
     assert cli.main(["pending"]) == 0
     assert "on hold" in capsys.readouterr().out
+
+
+def test_a_later_failed_run_does_not_bring_back_a_cleared_warning(upkeep, capsys):
+    log = Log(upkeep.log_file)
+    log("WARN", "instructions are on hold until you approve or keep the deletion of 1 line(s)")
+    log("done", "agent-sync finished: 1 change")
+    log("done", "agent-sync finished: no changes")
+    log("FAIL", "plugins: could not update")
+    log("done", "agent-sync finished: no changes, 1 problem")
+
+    assert cli.main(["pending"]) == 0
+    assert "on hold" not in capsys.readouterr().out
