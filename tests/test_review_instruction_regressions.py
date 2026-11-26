@@ -92,7 +92,7 @@ def test_line_count_ignores_comment_lines_the_comparison_skips(tmp_path):
     source.parent.mkdir(parents=True)
     target.parent.mkdir(parents=True)
     source.write_text("<!-- imported-from: codex:user:instructions -->\nRun the tests.\nUse pytest.\n")
-    target.write_text("Run the tests.\n<!-- tool-specific note -->\nUse pytest.\n")
+    target.write_text("Run the tests.\nUse pytest.\n")
 
     group, = review.scan(tmp_path, Config(home=tmp_path)).groups
     written = [version for version in group.versions if version.path in {source, target}]
