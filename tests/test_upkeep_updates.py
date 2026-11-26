@@ -1014,3 +1014,19 @@ def test_uv_does_not_ask_about_a_major_it_cannot_install(tmp_path, commands, pyp
     assert run.questions() == {}
     assert commands.ran == []
     assert any("requires a manual upgrade" in message for _, message in commands.lines)
+
+
+def test_uv_keeps_the_python_request_and_says_nothing_when_current(tmp_path, commands, pypi):
+    program(tmp_path, "uv")
+    tool_dir = tmp_path / "uv tools"
+    commands.output[UV_DIR] = str(tool_dir)
+    commands.output[UV_LIST] = "demo v1.0.0\n- demo\nranged v1.1.0\n- ranged\n"
+    write(tmp_path, "uv tools/demo/uv-receipt.toml",
+          '[tool]\nrequirements = [{ name = "demo", specifier = "==1.0.0" }]\npython = "3.14"\n')
+    write(tmp_path, "uv tools/ranged/uv-receipt.toml",
+          '[tool]\nrequirements = [{ name = "ranged", specifier = "<2" }]\n')
+    pypi.update({"demo": {"1.1.0": SETTLED}, "ranged": {"1.1.0": SETTLED}})
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == [["uv", "tool", "install", "--force", "--python", "3.14", "demo==1.1.0"]]
+    assert not any("ranged" in message for _, message in commands.lines)

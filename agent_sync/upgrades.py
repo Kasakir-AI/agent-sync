@@ -253,12 +253,14 @@ def uv_install(package: Package, version: str) -> list[str] | None:
              for i, fields in enumerate(requirements)]
     if not all(specs):
         return None
-    try:
-        python = (directory / "bin/python").resolve(strict=True)
-        if python.is_relative_to(directory.resolve()):
+    python = receipt.get("python")      # the request it was installed with, such as "3.14", stays as written
+    if not (isinstance(python, str) and python):
+        try:
+            python = (directory / "bin/python").resolve(strict=True)
+            if python.is_relative_to(directory.resolve()):
+                return None
+        except (OSError, RuntimeError):
             return None
-    except (OSError, RuntimeError):
-        return None
     return ["uv", "tool", "install", "--force", "--python", str(python),
             *(f"--with={spec}" for spec in specs[1:]), specs[0]]
 
@@ -404,7 +406,8 @@ def upgrade(log, dry: bool, state: UpdateState, manager: str, name: str, *, majo
         if tools.act(log, dry, label, args) and key:
             pending.removed(key)
 
-    if resolver.install(package, latest) is None:      # settings it can't keep: say so instead of asking first
+    if forward(package.installed, latest) and resolver.install(package, latest) is None:
+        # settings it can't keep: say so instead of asking first
         install(latest)
         return
     old, new = major(package.installed), major(latest)
