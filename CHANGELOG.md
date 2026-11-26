@@ -7,10 +7,11 @@
 - Instructions: every note in nested installer blocks stays in the file where the installer wrote it. A rewording of
   one repeated instruction is held for review instead of reaching the other agents' files.
 - `agent-sync pending` lists only warnings the latest run still gives, so a warning about something already resolved
-  (such as instructions that were on hold) no longer lingers.
+  (such as instructions that were on hold) no longer lingers. A warning stays while a failed check could not repeat it.
 - Upgrades: uv tools keep their extras and additional dependencies, a suffixed pipx tool upgrades in its own
   environment, and Python tools get releases that support their interpreter. A tool whose interpreter version can't
-  be read still upgrades as before. Requests to stay on the installed major version hold even when automatic major
+  be read still upgrades as before. A uv tool installed with a version range or excluded dependencies is left for
+  you to upgrade, since uv would refuse or drop them. Requests to stay on the installed major version hold even when automatic major
   upgrades are on.
 - Gemini CLI and Antigravity keep the formatting of multiline subagent descriptions.
 - MCP: endpoint addresses are never taken for version numbers, and copies whose only sign of age is a missing folder

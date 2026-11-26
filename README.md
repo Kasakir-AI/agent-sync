@@ -53,7 +53,8 @@ share.
   `global_major_updates` installs it without asking, still after 2 days. Explicit keep rules still apply.
   Homebrew has no 2-day wait, because Homebrew reviews a release before publishing it. A pipx tool installed from a URL
   or a folder is left alone. Pipx upgrades use the tool's existing suffix, and uv upgrades keep its extras and
-  additional dependencies. Both choose releases compatible with the tool's Python interpreter when its version is known.
+  additional dependencies. Both choose releases compatible with the tool's Python interpreter when its version is known. A uv tool
+  installed with a version range or with excluded dependencies is left for you to upgrade.
 - **CLIs** are updated through Homebrew when it installed them or through their own update commands. Gemini CLI
   uses npm outside Homebrew. Antigravity uses `agy update`. Upkeep also upgrades git and Node when Homebrew
   installed them, and npm when it is installed globally. `update_global_tools` (off by default) also updates your
