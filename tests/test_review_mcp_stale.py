@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from agent_sync import backups, review, writes
 from agent_sync.config import Config
 
@@ -102,16 +104,26 @@ def test_a_file_the_server_creates_in_a_folder_that_exists_is_not_stale(tmp_path
     assert review.missing_paths({"command": f"{tmp_path}/gone/bin/node", "args": []}) == (f"{tmp_path}/gone/bin/node",)
 
 
-def test_copies_that_differ_only_in_a_log_file_are_left_for_review(tmp_path):
+@pytest.mark.parametrize("create_log_directory", [False, True])
+def test_copies_that_differ_only_in_a_log_file_are_left_for_review(tmp_path, create_log_directory):
     there = versioned(tmp_path, "2.0")
-    (tmp_path / "logs").mkdir()
-    (tmp_path / "logs/claude.log").write_text("")
-    def server_with(log):
-        return {"command": "node", "args": [f"{there}/service.mjs"], "env": {"LOG_FILE": f"{tmp_path}/logs/{log}"}}
-    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {"repl": server_with("claude.log")}}))
+    claude_log, cursor_log = tmp_path / "claude-logs/new.log", tmp_path / "cursor-logs/current.log"
+    cursor_log.parent.mkdir()
+    cursor_log.touch()
+    if create_log_directory:
+        claude_log.parent.mkdir()
+
+    def settings(log):
+        config = {"command": "node", "args": [f"{there}/service.mjs"], "env": {"LOG_FILE": str(log)}}
+        return json.dumps({"mcpServers": {"repl": config}})
+
+    claude = tmp_path / ".claude.json"
+    claude.write_text(settings(claude_log))
     (tmp_path / ".cursor").mkdir()
-    (tmp_path / ".cursor/mcp.json").write_text(json.dumps({"mcpServers": {"repl": server_with("cursor.log")}}))
+    (tmp_path / ".cursor/mcp.json").write_text(settings(cursor_log))
+
     assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+    assert claude.read_text() == settings(claude_log)
 
 
 def test_a_copy_an_app_version_behind_is_brought_up_to_the_newest(tmp_path):
@@ -136,18 +148,21 @@ def test_copies_that_differ_in_more_than_version_numbers_are_left_for_review(tmp
     assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
 
 
-def test_addresses_are_never_taken_for_versions(tmp_path):
+@pytest.mark.parametrize("port", ["", ":8000"])
+def test_addresses_are_never_taken_for_versions(tmp_path, port):
     there = versioned(tmp_path, "2.0")
     def server_at(host):
-        return {"command": "node", "args": [f"{there}/service.mjs", "--upstream", f"http://{host}:8000/mcp"],
-                "env": {"BIND": host}}
-    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {"repl": server_at("10.0.0.1")}}))
+        return json.dumps({"mcpServers": {"repl": {
+            "command": "node", "args": [f"{there}/service.mjs", "--upstream", f"http://{host}{port}/mcp"],
+        }}})
+    claude = tmp_path / ".claude.json"
+    claude.write_text(server_at("10.0.0.1"))
     (tmp_path / ".cursor").mkdir()
-    (tmp_path / ".cursor/mcp.json").write_text(json.dumps({"mcpServers": {"repl": server_at("10.0.0.2")}}))
+    (tmp_path / ".cursor/mcp.json").write_text(server_at("10.0.0.2"))
     cfg = Config(home=tmp_path)
+
     assert writes.repair_mcp(tmp_path, cfg) == []
-    group, = review.scan(tmp_path, cfg).groups
-    assert review.newest(group.versions) is None
+    assert claude.read_text() == server_at("10.0.0.1")
 
 
 def test_repair_replans_instead_of_overwriting_a_concurrent_server_edit(tmp_path, monkeypatch):

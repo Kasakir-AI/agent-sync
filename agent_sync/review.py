@@ -342,6 +342,8 @@ def app_versions(version: Version) -> tuple[str, list[str]]:
         return version.body, []
 
     def take(text: str, whole: bool = False) -> str:
+        if "://" in text:
+            return text
         if whole and VERSION.fullmatch(text):
             found.append(text)
             return "#"
