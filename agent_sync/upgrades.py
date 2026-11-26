@@ -198,7 +198,7 @@ def pipx_install(package: Package, version: str) -> list[str]:
     args = ["pipx", "install", "--force"]
     if package.pipx_suffix:
         args.append(f"--suffix={package.pipx_suffix}")
-    if package.python_source:
+    if package.python_source and Path(package.python_source).exists():   # Homebrew moves Python on upgrades
         args.append(f"--python={package.python_source}")
     return [*args, f"{package.name}{package.extras}=={version}"]
 
@@ -404,6 +404,9 @@ def upgrade(log, dry: bool, state: UpdateState, manager: str, name: str, *, majo
         if tools.act(log, dry, label, args) and key:
             pending.removed(key)
 
+    if resolver.install(package, latest) is None:      # settings it can't keep: say so instead of asking first
+        install(latest)
+        return
     old, new = major(package.installed), major(latest)
     if old is not None and new is not None and new > old:
         key = f"{owner}@{new}"

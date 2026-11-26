@@ -868,14 +868,16 @@ def test_pipx_upgrades_the_suffixed_environment_in_place(tmp_path, commands, pyp
 
 
 @pytest.mark.parametrize(("manager", "expected"), [
-    ("pipx", ["pipx", "install", "--force", "--python=/opt/python3.10", "demo==1.1.0"]),
+    ("pipx", ["pipx", "install", "--force", "--python={python}", "demo==1.1.0"]),
     ("uv", ["uv", "tool", "upgrade", "demo==1.1.0"]),
 ])
 def test_python_tool_upgrades_to_the_newest_compatible_release(tmp_path, commands, pypi, manager, expected):
     program(tmp_path, manager)
+    python = str(program(tmp_path, "python3.10"))
+    expected = [part.format(python=python) for part in expected]
     commands.output[PIPX_LIST] = json.dumps({"venvs": {"demo": {"metadata": {
         "python_version": "Python 3.10.9",
-        "source_interpreter": {"__type__": "Path", "__Path__": "/opt/python3.10"},
+        "source_interpreter": {"__type__": "Path", "__Path__": python},
         "main_package": {"package": "demo", "package_version": "1.0.0", "package_or_url": "demo"},
     }}}})
     commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
@@ -978,5 +980,37 @@ def test_uv_leaves_ranged_or_excluding_installs_to_a_manual_upgrade(tmp_path, co
     pypi["demo"] = {"1.1.0": SETTLED}
     tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
                               state=tools.UpdateState())
+    assert commands.ran == []
+    assert any("requires a manual upgrade" in message for _, message in commands.lines)
+
+
+def test_pipx_leaves_out_an_interpreter_that_moved(tmp_path, commands, pypi):
+    program(tmp_path, "pipx")
+    commands.output[PIPX_LIST] = json.dumps({"venvs": {"demo": {"metadata": {
+        "python_version": "Python 3.10.9",
+        "source_interpreter": {"__type__": "Path", "__Path__": str(tmp_path / "gone/python3.10")},
+        "main_package": {"package": "demo", "package_version": "1.0.0", "package_or_url": "demo"},
+    }}}})
+    pypi["demo"] = {"1.1.0": SETTLED}
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["pipx"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == [["pipx", "install", "--force", "demo==1.1.0"]]
+
+
+def test_uv_does_not_ask_about_a_major_it_cannot_install(tmp_path, commands, pypi):
+    program(tmp_path, "uv")
+    python = program(tmp_path, "python3.10")
+    tool_dir = tmp_path / "uv tools"
+    interpreter = tool_dir / "demo/bin/python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(python)
+    commands.output[UV_DIR] = str(tool_dir)
+    commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
+    write(tmp_path, "uv tools/demo/uv-receipt.toml", '[tool]\nrequirements = [{ name = "demo", specifier = "<3" }]\n')
+    pypi["demo"] = {"2.0.0": SETTLED}
+    cfg = Config(home=tmp_path, update_global_tools=["uv"])
+    with pending.during(cfg.state_dir, [], commands.log, False) as run:
+        tools.update_global_tools(commands.log, cfg, False, state=tools.UpdateState())
+    assert run.questions() == {}
     assert commands.ran == []
     assert any("requires a manual upgrade" in message for _, message in commands.lines)
