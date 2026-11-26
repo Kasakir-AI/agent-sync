@@ -28,3 +28,11 @@ jobs:
           page = urllib.request.urlopen(url).read().decode()
           p.terminate()
           sys.exit(0 if 'id=\"scan\"' in page else 'the page is missing from the installed package')"
+  tests-pass:
+    # The one check main's ruleset requires. It passes only when every test job above passed,
+    # so the matrix can change without touching the ruleset.
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success
