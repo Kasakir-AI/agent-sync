@@ -179,6 +179,8 @@ def clean_up(cfg: Config, log: Log, current: Path | None, dry: bool, now: dateti
         guarded(log, name, lambda name=name: cleanup.prune_records(
             root / name, cutoff, dry, log, legacy=name == notify.INBOX_FILE))
 
+    guarded(log, "scheduler output", lambda: cleanup.trim_output(root / schedule.OUTPUT_FILE, dry, log))
+
     def prune_log() -> None:
         if count := log.prune(cfg.log_days, now, dry=dry):
             log("info", f"{'Would delete' if dry else 'Deleted'} {count} expired log lines")

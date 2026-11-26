@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pytest
 
-from agent_sync import backups, cli, notify
+from agent_sync import backups, cleanup, cli, notify
 from agent_sync.config import Config, parse
 from agent_sync.log import ACK_AGE, ACK_FILE
 from tests.test_inventory import write
@@ -144,3 +144,25 @@ def test_undated_inbox_records_expire_using_the_files_original_age(state):
     os.utime(inbox, (old, old))
     assert cli.main(["run", "--force"]) == 0
     assert json.loads(inbox.read_text()) == {}
+
+
+def test_the_scheduler_output_is_trimmed_to_its_newest_whole_lines(tmp_path):
+    out = tmp_path / "launchd.out"
+    lines = [f"line {n}\n".encode() for n in range(200_000)]
+    out.write_bytes(b"".join(lines))
+    messages = []
+    running_job = out.open("ab")    # launchd's handle for the job that is running now
+
+    cleanup.trim_output(out, True, lambda *args: messages.append(args))
+    assert out.read_bytes() == b"".join(lines)
+
+    cleanup.trim_output(out, False, lambda *args: messages.append(args))
+    running_job.write(b"after the trim\n")
+    running_job.close()
+    kept = out.read_bytes()
+    assert len(kept) <= cleanup.OUTPUT_KEEP + len(b"after the trim\n")
+    assert kept.startswith(b"line ") and kept.endswith(lines[-1] + b"after the trim\n")
+    assert [kind for kind, _ in messages] == ["info", "info"]
+
+    cleanup.trim_output(out, False, lambda *args: messages.append(args))
+    assert out.read_bytes() == kept and len(messages) == 2

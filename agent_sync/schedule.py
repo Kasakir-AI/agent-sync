@@ -19,6 +19,7 @@ from xml.sax.saxutils import escape
 from . import __version__, backups
 
 LABEL = "io.github.agent-sync"
+OUTPUT_FILE = "launchd.out"   # where launchd sends the scheduled run's stdout and stderr
 LAUNCHER_MARK = "# made by agent-sync install --launcher"
 
 
@@ -150,7 +151,7 @@ def install(home: Path, state_dir: Path, with_launcher: bool = False) -> list[st
         p = plist_path(home)
         p.parent.mkdir(parents=True, exist_ok=True)
         state_dir.mkdir(parents=True, exist_ok=True)
-        p.write_text(plist(state_dir / "launchd.out"))
+        p.write_text(plist(state_dir / OUTPUT_FILE))
         domain = f"gui/{os.getuid()}"
         subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)
         subprocess.run(["launchctl", "bootstrap", domain, str(p)], check=True)

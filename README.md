@@ -68,7 +68,7 @@ share.
 It runs hourly and at login but only does the work once every 20 hours, so a day the Mac was off is caught up
 soon after it starts.
 
-> Status: 0.9.3. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
+> Status: 0.9.4. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
 
 ## Install
 
@@ -131,7 +131,9 @@ and asks you to acknowledge the warning. Run `agent-sync status` to see backup s
 
 Cleanup also drops cached checkouts for packages you remove from `skill_packages`. It checks the checkout name
 and Git origin before deleting a folder. Warning acknowledgements and Inbox notification records expire after
-30 days. Log lines expire after `log_days`. A dry run reports the cleanup it would do.
+30 days. Log lines expire after `log_days`. On macOS, the scheduler's own output file (`launchd.out` in the state
+folder, which holds only crash output) is cut to its newest 256 KiB once it passes 1 MiB. A dry run reports the
+cleanup it would do.
 
 A run never removes something you or another program installed until you approve it. This covers an MCP settings
 entry that a plugin already brings, a Codex plugin replaced by Codex's own version, a skill a package dropped, an

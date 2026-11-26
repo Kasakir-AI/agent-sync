@@ -64,3 +64,23 @@ def prune_records(path: Path, cutoff: float, dry: bool, log, *, legacy: bool = F
         save_baselines(path, kept)
     if expired := len(records) - len(kept):
         log("info", f"{'Would delete' if dry else 'Deleted'} {expired} expired records from {path.name}")
+
+
+OUTPUT_MAX = 1024 * 1024    # the scheduler's output file is trimmed once it passes 1 MiB
+OUTPUT_KEEP = 256 * 1024    # to its newest 256 KiB, from the first whole line
+
+
+def trim_output(path: Path, dry: bool, log) -> None:
+    """Keep the scheduler's output file small. It is rewritten in place, because launchd keeps the running job's
+    stdout open on it in append mode."""
+    if path.is_symlink() or not path.is_file() or path.stat().st_size <= OUTPUT_MAX:
+        return
+    with path.open("r+b") as file:
+        file.seek(-OUTPUT_KEEP, 2)
+        tail = file.read()
+        tail = tail[tail.find(b"\n") + 1:]
+        if not dry:
+            file.seek(0)
+            file.write(tail)
+            file.truncate()
+    log("info", f"{'Would trim' if dry else 'Trimmed'} {path.name} to its newest {len(tail) // 1024} KiB")
