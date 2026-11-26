@@ -47,7 +47,7 @@ def section_rows(lines: list[str]) -> dict[int, str]:
         if match := THIRD_PARTY_START.fullmatch(marker):
             end = f"<!-- {match[1]}:end -->"
             if end in next_ends:
-                blocks[index] = next_ends[end], end
+                blocks[index] = next_ends.pop(end), end
         elif marker.endswith(":end -->"):
             next_ends[marker] = index
 

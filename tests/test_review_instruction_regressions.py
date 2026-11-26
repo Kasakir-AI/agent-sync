@@ -117,9 +117,9 @@ def test_review_ignores_third_party_instruction_blocks(tmp_path):
 def test_review_keeps_content_after_an_unmatched_third_party_start(tmp_path):
     source = instructions.files(tmp_path)["claude"]
     source.parent.mkdir(parents=True)
-    source.write_text("A\n<!-- x:start -->\nB\n<!-- other.tool_2:start -->\n"
+    source.write_text("A\n<!-- x:start -->\nB\n<!-- other.tool_2:start v1 -->\nD\n<!-- other.tool_2:start -->\n"
                       "Installer rule.\n<!-- other.tool_2:end -->\nC\n")
 
     group, = review.scan(tmp_path, Config(home=tmp_path)).groups
     version, = group.versions
-    assert version.body == "A\n<!-- x:start -->\nB\nC\n"
+    assert version.body == "A\n<!-- x:start -->\nB\n<!-- other.tool_2:start v1 -->\nD\nC\n"
