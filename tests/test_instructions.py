@@ -626,6 +626,51 @@ def test_a_newly_enabled_file_with_a_local_copy_still_gets_the_shared_rule(tmp_p
     assert instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS) == []
 
 
+def test_mirror_keeps_new_third_party_blocks_in_their_own_file(tmp_path):
+    shared = b"Be brief.\n"
+    added = b"Run pytest.\n"
+    block = (b"<!-- plannotator-inbox:start v9 -->\n\n"
+             b"  Inbox rule.  \n<!-- plannotator-inbox:end -->\n")
+    files = setup(tmp_path, shared.decode(), "")
+    files.update(instructions.files(tmp_path, TOOLS))
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
+
+    files["codex"].write_bytes(shared + block)
+    files["claude"].write_bytes(shared + added)
+    instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
+
+    assert files["codex"].read_bytes() == shared + added + block
+    for tool in ("claude", "cursor", "gemini"):
+        content = files[tool].read_bytes()
+        assert b"Inbox rule." not in content
+        assert content.endswith(shared + added)
+
+
+def test_wrapping_a_synced_rule_in_a_third_party_block_is_not_a_deletion(tmp_path):
+    from agent_sync import review
+    from agent_sync.config import Config
+
+    shared, rule = "Be brief.\n", "Inbox rule.\n"
+    files = setup(tmp_path, shared + rule, shared + rule)
+    state = tmp_path / "state"
+    baselines = state / "baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    wrapped = shared + f"<!-- plannotator-inbox:start v9 -->\n{rule}<!-- plannotator-inbox:end -->\n"
+    files["codex"].write_text(wrapped)
+    before = {path: path.read_bytes() for path in files.values()}
+
+    for _ in range(2):
+        with pending.during(state, [], lambda *_: None, False):
+            assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+        assert pending.load(state) == {}
+        assert {path: path.read_bytes() for path in before} == before
+
+    group, = review.scan(tmp_path, Config(home=tmp_path)).groups
+    codex = next(version for version in group.versions if version.path == files["codex"])
+    assert codex.body == shared
+
+
 def test_a_kept_deletion_reaches_a_file_seeded_in_the_same_run(tmp_path):
     files = setup(tmp_path, "Stay concise.\nAlways archive artifacts.\n", "")
     state = tmp_path / "state"

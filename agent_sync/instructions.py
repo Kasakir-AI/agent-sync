@@ -22,6 +22,7 @@ PRIVATE_END = "<!-- agent-sync: end private -->"
 MEMORY_START = "<!-- agent-sync: memory -->"
 MEMORY_END = "<!-- agent-sync: end memory -->"
 SECTION_ENDS = {LOCAL_START: LOCAL_END, PRIVATE_START: PRIVATE_END, MEMORY_START: MEMORY_END}
+THIRD_PARTY_START = re.compile(r"<!-- (?!agent-sync:)([A-Za-z0-9._-]+):start(?:[ \t]+(?:(?!-->).)*)? -->")
 
 
 def split_front(text: str) -> tuple[str, str]:
@@ -39,9 +40,28 @@ def own_text(text: str) -> str:
 
 
 def section_rows(lines: list[str]) -> dict[int, str]:
+    next_ends = {}
+    blocks = {}
+    for index in range(len(lines) - 1, -1, -1):
+        marker = lines[index].strip()
+        if match := THIRD_PARTY_START.fullmatch(marker):
+            end = f"<!-- {match[1]}:end -->"
+            if end in next_ends:
+                blocks[index] = next_ends[end], end
+        elif marker.endswith(":end -->"):
+            next_ends[marker] = index
+
     hidden = {}
     ends = []
+    active_blocks = []
     for index, line in enumerate(lines):
+        if index in blocks:
+            active_blocks.append(blocks[index])
+        if active_blocks:
+            hidden[index] = active_blocks[-1][1]
+            while active_blocks and active_blocks[-1][0] <= index:
+                active_blocks.pop()
+            continue
         marker = line.strip()
         if marker in SECTION_ENDS:
             ends.append(SECTION_ENDS[marker])
@@ -283,11 +303,12 @@ def _mirror_snapshot(home: Path, src: Path, groups: dict[Path, tuple[str, ...]],
         active_moves = Counter(line_list(last_moves.get(name))) & rows
         new_hidden = Counter({token: count for token, count in rows.items() if token not in previous_hidden})
         available = active_moves | new_hidden
+        tokens_by_digest = defaultdict(list)
+        for token in available:
+            tokens_by_digest[token.rsplit(":", 1)[1]].append(token)
         missing = tracked_counts - counts[path]
         for line, count in missing.items():
-            digest = line_digest(line)
-            for section in SECTION_ENDS.values():
-                token = f"{section}:{digest}"
+            for token in tokens_by_digest.get(line_digest(line), ()):
                 if n := min(count, available[token]):
                     moves[path][token] = n
                     moved[path][line] += n

@@ -2,12 +2,16 @@
 
 ## Unreleased
 
-**Line counts in the review match what is compared**
+**Instruction review and sync**
 
-- `agent-sync review` skips lines that are only an HTML comment (such as Plannotator's start and end markers, or
-  the `imported-from` note) when it compares copies, but it still counted them in each copy's length. Two
+- `agent-sync review` skips lines that are only an HTML comment, such as the `imported-from` note,
+  when it compares copies, but it still counted them in each copy's length. Two
   copies with the same text could show different line counts next to "No text differences". The count now
   leaves those lines out, the same way the comparison does.
+- A block another installer writes into an instruction file between matching `<!-- name:start -->` and
+  `<!-- name:end -->` lines, such as Plannotator's Inbox note, now stays in that file. Before, agent-sync copied it
+  into every other tool too, so a tool that already gets the note from its installer read it twice. Review skips
+  these blocks, and the first run after upgrading treats them as moved, not deleted.
 
 ## 0.9.1 (2026-11-25)
 

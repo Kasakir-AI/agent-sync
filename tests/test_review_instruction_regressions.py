@@ -92,10 +92,34 @@ def test_line_count_ignores_comment_lines_the_comparison_skips(tmp_path):
     source.parent.mkdir(parents=True)
     target.parent.mkdir(parents=True)
     source.write_text("<!-- imported-from: codex:user:instructions -->\nRun the tests.\nUse pytest.\n")
-    target.write_text("Run the tests.\n<!-- plannotator-inbox:start v9 -->\n"
-                      "Use pytest.\n<!-- plannotator-inbox:end -->\n")
+    target.write_text("Run the tests.\n<!-- tool-specific note -->\nUse pytest.\n")
 
     group, = review.scan(tmp_path, Config(home=tmp_path)).groups
     written = [version for version in group.versions if version.path in {source, target}]
     assert len({version.digest for version in written}) == 1
     assert [version.lines for version in written] == [2, 2]
+
+
+def test_review_ignores_third_party_instruction_blocks(tmp_path):
+    paths = instructions.files(tmp_path)
+    source, target = paths["claude"], paths["codex"]
+    source.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    source.write_text("A\nB\n")
+    target.write_text("A\nB\n<!-- plannotator-inbox:start v9 -->\n"
+                      "Inbox rule.\n<!-- plannotator-inbox:end -->\n")
+
+    group, = review.scan(tmp_path, Config(home=tmp_path)).groups
+    versions = {version.path: version for version in group.versions}
+    assert versions[source].digest == versions[target].digest
+
+
+def test_review_keeps_content_after_an_unmatched_third_party_start(tmp_path):
+    source = instructions.files(tmp_path)["claude"]
+    source.parent.mkdir(parents=True)
+    source.write_text("A\n<!-- x:start -->\nB\n<!-- other.tool_2:start -->\n"
+                      "Installer rule.\n<!-- other.tool_2:end -->\nC\n")
+
+    group, = review.scan(tmp_path, Config(home=tmp_path)).groups
+    version, = group.versions
+    assert version.body == "A\n<!-- x:start -->\nB\nC\n"

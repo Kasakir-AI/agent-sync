@@ -186,6 +186,8 @@ The other agents send their instructions to their own companies, so some notes s
 - A note with `private: true` in its front matter, or listed in `private_memory`, stays in Claude Code.
 - Lines between `<!-- agent-sync: private -->` and `<!-- agent-sync: end private -->` in an instruction file stay in
   that file. Lines between `<!-- agent-sync: local -->` and `<!-- agent-sync: end local -->` do too.
+- Installer blocks with matching `<!-- NAME:start ... -->` and `<!-- NAME:end -->` markers, such as Plannotator's
+  Inbox block, stay in the instruction file where the installer wrote them.
 
 ## Status line
 
