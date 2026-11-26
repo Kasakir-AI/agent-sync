@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.3 (2026-11-26)
+
+**Clearer skipped runs, and review keeps what the mirror needs**
+
+- `agent-sync run` without `--force` skips when the last run was under 20 hours ago. It now says so even when no
+  terminal is attached, for example when a script or another agent runs it. Only the schedule's own runs stay quiet.
+- Saving a choice in `agent-sync review` kept the record of each file's own sections but dropped the record of lines
+  that had moved into them. On the next run, a line that had just moved into a section (such as Plannotator's
+  block) was reported as deleted. Review now keeps both.
+
 ## 0.9.2 (2026-11-26)
 
 **Each tool reads installer notes once, and review line counts match**
