@@ -1,2 +1,2 @@
-"""Keep Claude Code, Codex and Cursor in step: skill packages, agents, model roles, MCP servers and the CLIs."""
+"""Keep AI coding agents in step (Claude Code, Codex, Cursor, Gemini CLI, Antigravity): skill packages, agents, model roles, MCP servers and the CLIs."""
 __version__ = "0.9.4"

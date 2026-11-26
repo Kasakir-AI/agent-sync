@@ -79,7 +79,7 @@ def systemd_units() -> dict[str, str]:
     env = f'Environment="PYTHONPATH={pythonpath}"\n' if pythonpath else ""
     return {
         "agent-sync.service": f"""[Unit]
-Description=agent-sync: keep Claude Code, Codex and Cursor in step
+Description=agent-sync: keep your AI coding agents in step
 After=network-online.target
 
 [Service]

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-sync"
 dynamic = ["version"]
-description = "Keep Claude Code, Codex and Cursor in step: skill packages, agents, model roles, MCP servers and CLI updates."
+description = "Keep AI coding agents in step (Claude Code, Codex, Cursor, Gemini CLI, Antigravity): skill packages, agents, model roles, MCP servers and CLI updates."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

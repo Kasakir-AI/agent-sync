@@ -1,9 +1,10 @@
-"""Mirror a skill package's agents/*.md into Claude Code, Codex and Cursor.
+"""Mirror a skill package's agents/*.md into each enabled agent.
 
 - Claude Code: ~/.claude/agents/<name>.md with the configured Claude model.
 - Codex: ~/.codex/agents/<name>.toml (name, description, model, model_reasoning_effort, developer_instructions).
 - Cursor: a local plugin, ~/.cursor/plugins/local/<package>-agents/. Cursor reads custom agents from a project's
   .cursor/agents and from plugins, not from ~/.cursor/agents, so a small agents-only plugin makes them global.
+- Gemini CLI: ~/.gemini/agents/<name>.md. Antigravity: ~/.gemini/config/agents/<name>.md.
 """
 from __future__ import annotations
 
