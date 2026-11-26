@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.4 (2026-11-26)
+
+**The scheduler's output file stays small**
+
+- On macOS, launchd writes the scheduled run's own output to `launchd.out` in the state folder. Nothing trimmed it.
+  Each run now cuts it to its newest 256 KiB, from a whole line, once it passes 1 MiB. Normal runs log to
+  `agent-sync.log` and leave it empty, so this only matters after a crash.
+
 ## 0.9.3 (2026-11-26)
 
 **Clearer skipped runs, and review keeps what the mirror needs**
