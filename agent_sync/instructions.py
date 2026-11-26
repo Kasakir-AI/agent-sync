@@ -10,7 +10,7 @@ from pathlib import Path
 from . import pending
 from .privacy import secret_rows, secret_values
 from .registry import DEFAULT_AGENTS, grouped_paths, paths
-from .textmerge import keys, load_baselines, meaningful, partner, save_baselines
+from .textmerge import keys, load_baselines, meaningful, partner, reworded, save_baselines
 
 KEY = "instructions:Global instructions"
 BLOCK = re.compile(r"\n*<!-- agent-sync: begin.*?<!-- agent-sync: end -->\n?", re.S)
@@ -40,16 +40,16 @@ def own_text(text: str) -> str:
 
 
 def section_rows(lines: list[str]) -> dict[int, str]:
-    next_ends = {}
+    next_ends: dict[str, list[int]] = defaultdict(list)
     blocks = {}
     for index in range(len(lines) - 1, -1, -1):
         marker = lines[index].strip()
         if match := THIRD_PARTY_START.fullmatch(marker):
             end = f"<!-- {match[1]}:end -->"
-            if end in next_ends:
-                blocks[index] = next_ends.pop(end), end
+            if next_ends.get(end):
+                blocks[index] = next_ends[end].pop(), end
         elif marker.endswith(":end -->"):
-            next_ends[marker] = index
+            next_ends[marker].append(index)
 
     hidden = {}
     ends = []
@@ -340,6 +340,15 @@ def _mirror_snapshot(home: Path, src: Path, groups: dict[Path, tuple[str, ...]],
         paired = {path: rewords(tracked, present[path], visible[path], known[path],
                                previous.get(names[path], {}).get("reworded", {}))
                   for path in known if path not in new_files}
+        for path in paired.keys() - {src}:
+            repeated = present[path] & missing_counts[path].keys()
+            if not repeated:
+                continue
+            prior = previous.get(names[path], {}).get("reworded", {})
+            for position, new in reworded("\n".join(visible[path]), "\n".join(synced), repeated).items():
+                old = synced[position]
+                if new not in known[path] or prior.get(old) == new:
+                    paired[path][old] = new
         replacements = paired.get(src, {})
         for old, new in replacements.items():
             messages.append(f'info  {names[src]} rewords "{old}" -> "{new}"; the other tools get the new wording')
@@ -397,9 +406,10 @@ def _mirror_snapshot(home: Path, src: Path, groups: dict[Path, tuple[str, ...]],
                 held[names[path]] = {"missing": missing, "reworded": changes}
         additions = {path: (set(lines) - reserved - known[path]) for path, lines in visible.items()}
         for path, body in public.items():
+            held_wording = held.get(names[path], {}).get("reworded", {}).values()
             additions[path].update(line for line, rows in units(body.splitlines()) if len(rows) == 1
                                    and line in synced_counts and counts[path][line] > synced_counts[line]
-                                   and line not in known[path])
+                                   and line not in known[path] and line not in held_wording)
         if new_files or set(groups) - paired.keys():
             additions[src].update(set(visible[src]) & set(tracked))
     seed = seed_body(public[src], additions[src])

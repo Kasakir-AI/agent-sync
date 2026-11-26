@@ -146,6 +146,28 @@ def test_a_rewording_is_kept_when_the_source_adds_a_line_right_after_it():
         0: "Ask before pushing to any shared branch."}
 
 
+@pytest.mark.parametrize("edited_section", ["Frontend", "Backend"])
+@pytest.mark.parametrize("already_shared", [False, True])
+def test_target_reword_of_one_repeated_instruction_stays_in_that_section(tmp_path, edited_section, already_shared):
+    old, new = "- Run `npm test`.", "- Run `npm run test:unit`."
+    original = f"## Frontend\n{old}\n\n## Backend\n{old}\n"
+    if already_shared:
+        original += f"\n## CI\n{new}\n"
+    edited = original.replace(f"## {edited_section}\n{old}", f"## {edited_section}\n{new}")
+    files = setup(tmp_path, original, "")
+    baselines = tmp_path / "state/baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    files["codex"].write_text(edited)
+
+    for _ in range(2):
+        messages = instructions.mirror(tmp_path, "claude", baselines=baselines)
+
+        assert any("rewords 1 shared line" in message for message in messages)
+        assert files["codex"].read_text() == edited
+        assert files["claude"].read_text() == original
+        assert instructions.split_front(files["cursor"].read_text())[1] == original
+
+
 def test_review_never_recommends_a_reworded_copy_over_your_own_edits(tmp_path):
     from agent_sync import review
     from agent_sync.config import Config
@@ -645,6 +667,20 @@ def test_mirror_keeps_new_third_party_blocks_in_their_own_file(tmp_path):
         content = files[tool].read_bytes()
         assert b"Inbox rule." not in content
         assert content.endswith(shared + added)
+
+
+def test_mirror_keeps_nested_same_name_installer_blocks_local(tmp_path):
+    shared = "Be brief.\n"
+    source = (shared + "<!-- inbox:start -->\nOuter note before.\n"
+              "<!-- inbox:start -->\nInner note.\n<!-- inbox:end -->\n"
+              "Outer note after.\n<!-- inbox:end -->\n")
+    files = setup(tmp_path, source, "")
+
+    instructions.mirror(tmp_path, "claude")
+
+    assert files["claude"].read_text() == source
+    assert files["codex"].read_text() == shared
+    assert instructions.split_front(files["cursor"].read_text())[1] == shared
 
 
 def test_wrapping_a_synced_rule_in_a_third_party_block_is_not_a_deletion(tmp_path):
