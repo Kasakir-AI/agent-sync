@@ -959,3 +959,24 @@ def test_an_unknown_interpreter_version_does_not_block_upgrades(tmp_path, comman
     tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["pipx"]), False,
                               state=tools.UpdateState())
     assert commands.ran == [["pipx", "install", "--force", "demo==1.1.0"]]
+
+
+@pytest.mark.parametrize("receipt", [
+    '[tool]\nrequirements = [{ name = "demo", specifier = "<2" }]\n',
+    '[tool]\nrequirements = [{ name = "demo", specifier = "==1.0.0" }]\nexcludes = ["heavy"]\n',
+])
+def test_uv_leaves_ranged_or_excluding_installs_to_a_manual_upgrade(tmp_path, commands, pypi, receipt):
+    program(tmp_path, "uv")
+    python = program(tmp_path, "python3.10")
+    tool_dir = tmp_path / "uv tools"
+    interpreter = tool_dir / "demo/bin/python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(python)
+    commands.output[UV_DIR] = str(tool_dir)
+    commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
+    write(tmp_path, "uv tools/demo/uv-receipt.toml", receipt)
+    pypi["demo"] = {"1.1.0": SETTLED}
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == []
+    assert any("requires a manual upgrade" in message for _, message in commands.lines)

@@ -234,11 +234,15 @@ def uv_install(package: Package, version: str) -> list[str] | None:
     if not requirements or not isinstance(first := requirements[0], dict) or first.get("name") != package.name:
         return upgrade
     pin = first.get("specifier")
-    if not isinstance(pin, str) or not re.fullmatch(rf"=={FINAL.pattern}", pin):
+    if pin in (None, ""):
         return upgrade
+    # uv adds the upgrade's version to a range the install stored, and refuses one outside it.
+    if not isinstance(pin, str) or not re.fullmatch(rf"=={FINAL.pattern}", pin):
+        return None
 
     # A positional upgrade constraint cannot replace a pin written by an earlier install.
-    if any(receipt.get(key) for key in ("options", "constraints", "overrides", "build-constraint-dependencies")):
+    if any(receipt.get(key) for key in ("options", "constraints", "overrides", "excludes",
+                                             "build-constraint-dependencies")):
         return None
     entrypoints = receipt.get("entrypoints", [])
     if not isinstance(entrypoints, list) or any(
