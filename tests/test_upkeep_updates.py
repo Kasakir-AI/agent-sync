@@ -1,5 +1,7 @@
 import json
+import urllib.request
 from datetime import UTC, datetime
+from io import BytesIO
 from stat import S_IMODE
 from types import SimpleNamespace
 
@@ -17,6 +19,7 @@ NPM_ROOT = ("npm", "root", "-g")
 NPM_OUTDATED = ("npm", "outdated", "-g", "--json")
 PIPX_LIST = ("pipx", "list", "--json")
 UV_LIST = ("uv", "tool", "list")
+UV_DIR = ("uv", "tool", "dir")
 SETTLED = "2020-01-01T00:00:00.000Z"
 
 
@@ -48,11 +51,17 @@ def pipx_list(**tools_installed):
 
 @pytest.fixture
 def pypi(monkeypatch):
-    """Fake PyPI: releases[name] = {version: upload time}."""
-    from agent_sync import upgrades
-
+    """Fake PyPI: releases[name] = {version: upload time or file metadata}."""
     releases = {}
-    monkeypatch.setattr(upgrades, "pypi_releases", lambda name: releases.get(name, {}))
+
+    def urlopen(url, *, timeout):
+        name = url.split("/")[-2]
+        return BytesIO(json.dumps({"releases": {
+            version: files if isinstance(files, list) else [{"upload_time_iso_8601": files}]
+            for version, files in releases.get(name, {}).items()
+        }}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     return releases
 
 
@@ -380,7 +389,7 @@ def test_mcp_resolves_npm_pipx_uv_and_listed_own_updaters(tmp_path, monkeypatch,
     tools.update_mcp_programs(commands.log, cfg, dry)
     upgrades = [["npm", "install", "-g", "one@1.1.0"], ["npm", "install", "-g", "@org/two@2.0.1"],
                 ["pipx", "install", "--force", "pix-package==3.1.0"],
-                ["uv", "tool", "install", "--force", "tool-uv-package==0.5.0"], ["plannotator", "update"]]
+                ["uv", "tool", "upgrade", "tool-uv-package==0.5.0"], ["plannotator", "update"]]
     assert not any(read[-1] == "--help" for read in commands.read)   # no program is probed with --help
     if dry:                                            # a dry run looks versions up and runs nothing
         assert commands.ran == []
@@ -472,7 +481,7 @@ def test_run_can_disable_mcp_program_updates(tmp_path, monkeypatch, commands):
 
 NPM_ONE = ["npm", "install", "-g", "one@1.1.0"]
 PIPX_PIX = ["pipx", "install", "--force", "pix==2.1.0"]
-UV_TUV = ["uv", "tool", "install", "--force", "tuv==0.3.0"]
+UV_TUV = ["uv", "tool", "upgrade", "tuv==0.3.0"]
 BREW_WGET = ["brew", "upgrade", "--formula", "wget"]
 
 
@@ -727,6 +736,13 @@ def test_global_major_updates_installs_a_new_major_without_asking(tmp_path, comm
     assert not any(kind == "WARN" for kind, _ in commands.lines)
 
 
+@pytest.mark.parametrize("keep", ["upgrade:npm:wrangler", WRANGLER_5])
+def test_global_major_updates_respects_keep_installed(tmp_path, commands, keep):
+    releases = {"4.1.0": SETTLED, "4.3.0": SETTLED, "5.0.0": SETTLED}
+    assert global_npm(tmp_path, commands, releases, keep=[keep], majors=True) == {}
+    assert commands.ran == [["npm", "install", "-g", "wrangler@4.3.0"]]
+
+
 def test_homebrew_upgrades_now_asks_for_a_new_major_and_never_waits(tmp_path, commands):
     program(tmp_path, "brew", "brew/bin/brew")
     commands.output[BREW_JSON] = brew_outdated(
@@ -782,6 +798,48 @@ def test_one_run_shares_one_npm_cache_for_mcp_pins_and_tools(tmp_path, monkeypat
     assert len({cache for _, cache in caches}) == 1 and None not in {cache for _, cache in caches}
 
 
+def test_uv_upgrades_the_existing_tool_at_the_guarded_version(tmp_path, commands, pypi):
+    program(tmp_path, "uv")
+    commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
+    pypi["demo"] = {"1.1.0": SETTLED, "2.0.0": SETTLED}
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == [["uv", "tool", "upgrade", "demo==1.1.0"]]
+
+
+@pytest.mark.parametrize("receipt_variant", ["bare", "extras", "custom"])
+def test_uv_updates_a_pinned_tool_with_its_installation_requirements(tmp_path, commands, pypi, receipt_variant):
+    program(tmp_path, "uv")
+    python = program(tmp_path, "python3.10")
+    tool_dir = tmp_path / "uv tools"
+    interpreter = tool_dir / "demo/bin/python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(python)
+    commands.output[UV_DIR] = str(tool_dir)
+    commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
+    requirements = '{ name = "demo", specifier = "==1.0.0" }'
+    if receipt_variant != "bare":
+        requirements = """
+    { name = "demo", extras = ["feature"], specifier = "==1.0.0" },
+    { name = "plugin", extras = ["cli"], specifier = ">=5" }
+"""
+    receipt = f"[tool]\nrequirements = [{requirements}]\n"
+    if receipt_variant == "custom":
+        receipt += 'entrypoints = [{ name = "plugin", install-path = "/bin/plugin", from = "plugin" }]\n'
+    write(tmp_path, "uv tools/demo/uv-receipt.toml", receipt)
+    pypi["demo"] = {"1.1.0": SETTLED, "2.0.0": SETTLED}
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
+                              state=tools.UpdateState())
+    install = ["uv", "tool", "install", "--force", "--python", str(python)]
+    if receipt_variant == "bare":
+        assert commands.ran == [[*install, "demo==1.1.0"]]
+    elif receipt_variant == "extras":
+        assert commands.ran == [[*install, "--with=plugin[cli]>=5", "demo[feature]==1.1.0"]]
+    else:
+        assert commands.ran == []
+        assert any("requires a manual upgrade" in message for _, message in commands.lines)
+
+
 def test_pipx_keeps_extras_and_leaves_tools_from_a_url_alone(tmp_path, commands, pypi):
     program(tmp_path, "pipx")
     commands.output[PIPX_LIST] = json.dumps({"venvs": {
@@ -793,6 +851,66 @@ def test_pipx_keeps_extras_and_leaves_tools_from_a_url_alone(tmp_path, commands,
     tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["pipx"]), False,
                               state=tools.UpdateState())
     assert commands.ran == [["pipx", "install", "--force", "black[d]==24.2.0"]]
+
+
+def test_pipx_upgrades_the_suffixed_environment_in_place(tmp_path, commands, pypi):
+    program(tmp_path, "pipx")
+    commands.output[PIPX_LIST] = json.dumps({"venvs": {
+        "demo": {"metadata": {"main_package": {"package": "demo", "package_version": "2.0.0",
+                                             "package_or_url": "demo", "suffix": ""}}},
+        "demo-test": {"metadata": {"main_package": {"package": "demo", "package_version": "1.0.0",
+                                                  "package_or_url": "demo[feature]", "suffix": "-test"}}},
+    }})
+    pypi["demo"] = {"1.1.0": SETTLED, "2.0.0": SETTLED}
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["pipx"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == [["pipx", "install", "--force", "--suffix=-test", "demo[feature]==1.1.0"]]
+
+
+@pytest.mark.parametrize(("manager", "expected"), [
+    ("pipx", ["pipx", "install", "--force", "--python=/opt/python3.10", "demo==1.1.0"]),
+    ("uv", ["uv", "tool", "upgrade", "demo==1.1.0"]),
+])
+def test_python_tool_upgrades_to_the_newest_compatible_release(tmp_path, commands, pypi, manager, expected):
+    program(tmp_path, manager)
+    commands.output[PIPX_LIST] = json.dumps({"venvs": {"demo": {"metadata": {
+        "python_version": "Python 3.10.9",
+        "source_interpreter": {"__type__": "Path", "__Path__": "/opt/python3.10"},
+        "main_package": {"package": "demo", "package_version": "1.0.0", "package_or_url": "demo"},
+    }}}})
+    commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
+    commands.output[UV_DIR] = str(tmp_path / "uv tools")
+    write(tmp_path, "uv tools/demo/pyvenv.cfg", "version_info = 3.10.9.final.0\n")
+    pypi["demo"] = {
+        "1.1.0": [
+            {"requires_python": ">=3.12", "upload_time_iso_8601": SETTLED},
+            {"requires_python": "~=3.9,!=3.10.8", "upload_time_iso_8601": SETTLED},
+        ],
+        "1.2.0": [
+            {"requires_python": ">=3.9,!=3.10.*", "upload_time_iso_8601": SETTLED},
+            {"requires_python": "==3.11.*", "upload_time_iso_8601": SETTLED},
+            {"requires_python": "invalid", "upload_time_iso_8601": SETTLED},
+        ],
+        "2.0.0": [{"requires_python": ">=3.11", "upload_time_iso_8601": SETTLED}],
+    }
+    cfg = Config(home=tmp_path, update_global_tools=[manager], global_major_updates=True)
+    tools.update_global_tools(commands.log, cfg, False, state=tools.UpdateState())
+    assert commands.ran == [expected]
+
+
+def test_pypi_upgrade_waits_for_a_compatible_distribution_to_settle(tmp_path, commands, pypi):
+    program(tmp_path, "uv")
+    commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
+    commands.output[UV_DIR] = str(tmp_path / "uv tools")
+    write(tmp_path, "uv tools/demo/pyvenv.cfg", "version_info = 3.10.9.final.0\n")
+    pypi["demo"] = {"1.1.0": [
+        {"requires_python": ">=3.11", "upload_time_iso_8601": SETTLED},
+        {"requires_python": ">=3.10", "upload_time_iso_8601": FRESH},
+    ]}
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == []
+    assert ("info", "demo 1.1.0 (uv) waits: it is under 2 days old") in commands.lines
 
 
 @pytest.mark.parametrize(("installed", "releases", "target"), [
@@ -809,7 +927,7 @@ def test_pipx_never_reinstalls_the_same_or_an_older_release(tmp_path, commands, 
     assert commands.ran == ([["pipx", "install", "--force", f"tool=={target}"]] if target else [])
 
 
-def test_a_failed_pypi_lookup_skips_the_tool_with_information_only(tmp_path, commands):
+def test_a_failed_pypi_lookup_skips_the_tool_with_information_only(tmp_path, commands, pypi):
     program(tmp_path, "uv")
     commands.output[UV_LIST] = "tuv v0.2.0\n- tuv\n"
     tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
@@ -818,23 +936,26 @@ def test_a_failed_pypi_lookup_skips_the_tool_with_information_only(tmp_path, com
     assert commands.lines == [("info", "tuv (uv) is skipped this run: its releases could not be looked up")]
 
 
-def test_pypi_releases_skip_pre_releases_and_yanked_files(monkeypatch):
-    import io
-
-    from agent_sync import upgrades
-
-    data = {"releases": {
-        "1.0.0": [{"upload_time_iso_8601": "2026-01-02T00:00:00Z"}, {"upload_time_iso_8601": "2026-01-01T00:00:00Z"}],
-        "1.1.0": [{"upload_time_iso_8601": "2026-02-01T00:00:00Z", "yanked": True}],
-        "2.0.0rc1": [{"upload_time_iso_8601": "2026-03-01T00:00:00Z"}],
+def test_pypi_releases_skip_pre_releases_and_yanked_files(tmp_path, commands, pypi):
+    program(tmp_path, "pipx")
+    commands.output[PIPX_LIST] = pipx_list(black="1.0.0")
+    pypi["black"] = {
+        "1.1.0": [{"upload_time_iso_8601": FRESH}, {"upload_time_iso_8601": SETTLED}],
+        "1.2.0": [{"upload_time_iso_8601": SETTLED, "yanked": True}],
+        "2.0.0rc1": SETTLED,
         "1.0.1": [],
-    }}
-    urls = []
+    }
+    cfg = Config(home=tmp_path, update_global_tools=["pipx"], global_major_updates=True)
+    tools.update_global_tools(commands.log, cfg, False, state=tools.UpdateState())
+    assert commands.ran == [["pipx", "install", "--force", "black==1.1.0"]]
 
-    def urlopen(url, timeout):
-        urls.append((url, timeout))
-        return io.BytesIO(json.dumps(data).encode())
 
-    monkeypatch.setattr(upgrades.urllib.request, "urlopen", urlopen)
-    assert upgrades.pypi_releases("black") == {"1.0.0": "2026-01-01T00:00:00Z"}
-    assert urls == [("https://pypi.org/pypi/black/json", 20)]
+def test_an_unknown_interpreter_version_does_not_block_upgrades(tmp_path, commands, pypi):
+    program(tmp_path, "pipx")
+    commands.output[PIPX_LIST] = json.dumps({"venvs": {"demo": {"metadata": {
+        "main_package": {"package": "demo", "package_version": "1.0.0", "package_or_url": "demo"},
+    }}}})
+    pypi["demo"] = {"1.1.0": [{"requires_python": ">=3.9", "upload_time_iso_8601": SETTLED}]}
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["pipx"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == [["pipx", "install", "--force", "demo==1.1.0"]]

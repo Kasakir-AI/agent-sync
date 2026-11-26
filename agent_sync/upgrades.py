@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import functools
 import json
+import operator
 import re
 import time
+import tomllib
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from . import mcp, pending, tools
 
@@ -30,6 +33,10 @@ class Package:
     latest: str = ""      # the newest release the manager's listing names ("" for PyPI: look it up)
     kind: str = ""        # Homebrew: "formula" or "cask"
     extras: str = ""      # pipx: the extras it was installed with, "[a,b]"
+    pipx_suffix: str = ""
+    python_version: str = ""
+    python_source: str = ""
+    uv_directory: Path | None = None
 
 
 @dataclass
@@ -98,7 +105,46 @@ def npm_released(state: UpdateState, package: Package, version: str) -> str | No
 
 # ---------- pipx and uv, with releases from PyPI ----------
 
-PYPI_SPEC = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\s*(?P<extras>\[[^\]]*\])?\s*(?:[=<>!~].*)?")
+PYPI_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+PYPI_SPEC = re.compile(rf"{PYPI_NAME.pattern}\s*(?P<extras>\[[^\]]*\])?\s*(?:[=<>!~].*)?")
+PYTHON_VERSION = re.compile(r"(?:Python )?(\d+(?:\.\d+)+)(?:\.final\.0)?")
+PYTHON_BOUND = re.compile(r"(~=|===|==|!=|<=|>=|<|>)\s*(\d+(?:\.\d+)*)(\.\*)?")
+PYTHON_COMPARISONS = {
+    "==": operator.eq, "!=": operator.ne, "<=": operator.le, ">=": operator.ge, "<": operator.lt, ">": operator.gt,
+}
+
+
+def python_version(text: object) -> str:
+    return match[1] if isinstance(text, str) and (match := PYTHON_VERSION.fullmatch(text.strip())) else ""
+
+
+def supports_python(requirement: str | None, version: str) -> bool:
+    """Check Requires-Python bounds for a final Python release. An unknown interpreter version allows every release,
+    as before upkeep read the version."""
+    if requirement is None or requirement == "" or not version:
+        return True
+    if not isinstance(requirement, str):
+        return False
+    installed = tuple(map(int, version.split(".")))
+    for item in requirement.split(","):
+        if not (bound := PYTHON_BOUND.fullmatch(item.strip())):
+            return False
+        op, text, wildcard = bound.groups()
+        target = tuple(map(int, text.split(".")))
+        width = max(len(installed), len(target))
+        actual, requested = (part + (0,) * (width - len(part)) for part in (installed, target))
+        if wildcard:
+            if op not in ("==", "!=") or not PYTHON_COMPARISONS[op](actual[:len(target)], target):
+                return False
+        elif op == "~=":
+            if len(target) < 2 or actual < requested or actual[:len(target) - 1] != target[:-1]:
+                return False
+        elif op == "===":
+            if version != text:
+                return False
+        elif not PYTHON_COMPARISONS[op](actual, requested):
+            return False
+    return True
 
 
 def pipx_listing() -> dict[str, Package] | None:
@@ -109,12 +155,20 @@ def pipx_listing() -> dict[str, Package] | None:
     found = {}
     for name, venv in venvs.items() if isinstance(venvs, dict) else ():
         try:
-            main = venv["metadata"]["main_package"]
+            metadata = venv["metadata"]
+            main = metadata["main_package"]
             package, version, spec = main["package"], main["package_version"], main["package_or_url"]
         except (KeyError, TypeError):
             continue
         if all(isinstance(value, str) for value in (package, version, spec)) and (source := PYPI_SPEC.fullmatch(spec)):
-            found[name] = Package("pipx", package, version, extras=source["extras"] or "")
+            suffix = main.get("suffix") or ""
+            if isinstance(suffix, str):
+                interpreter = metadata.get("source_interpreter")
+                if isinstance(interpreter, dict) and interpreter.get("__type__") == "Path":
+                    interpreter = interpreter.get("__Path__")
+                found[name] = Package("pipx", package, version, extras=source["extras"] or "", pipx_suffix=suffix,
+                                      python_version=python_version(metadata.get("python_version")),
+                                      python_source=interpreter if isinstance(interpreter, str) else "")
     return found
 
 
@@ -122,12 +176,97 @@ def uv_listing() -> dict[str, Package] | None:
     """`uv tool list` names each tool as `name vX.Y.Z`, followed by the commands it installed."""
     if not (text := tools.raw(["uv", "tool", "list"])).strip():
         return None
-    return {match[1]: Package("uv", match[1], match[2])
-            for match in re.finditer(r"^([^\s-]\S*) v(\d\S*)", text, re.MULTILINE)}
+    root = tools.raw(["uv", "tool", "dir"]).strip()
+    found = {}
+    for name, version in re.findall(rf"^({PYPI_NAME.pattern}) v(\d\S*)", text, re.MULTILINE):
+        directory = Path(root) / name if root else None
+        found[name] = Package("uv", name, version, uv_directory=directory,
+                              python_version=venv_python_version(directory) if directory else "")
+    return found
 
 
-def pypi_releases(name: str) -> dict[str, str | None]:
-    """Each final release of `name` on PyPI that is not yanked, and when its first file was uploaded."""
+def venv_python_version(directory: Path) -> str:
+    try:
+        text = (directory / "pyvenv.cfg").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+    match = re.search(r"^version(?:_info)?[ \t]*=[ \t]*([^\r\n]+)", text, re.MULTILINE)
+    return python_version(match[1]) if match else ""
+
+
+def pipx_install(package: Package, version: str) -> list[str]:
+    args = ["pipx", "install", "--force"]
+    if package.pipx_suffix:
+        args.append(f"--suffix={package.pipx_suffix}")
+    if package.python_source:
+        args.append(f"--python={package.python_source}")
+    return [*args, f"{package.name}{package.extras}=={version}"]
+
+
+def uv_registry_requirement(fields: dict, version: str = "") -> str:
+    if not fields.keys() <= {"name", "extras", "specifier", "marker"}:
+        return ""
+    name, extras = fields.get("name"), fields.get("extras", [])
+    specifier, marker = fields.get("specifier", ""), fields.get("marker", "")
+    if not isinstance(name, str) or not PYPI_NAME.fullmatch(name) or not isinstance(extras, list):
+        return ""
+    if not all(isinstance(extra, str) and PYPI_NAME.fullmatch(extra) for extra in extras):
+        return ""
+    if not isinstance(specifier, str) or not isinstance(marker, str):
+        return ""
+    extra_spec = f"[{','.join(extras)}]" if extras else ""
+    version_spec = f"=={version}" if version else specifier
+    marker_spec = f"; {marker}" if marker else ""
+    return f"{name}{extra_spec}{version_spec}{marker_spec}"
+
+
+def uv_install(package: Package, version: str) -> list[str] | None:
+    upgrade = ["uv", "tool", "upgrade", f"{package.name}=={version}"]
+    if (directory := package.uv_directory) is None:
+        return upgrade
+    try:
+        with (directory / "uv-receipt.toml").open("rb") as file:
+            receipt = tomllib.load(file).get("tool")
+    except (OSError, ValueError):
+        return upgrade
+    if not isinstance(receipt, dict) or not isinstance(requirements := receipt.get("requirements"), list):
+        return upgrade
+    if not requirements or not isinstance(first := requirements[0], dict) or first.get("name") != package.name:
+        return upgrade
+    pin = first.get("specifier")
+    if not isinstance(pin, str) or not re.fullmatch(rf"=={FINAL.pattern}", pin):
+        return upgrade
+
+    # A positional upgrade constraint cannot replace a pin written by an earlier install.
+    if any(receipt.get(key) for key in ("options", "constraints", "overrides", "build-constraint-dependencies")):
+        return None
+    entrypoints = receipt.get("entrypoints", [])
+    if not isinstance(entrypoints, list) or any(
+        not isinstance(entry, dict) or entry.get("from") not in (None, package.name) for entry in entrypoints
+    ):
+        return None
+    specs = [uv_registry_requirement(fields, version if i == 0 else "") if isinstance(fields, dict) else ""
+             for i, fields in enumerate(requirements)]
+    if not all(specs):
+        return None
+    try:
+        python = (directory / "bin/python").resolve(strict=True)
+        if python.is_relative_to(directory.resolve()):
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return ["uv", "tool", "install", "--force", "--python", str(python),
+            *(f"--with={spec}" for spec in specs[1:]), specs[0]]
+
+
+@dataclass(frozen=True)
+class PyPIFile:
+    uploaded: str | None
+    requires_python: str | None
+
+
+def pypi_releases(name: str) -> dict[str, list[PyPIFile]]:
+    """Non-yanked files and their metadata, by final release."""
     url = f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json"
     try:
         with urllib.request.urlopen(url, timeout=20) as reply:
@@ -140,13 +279,22 @@ def pypi_releases(name: str) -> dict[str, str | None]:
         files = [file for file in files if isinstance(file, dict) and not file.get("yanked")] \
             if isinstance(files, list) else []
         if FINAL.fullmatch(version) and files:
-            times = sorted(stamp for file in files if isinstance(stamp := file.get("upload_time_iso_8601"), str))
-            found[version] = times[0] if times else None
+            found[version] = [PyPIFile(file.get("upload_time_iso_8601"), file.get("requires_python")) for file in files]
     return found
 
 
 def pypi(state: UpdateState, package: Package) -> dict[str, str | None]:
-    return state.once(("pypi", package.name), lambda: pypi_releases(package.name))
+    def compatible() -> dict[str, str | None]:
+        releases = state.once(("pypi", package.name), lambda: pypi_releases(package.name))
+        found = {}
+        for version, files in releases.items():
+            available = [file.uploaded for file in files
+                         if supports_python(file.requires_python, package.python_version)]
+            if available:
+                found[version] = min((stamp for stamp in available if isinstance(stamp, str)), default=None)
+        return found
+
+    return state.once(("pypi-compatible", package.name, package.python_version), compatible)
 
 
 def pypi_newest(state: UpdateState, package: Package, in_major: int | None) -> str:
@@ -188,17 +336,14 @@ class Manager:
     listing: Callable[[], dict[str, Package] | None]                # packages it may upgrade, by name; None: failed
     newest: Callable[[UpdateState, Package, int | None], str]       # newest release (in a major version), "" unknown
     released: Callable[[UpdateState, Package, str], str | None] | None   # when a release came out; None: no wait
-    install: Callable[[Package, str], list[str]]
+    install: Callable[[Package, str], list[str] | None]
 
 
 MANAGERS = {
     "npm": Manager("npm", npm_listing, npm_newest, npm_released,
                    lambda package, version: ["npm", "install", "-g", f"{package.name}@{version}"]),
-    "pipx": Manager("pipx", pipx_listing, pypi_newest, pypi_released,
-                    lambda package, version: ["pipx", "install", "--force",
-                                              f"{package.name}{package.extras}=={version}"]),
-    "uv": Manager("uv", uv_listing, pypi_newest, pypi_released,
-                  lambda package, version: ["uv", "tool", "install", "--force", f"{package.name}=={version}"]),
+    "pipx": Manager("pipx", pipx_listing, pypi_newest, pypi_released, pipx_install),
+    "uv": Manager("uv", uv_listing, pypi_newest, pypi_released, uv_install),
     "homebrew": Manager("Homebrew", brew_listing, brew_newest, None,
                         lambda package, version: ["brew", "upgrade", f"--{package.kind}", package.name]),
 }
@@ -248,7 +393,11 @@ def upgrade(log, dry: bool, state: UpdateState, manager: str, name: str, *, majo
 
     def install(version: str, key: str | None = None) -> None:
         label = f"{name} {package.installed} -> {version} ({resolver.label}{', ' + why if why else ''})"
-        if tools.act(log, dry, label, resolver.install(package, version)) and key:
+        args = resolver.install(package, version)
+        if args is None:
+            log("skip", f"{label} requires a manual upgrade to preserve its installation settings")
+            return
+        if tools.act(log, dry, label, args) and key:
             pending.removed(key)
 
     old, new = major(package.installed), major(latest)
@@ -259,7 +408,8 @@ def upgrade(log, dry: bool, state: UpdateState, manager: str, name: str, *, majo
         else:
             what = (f"upgrade {name} {package.installed} -> {latest} "
                     "(a new major version, which can include breaking changes)")
-            if majors or pending.due(key, what, by_key=True):
+            allowed = not pending.keeps(key) if majors else pending.due(key, what, by_key=True)
+            if allowed:
                 install(latest, key)
                 return
         same = resolver.newest(state, package, old)
