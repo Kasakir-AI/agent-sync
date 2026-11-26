@@ -788,7 +788,6 @@ async function confirmChanges() {
     const actions = el("div", undefined, "row");
     const back = button("Back", () => dialog.close());
     const apply = button("Apply", () => applyChanges(data, apply, back, error), "primary");
-    apply.disabled = !plan.files.length;
     actions.append(back, apply);
     dialog.append(backups, error, actions);
     dialog.showModal();

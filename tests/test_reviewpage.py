@@ -1,5 +1,7 @@
 import json
+import shutil
 import socket
+import subprocess
 from http.client import HTTPConnection
 from pathlib import Path
 from stat import S_IMODE
@@ -115,6 +117,34 @@ def test_preview_is_read_only_and_apply_returns_backups_and_the_fresh_scan(reque
     assert backup.name.startswith("review-") and S_IMODE(backup.stat().st_mode) == 0o700
     assert (backup / ".codex/AGENTS.md").read_text() == "Write fresh fixtures.\n"
     assert result["scan"]["groups"][0]["status"] == "same"
+
+
+@pytest.mark.parametrize("check_ui", [False, pytest.param(
+    True, marks=pytest.mark.skipif(not shutil.which("node"), reason="review JavaScript needs Node.js"),
+)])
+def test_check_once_choice_is_remembered_without_changing_files(request_page, tmp_path, check_ui):
+    paths = instructions.files(tmp_path)
+    shared = "Use the existing tests.\n"
+    expected = {"claude": shared, "codex": shared + "Codex-only note.\n", "cursor": shared}
+    for tool, content in expected.items():
+        write(paths[tool], content)
+    scan, page = scan_on_page(request_page)
+    group, = scan["groups"]
+    assert group["status"] == "check"
+    choice = {"choices": {group["key"]: group["winner"]}, "digests": {group["key"]: group["snapshot"]}}
+
+    status, plan = request_page("plan", choice)
+    assert status == 200 and plan["files"] == []
+    status, result = request_page("apply", choice)
+    assert status == 200 and "error" not in result
+    assert result["changes"] == [] and result["backup"] is None
+    assert result["scan"]["groups"][0]["status"] == "same"
+    assert {tool: path.read_text() for tool, path in paths.items()} == expected
+    if check_ui:
+        subprocess.run(
+            ["node", str(Path(__file__).with_name("review_confirmation.cjs"))], check=True, timeout=5, text=True,
+            input=json.dumps({"page": page, "plan": plan, "applied": result}),
+        )
 
 
 @pytest.mark.parametrize("changed", ["claude", "codex", "cursor"])
