@@ -215,7 +215,8 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                 continue
             if dest.exists() and not (dest / MARKER).exists():
                 from .review import made_for_each_tool  # review builds on this module, so it is imported here
-                if not made_for_each_tool(home, name, [(roots[source_dir], src), (roots[target], dest)]):
+                if not ((dest / "SKILL.md").is_file()
+                        and made_for_each_tool(home, name, [(roots[source_dir], src), (roots[target], dest)])):
                     changes.append(f"WARN  {dest} exists and is not a copy agent-sync made; left alone")
                 continue                                   # a tool's own version (an installer's): nothing to say
             if dest.exists() and in_source and not is_plugin_copy(dest):

@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from agent_sync import pending, skills
 from tests.test_pending import approve_current
 
@@ -57,6 +59,29 @@ def test_a_folder_agent_sync_did_not_make_is_left_alone(tmp_path):
     out = skills.mirror(tmp_path, "claude")
     assert out == [f"WARN  {shared / 'same-name'} exists and is not a copy agent-sync made; left alone"]
     assert "hand-made" in (shared / "same-name/SKILL.md").read_text()
+
+
+@pytest.mark.parametrize("is_file", [False, True], ids=["empty-folder", "file"])
+def test_an_unmanaged_non_skill_at_the_destination_does_not_stop_mirroring(tmp_path, is_file):
+    claude, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    make_skill(claude, "blocked")
+    make_skill(claude, "later")
+    shared.mkdir(parents=True)
+    blocked = shared / "blocked"
+    if is_file:
+        blocked.write_text("Unrelated content")
+    else:
+        blocked.mkdir()
+
+    assert skills.mirror(tmp_path, "claude") == [
+        f"WARN  {blocked} exists and is not a copy agent-sync made; left alone",
+        f"copied skill later to {shared}",
+    ]
+    if is_file:
+        assert blocked.read_text() == "Unrelated content"
+    else:
+        assert list(blocked.iterdir()) == []
+    assert (shared / "later/SKILL.md").read_text() == (claude / "later/SKILL.md").read_text()
 
 
 def test_links_to_the_source_count_as_shared(tmp_path):
