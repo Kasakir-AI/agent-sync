@@ -137,14 +137,22 @@ def test_tool_made_skills_are_listed_but_not_counted(upkeep_home, capsys):
     assert '0 settings differ between the tools, 1 to check once and 0 are only in one' in capsys.readouterr().out
 
 
-def test_a_run_that_is_not_due_says_why_when_asked_to_print(upkeep_home, capsys):
+@pytest.mark.parametrize("scheduler", [{"XPC_SERVICE_NAME": "io.github.agent-sync"}, {"INVOCATION_ID": "1"}])
+def test_a_run_that_is_not_due_says_why_unless_the_schedule_started_it(upkeep_home, capsys, monkeypatch,
+                                                                         scheduler):
     cfg = load(home=upkeep_home)
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     (cfg.state_dir / "last-run").touch()
+    monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    assert cli.main(["run"]) == 0
+    assert "The last run was under an hour ago; the next is due in 20 hours" in capsys.readouterr().out
+    for name, value in scheduler.items():
+        monkeypatch.setenv(name, value)
     assert cli.main(["run"]) == 0
     assert capsys.readouterr().out == ""
     assert cli.main(["run", "--echo"]) == 0
-    assert "The last run was under an hour ago; the next is due in 20 hours" in capsys.readouterr().out
+    assert "The last run was under an hour ago" in capsys.readouterr().out
 
 
 def test_review_list_puts_choices_first_and_folds_settings_that_match(home, capsys):

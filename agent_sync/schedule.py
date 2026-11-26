@@ -43,6 +43,11 @@ def systemd_dir(home: Path) -> Path:
     return (Path(xdg) if xdg else home / ".config") / "systemd/user"
 
 
+def started_this_run() -> bool:
+    """True inside the launchd job (launchd names it in XPC_SERVICE_NAME) or a systemd service."""
+    return os.environ.get("XPC_SERVICE_NAME") == LABEL or "INVOCATION_ID" in os.environ
+
+
 def launcher_path(home: Path) -> Path:
     return home / "Desktop/Agent Upkeep.command"
 

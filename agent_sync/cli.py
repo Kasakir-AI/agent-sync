@@ -115,7 +115,7 @@ def upkeep(cfg: Config, log: Log, work: Path, force: bool, dry: bool, stack: Exi
         except FileNotFoundError:
             age = None
         if not (force or dry) and age is not None and age < DUE_HOURS * 3600:
-            if log.echo:
+            if log.echo or not schedule.started_this_run():
                 print(f"The last run was {hours(age / 3600)} ago; the next is due in "
                       f"{hours(DUE_HOURS - age / 3600)}. Run `agent-sync run --force` to run now.")
         else:
