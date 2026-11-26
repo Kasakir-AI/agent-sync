@@ -184,12 +184,15 @@ def test_google_setup_and_update_routes(tmp_path, monkeypatch):
     assert not any(call[0] == "npm" for call in calls)
 
 
-def test_block_descriptions_reach_the_google_agent_formats(tmp_path):
+@pytest.mark.parametrize("description", [
+    ">\n  Reviews code\n  for bugs: carefully.\n",
+    ">-\n  Reviews code\n\n  Reports findings.\n",
+    "|2+ # Keep the layout.\n  Reviews code\n    Reports findings.\n\n",
+], ids=["folded", "paragraphs", "literal-with-indentation"])
+def test_block_descriptions_reach_the_google_agent_formats(tmp_path, description):
     package = tmp_path / "pkg"
-    (package / "agents").mkdir(parents=True)
-    (package / "agents/helper.md").write_text(
-        "---\nname: helper\ndescription: >\n  Reviews code\n  for bugs: carefully.\nmodel: opus\n---\nBe helpful.\n")
-    agents.mirror(package, "me/pkg", tmp_path, AgentModels(), enabled=["claude", "gemini", "antigravity"])
+    field = f"description: {description}"
+    write(package, "agents/helper.md", f"---\nname: helper\n{field}---\nBe helpful.\n")
+    agents.mirror(package, "me/pkg", tmp_path, AgentModels(gemini="gemini-model"), enabled=GOOGLE)
     for path in (tmp_path / ".gemini/agents/helper.md", tmp_path / ".gemini/config/agents/helper.md"):
-        assert 'description: "Reviews code for bugs: carefully."\n' in path.read_text()
-    assert "description: >\n  Reviews code\n" in (tmp_path / ".claude/agents/helper.md").read_text()
+        assert field in path.read_text()

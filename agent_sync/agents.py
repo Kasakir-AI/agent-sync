@@ -20,22 +20,21 @@ from .tomledit import basic_string
 
 
 def description(front: str) -> tuple[str, str]:
-    """The description in YAML front matter: (its text, the value to write after `description:`). A block value
-    (`description: >` folds lines, `|` keeps them) becomes one quoted string; an inline one is kept as written."""
+    """Return the description as text for TOML and as written for YAML."""
     found = re.search(r"^description:[ \t]*(.*)$", front, re.M)
     if not found:
         return "", ""
     head = found.group(1).strip()
-    if not re.fullmatch(r"[>|][+-]?", head):
+    if not re.fullmatch(r"[>|](?:[1-9][+-]?|[+-][1-9]?)?(?:[ \t]+#.*)?", head):
         return head, head
     block = []
-    for line in front[found.end():].splitlines()[1:]:
+    for line in front[found.end():].split("\n")[1:]:
         if line.strip() and not line[:1].isspace():
             break
-        block.append(line.strip())
-    text = "\n".join(block)
+        block.append(line)
+    text = "\n".join(line.strip() for line in block)
     text = (text if head[0] == "|" else re.sub(r"[ \t]*\n(?!\n)[ \t]*", " ", text)).strip()
-    return text, json.dumps(text, ensure_ascii=False)       # JSON's quoted string is a YAML quoted string
+    return text, "\n".join([head, *block])
 
 
 @dataclass
