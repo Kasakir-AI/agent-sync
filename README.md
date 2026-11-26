@@ -9,10 +9,11 @@ share.
   with the same name, the first package in `skill_packages` keeps it. Upkeep removes skills a package drops.
 - **Package subagents** (`agents/*.md`) are written in each enabled agent's format. Cursor gets a local
   subagent plugin. You can set models for Claude Code, Codex, Cursor, and Gemini CLI and add notes to the
-  subagent prompts. Antigravity chooses its own model.
+  subagent prompts. Gemini CLI and Antigravity keep multiline descriptions as written. Antigravity chooses its own model.
 - **Your own skills** (the ones you made in the source tool, not from a package) are copied to the other tools.
   A copy is marked as agent-sync's, so it follows the source and goes away with it; a folder you made by hand in
-  the other tool is never touched. With Gemini CLI as the source, skills only in `~/.gemini/skills` reach
+  the other tool stays in place. Upkeep warns if a file or folder blocks a copy and continues with the other skills.
+  With Gemini CLI as the source, skills only in `~/.gemini/skills` reach
   Antigravity but not Codex or Cursor, which share Gemini CLI's other folder (`~/.agents/skills`): keep a skill
   there to share it with them.
 - **Loaded once**: a shared copy is left out only when every tool that reads its folder loads an identical skill elsewhere. Every upkeep
@@ -28,14 +29,16 @@ share.
   `pstack-models` file to the others, and each tool keeps its own notes on how to run each model.
 - **MCP servers** at user level are added to the tools that don't have them yet. A server a tool's plugin already
   brings is not added again. An exact settings copy of a plugin's server can be removed after you approve it.
-  Environment values that look like secrets are not copied: the run tells you which variable to set. Every copy
-  follows the newest version of a server an app rewrites on its updates (Codex's `node_repl`). A pinned package
+  Environment values that look like secrets are not copied: the run tells you which variable to set. Upkeep brings
+  copies of an app's server, such as Codex's `node_repl`, to the newest working version when only the app version
+  differs. Settings such as endpoint URLs and log destinations stay for review. A pinned package
   (`npx -y name@1.2.3`) moves to the newest release in the same major version once it is at least 2 days old.
   A plugin suppresses a pin update only when its server settings match apart from the pin version.
 - **Global instructions** (optional, `mirror_instructions`) are shared by every enabled agent. A line added in any
   agent's file reaches the others. A deletion in the source file pauses mirroring until you choose in
   `agent-sync pending`. If another tool drops or rewords a shared line, the other copies stay until you choose in
-  `agent-sync review`. Gemini CLI and Antigravity share `~/.gemini/GEMINI.md`. Cursor receives an always-applied rule.
+  `agent-sync review`, even if the same line appears elsewhere in the file. Gemini CLI and Antigravity share
+  `~/.gemini/GEMINI.md`. Cursor receives an always-applied rule.
 - **Memory**: you choose whether to share Claude Code's memory notes with the other agents. Notes about
   credentials, keys or personal details stay in Claude Code by default. See [Memory and privacy](#memory-and-privacy).
 - **Plugins and extensions** are updated for enabled agents: Claude Code's plugins and marketplaces, Git plugin
@@ -47,8 +50,10 @@ share.
 - **Upgrades stay in the installed major version.** MCP programs, global tools, git, Node and npm move to the
   newest release in the major version you have, once that release is at least 2 days old. A newer major version
   can include breaking changes, so upkeep asks you first (see [Approve removals](#approve-removals));
-  `global_major_updates` installs it without asking, still after 2 days. Homebrew has no 2-day wait, because
-  Homebrew reviews a release before publishing it. A pipx tool installed from a URL or a folder is left alone.
+  `global_major_updates` installs it without asking, still after 2 days. Explicit keep rules still apply.
+  Homebrew has no 2-day wait, because Homebrew reviews a release before publishing it. A pipx tool installed from a URL
+  or a folder is left alone. Pipx upgrades use the tool's existing suffix, and uv upgrades keep its extras and
+  additional dependencies. Both choose releases compatible with the tool's Python interpreter when its version is known.
 - **CLIs** are updated through Homebrew when it installed them or through their own update commands. Gemini CLI
   uses npm outside Homebrew. Antigravity uses `agy update`. Upkeep also upgrades git and Node when Homebrew
   installed them, and npm when it is installed globally. `update_global_tools` (off by default) also updates your
@@ -68,7 +73,7 @@ share.
 It runs hourly and at login but only does the work once every 20 hours, so a day the Mac was off is caught up
 soon after it starts.
 
-> Status: 0.9.4. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
+> Status: 0.9.5. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
 
 ## Install
 
@@ -189,7 +194,8 @@ The other agents send their instructions to their own companies, so some notes s
 - Lines between `<!-- agent-sync: private -->` and `<!-- agent-sync: end private -->` in an instruction file stay in
   that file. Lines between `<!-- agent-sync: local -->` and `<!-- agent-sync: end local -->` do too.
 - Installer blocks with matching `<!-- NAME:start ... -->` and `<!-- NAME:end -->` markers, such as Plannotator's
-  Inbox block, stay in the instruction file where the installer wrote them.
+  Inbox block, stay in the instruction file where the installer wrote them. This includes nested blocks that use
+  the same marker name.
 
 ## Status line
 

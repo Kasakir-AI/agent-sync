@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.5 (2026-11-26)
+
+**Fixes from a review of earlier releases**
+
+- Instructions: every note in nested installer blocks stays in the file where the installer wrote it. A rewording of
+  one repeated instruction is held for review instead of reaching the other agents' files.
+- `agent-sync pending` lists only warnings the latest run still gives, so a warning about something already resolved
+  (such as instructions that were on hold) no longer lingers.
+- Upgrades: uv tools keep their extras and additional dependencies, a suffixed pipx tool upgrades in its own
+  environment, and Python tools get releases that support their interpreter. A tool whose interpreter version can't
+  be read still upgrades as before. Requests to stay on the installed major version hold even when automatic major
+  upgrades are on.
+- Gemini CLI and Antigravity keep the formatting of multiline subagent descriptions.
+- MCP: endpoint addresses are never taken for version numbers, and copies whose only sign of age is a missing folder
+  are left for review instead of being replaced.
+- Skills: a file or folder in a skill's place gets a warning, and the other skills still mirror.
+- Review: you can save a Check once choice that only confirms lines you want to keep.
+
 ## 0.9.4 (2026-11-26)
 
 **The scheduler's output file stays small**
