@@ -16,6 +16,7 @@ STAMP = "%Y-%m-%d %H:%M:%S"
 LOG_STAMP = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"
 WARNING = re.compile(rf"^({LOG_STAMP}) WARN  ([^\n]*(?:\n\t[^\n]*)*)$", re.MULTILINE)
 RUN_END = re.compile(rf"^{LOG_STAMP} done  agent-sync finished[^\n]*$", re.MULTILINE)
+FAILURE = re.compile(rf"^{LOG_STAMP} FAIL ", re.MULTILINE)
 ACK_AGE = 30 * 24 * 3600
 ACK_FILE = "acknowledged-warnings.json"
 
@@ -68,7 +69,9 @@ class Log:
             text = self.path.read_text()
         except FileNotFoundError:
             return []
-        if len(ends := [match.end() for match in RUN_END.finditer(text)]) > 1:
+        # A run with a failed check may have missed repeating a warning, so its older warnings stay.
+        if len(ends := [match.end() for match in RUN_END.finditer(text)]) > 1 \
+                and not FAILURE.search(text, ends[-2], ends[-1]):
             text = text[ends[-2]:]
         cutoff = (datetime.now() - timedelta(days=days)).strftime(STAMP)
         return [match[2].replace("\n\t", "\n") for match in WARNING.finditer(text) if match[1] >= cutoff]

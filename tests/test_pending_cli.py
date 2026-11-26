@@ -318,3 +318,14 @@ def test_pending_lists_only_warnings_the_latest_run_still_gives(upkeep, capsys):
     output = capsys.readouterr().out
     assert "on hold" not in output
     assert "Codex loads plugin visualize twice" in output and "a warning after the last run" in output
+
+
+def test_a_failed_check_keeps_the_warnings_it_could_not_repeat(upkeep, capsys):
+    log = Log(upkeep.log_file)
+    log("WARN", "instructions are on hold until you approve or keep the deletion of 1 line(s)")
+    log("done", "agent-sync finished: 1 change")
+    log("FAIL", "instructions: could not read a file")
+    log("done", "agent-sync finished: no changes, 1 problem")
+
+    assert cli.main(["pending"]) == 0
+    assert "on hold" in capsys.readouterr().out
