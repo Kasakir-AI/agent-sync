@@ -639,8 +639,10 @@ def remember(path: Path, scan: Scan, choices: dict[str, str | dict]) -> None:
                 if version.id != winner.id for file, lines in leftovers(group, version, winner).items()}
         entry = stored.get(key)
         stored[key] = {**baseline(group.kind, winner), "kept": kept}
-        if group.kind == "instructions" and isinstance(entry, dict) and isinstance(local := entry.get("local"), dict):
-            stored[key]["local"] = local
+        if group.kind == "instructions" and isinstance(entry, dict):
+            # The mirror's record of each file's own sections, which a review choice does not touch.
+            stored[key].update({name: entry[name] for name in ("local", "hidden", "moved")
+                                if isinstance(entry.get(name), dict)})
     save_baselines(path, stored)
 
 

@@ -684,3 +684,25 @@ def test_a_kept_deletion_reaches_a_file_seeded_in_the_same_run(tmp_path):
     with pending.during(state, [key], lambda *_: None, False):
         instructions.mirror(tmp_path, "claude", baselines=baselines, enabled=TOOLS)
     assert "Always archive artifacts." in instructions.shared_body(gemini.read_text())
+
+
+def test_a_saved_review_choice_keeps_the_record_that_lets_a_block_count_as_moved(tmp_path):
+    from agent_sync import review
+    from agent_sync.config import Config
+
+    shared, rule = "Be brief.\n", "Inbox rule.\n"
+    files = setup(tmp_path, shared + rule, shared + rule)
+    state = tmp_path / "state"
+    baselines = state / "baselines.json"
+    instructions.mirror(tmp_path, "claude", baselines=baselines)
+    scan = review.scan(tmp_path, Config(home=tmp_path))
+    group, = scan.groups
+    winner = next(version for version in group.versions if version.path == files["claude"])
+    review.remember(baselines, scan, {group.key: winner.id})
+
+    files["codex"].write_text(shared + f"<!-- plannotator-inbox:start v9 -->\n{rule}<!-- plannotator-inbox:end -->\n")
+    before = {path: path.read_bytes() for path in files.values()}
+    with pending.during(state, [], lambda *_: None, False):
+        assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
+    assert pending.load(state) == {}
+    assert {path: path.read_bytes() for path in before} == before
