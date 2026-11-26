@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+**Line counts in the review match what is compared**
+
+- `agent-sync review` skips lines that are only an HTML comment (such as Plannotator's start and end markers, or
+  the `imported-from` note) when it compares copies, but it still counted them in each copy's length. Two
+  copies with the same text could show different line counts next to "No text differences". The count now
+  leaves those lines out, the same way the comparison does.
+
 ## 0.9.1 (2026-11-25)
 
 **Upgrades that can't surprise you with breaking changes**

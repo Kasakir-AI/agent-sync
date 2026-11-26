@@ -84,3 +84,18 @@ def test_review_applies_a_held_non_source_reword(tmp_path):
     assert instructions.mirror(tmp_path, "claude", baselines=baselines) == []
     assert source.read_text() == codex.read_text() == new
     assert paths["cursor"].read_text().endswith(new)
+
+
+def test_line_count_ignores_comment_lines_the_comparison_skips(tmp_path):
+    paths = instructions.files(tmp_path)
+    source, target = paths["claude"], paths["codex"]
+    source.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    source.write_text("<!-- imported-from: codex:user:instructions -->\nRun the tests.\nUse pytest.\n")
+    target.write_text("Run the tests.\n<!-- plannotator-inbox:start v9 -->\n"
+                      "Use pytest.\n<!-- plannotator-inbox:end -->\n")
+
+    group, = review.scan(tmp_path, Config(home=tmp_path)).groups
+    written = [version for version in group.versions if version.path in {source, target}]
+    assert len({version.digest for version in written}) == 1
+    assert [version.lines for version in written] == [2, 2]

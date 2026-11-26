@@ -143,10 +143,11 @@ def make_version(kind: str, name: str, tools: tuple[str, ...], path: Path, body:
                  note: str = "", *, key: str = "", digest: str = "", modified: float | None = None,
                  scoped_rule: bool = False, missing: tuple[str, ...] = ()) -> Version:
     identity = json.dumps((kind, name, os.fspath(path), key)).encode()
+    compared = normalized(body)    # count the lines the comparison reads, so equal text shows an equal length
     return Version(
         hashlib.sha1(identity).hexdigest()[:10], tools, path, key, body,
-        digest or hashlib.sha256(normalized(body).encode()).hexdigest(),
-        path.stat().st_mtime if modified is None else modified, len(body.splitlines()), origin, note, scoped_rule,
+        digest or hashlib.sha256(compared.encode()).hexdigest(),
+        path.stat().st_mtime if modified is None else modified, len(compared.splitlines()), origin, note, scoped_rule,
         missing,
     )
 
