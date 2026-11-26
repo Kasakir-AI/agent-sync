@@ -303,3 +303,18 @@ def test_launcher_and_npm_cache_failures_leave_later_steps_running(upkeep, monke
     assert "FAIL  Desktop launcher: read-only filesystem" in log
     assert "FAIL  MCP versions: read-only filesystem" in log
     assert (upkeep.home / ".claude/settings.json").is_file()
+
+
+def test_pending_lists_only_warnings_the_latest_run_still_gives(upkeep, capsys):
+    log = Log(upkeep.log_file)
+    log("WARN", "instructions are on hold until you approve or keep the deletion of 1 line(s)")
+    log("WARN", "Codex loads plugin visualize twice")
+    log("done", "agent-sync finished: 1 change")
+    log("WARN", "Codex loads plugin visualize twice")
+    log("done", "agent-sync finished: no changes")
+    log("WARN", "a warning after the last run")
+
+    assert cli.main(["pending"]) == 0
+    output = capsys.readouterr().out
+    assert "on hold" not in output
+    assert "Codex loads plugin visualize twice" in output and "a warning after the last run" in output

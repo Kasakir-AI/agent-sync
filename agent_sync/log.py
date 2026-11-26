@@ -15,6 +15,7 @@ from .textmerge import load_baselines, save_baselines
 STAMP = "%Y-%m-%d %H:%M:%S"
 LOG_STAMP = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"
 WARNING = re.compile(rf"^({LOG_STAMP}) WARN  ([^\n]*(?:\n\t[^\n]*)*)$", re.MULTILINE)
+RUN_END = re.compile(rf"^{LOG_STAMP} done  agent-sync finished[^\n]*$", re.MULTILINE)
 ACK_AGE = 30 * 24 * 3600
 ACK_FILE = "acknowledged-warnings.json"
 
@@ -61,10 +62,14 @@ class Log:
             print(line, file=sys.stdout, flush=True)
 
     def recent_warnings(self, days: int) -> list[str]:
+        """Warnings from the latest finished run and anything logged since. A run repeats every warning that still
+        holds, so an older run's warning that the latest run did not repeat has been resolved."""
         try:
             text = self.path.read_text()
         except FileNotFoundError:
             return []
+        if len(ends := [match.end() for match in RUN_END.finditer(text)]) > 1:
+            text = text[ends[-2]:]
         cutoff = (datetime.now() - timedelta(days=days)).strftime(STAMP)
         return [match[2].replace("\n\t", "\n") for match in WARNING.finditer(text) if match[1] >= cutoff]
 
