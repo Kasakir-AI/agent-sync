@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.9.2 (2026-11-26)
 
-**Instruction review and sync**
+**Each tool reads installer notes once, and review line counts match**
 
 - `agent-sync review` skips lines that are only an HTML comment, such as the `imported-from` note,
   when it compares copies, but it still counted them in each copy's length. Two
