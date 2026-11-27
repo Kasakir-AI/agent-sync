@@ -90,9 +90,12 @@ def npm_listing() -> dict[str, Package] | None:
     if not (text := tools.raw(["npm", "outdated", "-g", "--json"], ok_codes=(0, 1))).strip():
         return None
     report = tools.json_object(text)
+    # A linked package (`npm link`, `npm install -g ./dir`) is a local folder, not a registry install: npm still
+    # compares it with whatever registry package shares its name, which can be a stranger's code.
     return {name: Package("npm", name, entry["current"], entry["latest"]) for name, entry in report.items()
             if isinstance(entry, dict) and isinstance(entry.get("current"), str)
-            and isinstance(entry.get("latest"), str)}
+            and isinstance(entry.get("latest"), str)
+            and not (isinstance(entry.get("location"), str) and Path(entry["location"]).is_symlink())}
 
 
 def npm_newest(state: UpdateState, package: Package, in_major: int | None) -> str:

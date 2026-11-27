@@ -1030,3 +1030,18 @@ def test_uv_keeps_the_python_request_and_says_nothing_when_current(tmp_path, com
                               state=tools.UpdateState())
     assert commands.ran == [["uv", "tool", "install", "--force", "--python", "3.14", "demo==1.1.0"]]
     assert not any("ranged" in message for _, message in commands.lines)
+
+
+def test_npm_listing_skips_linked_packages(tmp_path, monkeypatch):
+    """A global package linked to a local folder (`npm link`, `npm install -g ./dir`) is not from the registry, so a
+    registry package that happens to share its name is a stranger's code, never its upgrade."""
+    root = tmp_path / "lib/node_modules"
+    (tmp_path / "own-cli").mkdir()
+    (root / "wrangler").mkdir(parents=True)
+    (root / "kas").symlink_to(tmp_path / "own-cli")
+    report = {name: {"current": current, "latest": latest, "location": str(root / name)}
+              for name, current, latest in (("kas", "0.4.0", "1.0.0"), ("wrangler", "4.1.0", "4.2.0"))}
+    monkeypatch.setattr(tools, "raw", lambda args, ok_codes=(0,): json.dumps(report))
+
+    from agent_sync import upgrades
+    assert list(upgrades.npm_listing()) == ["wrangler"]

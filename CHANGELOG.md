@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.7 (2026-11-27)
+
+**Linked npm tools are never "upgraded" to a stranger's package**
+
+- A global npm tool linked to a local folder (`npm link` or `npm install -g ./folder`) isn't from the npm registry,
+  but `npm outdated` still compares it with whatever registry package has the same name. Upkeep then offered to
+  "upgrade" it, which would have replaced it with someone else's code. Linked tools are now left alone.
+
 ## 0.9.6 (2026-11-27)
 
 **npm release dates work again with npm 12**
