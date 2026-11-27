@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.6 (2026-11-27)
+
+**npm release dates work again with npm 12**
+
+- npm 12 returns `npm view --json` answers inside a list. agent-sync didn't read that shape, so every npm global tool
+  "waited" with "its release time could not be looked up" and never upgraded. It reads both shapes now.
+
 ## 0.9.5 (2026-11-26)
 
 **Fixes from a review of earlier releases**

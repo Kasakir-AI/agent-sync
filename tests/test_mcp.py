@@ -430,3 +430,12 @@ def test_pin_update_is_suppressed_when_settings_only_spell_out_defaults(tmp_path
              released=lambda _: {"1.1.0": "2020-01-01T00:00:00Z"})
 
     assert mcp.read(tmp_path, "cursor") == {"pack": server}
+
+
+@pytest.mark.parametrize("answer", [
+    {"created": "2020-01-01T00:00:00Z", "1.0.0": "2026-11-25T16:40:39Z"},      # npm 11 and earlier
+    [{"created": "2020-01-01T00:00:00Z", "1.0.0": "2026-11-25T16:40:39Z"}],    # npm 12 wraps it in a list
+])
+def test_npm_release_times_are_read_from_every_npm_answer_shape(monkeypatch, answer):
+    monkeypatch.setattr(mcp.tools, "raw", lambda args, **_: json.dumps(answer))
+    assert mcp.npm_released("cf")["1.0.0"] == "2026-11-25T16:40:39Z"

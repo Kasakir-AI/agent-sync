@@ -357,6 +357,8 @@ def npm_released(package: str) -> dict[str, str]:
         times = json.loads(tools.raw(["npm", "view", package, "time", "--json"]) or "{}")
     except ValueError:
         return {}
+    if isinstance(times, list) and len(times) == 1:     # npm 12 wraps a single answer in a list
+        times = times[0]
     return {key: value for key, value in times.items() if isinstance(value, str)} if isinstance(times, dict) else {}
 
 
