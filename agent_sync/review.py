@@ -357,6 +357,59 @@ def app_versions(version: Version) -> tuple[str, list[str]]:
     return json.dumps(rest, sort_keys=True), found
 
 
+def moved(stale: Version, working: Version) -> bool:
+    """`stale` names files that no longer exist, and `working` names the same files after their folder moved (a
+    checkout someone moved): the settings are alike except paths, the program or one of its arguments is among
+    them, and every changed path is the same move of one folder to another."""
+    pairs: list[tuple[str, str, bool]] = []      # old, new, and whether it starts the server
+
+    def alike(old, new, runs: bool) -> bool:
+        if isinstance(old, dict) and isinstance(new, dict):
+            return old.keys() == new.keys() and all(
+                alike(old[key], new[key], runs or key in ("command", "args")) for key in old)
+        if isinstance(old, list) and isinstance(new, list):
+            return len(old) == len(new) and all(alike(a, b, runs) for a, b in zip(old, new, strict=True))
+        if old != new and isinstance(old, str) and isinstance(new, str):
+            pairs.append((old, new, runs))
+            return True
+        return old == new
+
+    def move(old: str, new: str) -> tuple[str, str] | None:
+        """The folder move that turns `old` into `new`: one missing path inside it, the text around it unchanged."""
+        inside = [path for path in stale.missing if path in old]
+        found = [path for path in inside if not any(other != path and path in other for other in inside)]
+        if len(found) != 1 or old.count(found[0]) != 1:
+            return None
+        head, _, tail = old.partition(found[0])
+        if not (new.startswith(head) and new.endswith(tail)) or len(new) <= len(head) + len(tail):
+            return None
+        before, after = Path(found[0]).parts, Path(new[len(head):len(new) - len(tail)]).parts
+        if after[:1] != ("/",) or not os.path.exists(os.path.join(*after)):
+            return None
+        same = 0
+        while same < min(len(before), len(after)) - 1 and before[-1 - same] == after[-1 - same]:
+            same += 1
+        if not same:
+            return None                 # not even the file name is the same
+        return os.path.join(*before[:-same]), os.path.join(*after[:-same])
+
+    if not alike(json.loads(stale.body), json.loads(working.body), False) or not pairs:
+        return False
+    moves = {move(old, new) for old, new, runs in pairs if runs} - {None}
+    if len(moves) != 1:
+        return False
+    (root, to), = moves
+
+    def follows(old: str, new: str) -> bool:
+        """`new` is `old` with the moved folder swapped, and the old place is gone: a setting such as TOOL_HOME,
+        or `--cwd ~/tool`. A path that still exists, such as a log file, is a choice for review."""
+        swapped = re.sub(rf"(?<![^\s=:'\"]){re.escape(root)}(?=/|$|[\s:'\"])", lambda _: to, old)
+        paths = [old] if old.startswith("/") else [path for path in ABSOLUTE.findall(old) if path.startswith(root)]
+        gone = all(not os.path.exists(path) for path in paths)
+        return swapped == new and swapped != old and gone
+    return all(move(old, new) == (root, to) or follows(old, new) for old, new, _ in pairs)
+
+
 def newest(versions: list[Version]) -> Version | None:
     """When copies of a server differ only in app version numbers, as an app's own server does after an update
     (Codex's node_repl), the one with the highest; None otherwise."""

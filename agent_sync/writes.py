@@ -461,7 +461,8 @@ def repair(home: Path, cfg: Config, dry: bool = False) -> list[str]:
     """Bring every copy of an MCP server up to its newest working version. A tool that owns a server (Codex's
     node_repl) rewrites its own copy on every app update; copies made from it before then point at an older version,
     or at files that no longer exist, and would stay so, as the MCP mirror never changes an existing server. Acts
-    when the copies differ only in version numbers; other settings differences are left for review."""
+    when the copies differ only in version numbers, or a stale copy names the files of a working one in their old
+    folder (the folder moved); other settings differences are left for review."""
     scan_now = review.scan(home, cfg, ["mcp"])
     choices, why = {}, {}
     for group in scan_now.groups:
@@ -475,7 +476,8 @@ def repair(home: Path, cfg: Config, dry: bool = False) -> list[str]:
         if best is None:
             continue
         comparable, _ = review.app_versions(best)
-        if any(review.app_versions(version)[0] != comparable for version in versions if version.missing):
+        if any(review.app_versions(version)[0] != comparable and not review.moved(version, best)
+               for version in versions if version.missing):
             continue
         behind = [version for version in versions if version.digest != best.digest]
         if not behind:

@@ -7,6 +7,8 @@ share.
 - **Skill packages** such as [pstack](https://github.com/backnotprop/pstack) are installed and updated for the
   enabled agents using the [`skills` CLI](https://www.npmjs.com/package/skills). When two packages ship a skill
   with the same name, the first package in `skill_packages` keeps it. Upkeep removes skills a package drops.
+  If installing a package would replace a skill that package didn't install, such as one you wrote, upkeep puts
+  yours back and asks whether the package's version should replace it.
 - **Package subagents** (`agents/*.md`) are written in each enabled agent's format. Cursor gets a local
   subagent plugin. You can set models for Claude Code, Codex, Cursor, and Gemini CLI and add notes to the
   subagent prompts. Gemini CLI and Antigravity keep multiline descriptions as written. Antigravity chooses its own model.
@@ -34,7 +36,8 @@ share.
   Environment values that look like secrets are not copied: the run tells you which variable to set. A server with a
   credential in its arguments or URL is not copied at all, and review never offers to copy one. Upkeep brings
   copies of an app's server, such as Codex's `node_repl`, to the newest working version when only the app version
-  differs. Settings such as endpoint URLs and log destinations stay for review. A pinned package
+  differs. It does the same after you move a folder a server runs from: copies that still name the old place are
+  pointed at the new one. Settings such as endpoint URLs and log destinations stay for review. A pinned package
   (`npx -y name@1.2.3`) moves to the newest release in the same major version once it is at least 2 days old.
   A plugin suppresses a pin update only when its server settings match apart from the pin version.
 - **Global instructions** (optional, `mirror_instructions`) are shared by every enabled agent. A line added in any
@@ -79,7 +82,7 @@ share.
 It runs hourly and at login but only does the work once every 20 hours, so a day the Mac was off is caught up
 soon after it starts.
 
-> Status: 0.9.8. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
+> Status: 0.9.9. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
 
 ## Install
 

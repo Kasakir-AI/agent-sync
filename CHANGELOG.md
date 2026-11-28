@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.9 (2026-11-28)
+
+**Package installs keep your own skills; MCP copies follow a moved folder**
+
+- Installing or updating skills no longer replaces a skill the package didn't install, such as one you wrote. Upkeep
+  saves the other skill folders first, and afterwards puts back each one that was replaced, even when the install
+  failed partway. Then it asks whether the package's version should replace yours. Until you approve, later runs
+  leave that skill out, and choosing Keep leaves it out for good.
+- When you move a folder an MCP server runs from (a checkout, for example), copies of the server in other tools that
+  still name the old place now point at the new one, including settings that name the folder itself. Before, they
+  stayed broken until you fixed them in review. Paths that still exist, such as a log file, stay for review.
+
 ## 0.9.8 (2026-11-27)
 
 **Security and safety fixes from a full review**

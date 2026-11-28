@@ -22,6 +22,8 @@ import json
 import os
 import re
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -312,6 +314,148 @@ def backup_installs(home: Path, enabled, names) -> None:
             continue
         for root in sorted(roots):
             backups.save(root / name)
+
+
+def entry_state(path: Path) -> str | None:
+    """What a skill folder entry holds: nothing, a link's target, or a digest of its files."""
+    if path.is_symlink():
+        return "link " + os.readlink(path)
+    if path.is_dir():
+        return "folder " + tree_digest(path)
+    return "file " + hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+
+
+def package_folders(lock: dict[str, dict], package: str) -> dict[str, str]:
+    """folder name -> lock name of each skill the lock says `package` installed."""
+    out = {}
+    for name, meta in lock.items():
+        if str(meta.get("source", "")).casefold() == package.casefold():   # GitHub names ignore case
+            # the lock key is the installed name, even after --rename
+            out[name] = out[install_name(name)] = name
+    return out
+
+
+def put_back(path: Path, saved: Path | None) -> None:
+    """Replace what is at `path` with the saved copy, or remove it when there was nothing; never leaves it missing."""
+    backups.save(path)
+    aside = path.with_name(f".{path.name}.agent-sync-old")
+    staged = path.with_name(f".{path.name}.agent-sync-new")
+    for leftover in (aside, staged):
+        if leftover.is_dir() and not leftover.is_symlink():
+            shutil.rmtree(leftover)
+        elif leftover.exists() or leftover.is_symlink():
+            leftover.unlink()
+    if saved is not None:
+        copy_entry(saved, staged)
+    if path.exists() or path.is_symlink():
+        path.rename(aside)
+    if saved is not None:
+        staged.rename(path)
+    if aside.is_dir() and not aside.is_symlink():
+        shutil.rmtree(aside)
+    elif aside.exists() or aside.is_symlink():
+        aside.unlink()
+
+
+def copy_entry(src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_symlink():
+        os.symlink(os.readlink(src), dest)
+    elif src.is_dir():
+        shutil.copytree(src, dest, symlinks=True)
+    else:
+        shutil.copy2(src, dest)
+
+
+def unlock(home: Path, before: dict[str, dict], names: set[str]) -> None:
+    """Give the lock file's entries for `names` back the values they had before the install."""
+    path = lock_file(home)
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    entries = data.get("skills") if isinstance(data, dict) else None
+    if not isinstance(entries, dict):
+        return
+    for name in names:
+        if name in before:
+            entries[name] = before[name]
+        else:
+            entries.pop(name, None)
+    target = path.resolve()
+    staged = target.with_name(f".{target.name}.agent-sync")
+    staged.write_text(json.dumps(data, indent=2) + "\n")
+    os.chmod(staged, target.stat().st_mode & 0o777)
+    staged.replace(target)
+
+
+class Guard:
+    """What a guarded install did: `restored` holds (lock name, package) for each skill put back. Set `failed`
+    when the install failed: the installer writes files before its lock file, so then every entry it changed is
+    put back, credited or not."""
+
+    def __init__(self) -> None:
+        self.restored: list[tuple[str, str]] = []
+        self.failed = False
+
+
+@contextmanager
+def guard_installs(home: Path, enabled, packages: set[str], allowed: set[str], work: Path) -> Iterator[Guard]:
+    """Keep an install from `packages` from replacing skills those packages did not install, such as your own.
+    The `skills` CLI decides which folders it writes, so this doesn't predict them: it saves every other skill
+    entry first, and afterwards puts back each one the install changed and the lock file now credits to one of
+    `packages`. `allowed`: names they may replace (you approved it). Names match without regard to case, as macOS
+    folders do."""
+    before = locked(home)
+    roots = sorted(install_roots(home, enabled))
+    canonical = home / ".agents/skills"
+    owned = {name.casefold() for package in packages for name in package_folders(before, package)}
+    free = {name.casefold() for name in allowed} | {install_name(name).casefold() for name in allowed}
+    entries = {root: [entry for entry in root.iterdir() if not entry.name.startswith(".")] if root.is_dir() else []
+               for root in roots}
+    foreign = {entry.name for found in entries.values() for entry in found} - {
+        entry.name for found in entries.values() for entry in found if entry.name.casefold() in owned | free}
+
+    def package_copy(entry: Path) -> bool:
+        """The package's own install: its folder in ~/.agents/skills, a link to it, an exact copy of it, or the
+        only copy (an install for one agent copies straight into that agent's folder)."""
+        own = canonical / entry.name
+        return (entry.parent == canonical or entry.resolve() == own.resolve() or not own.exists()
+                or own.is_dir() and entry_state(entry) == entry_state(own))
+
+    watched = {root / name for root in roots for name in foreign}
+    watched |= {entry for root in roots for entry in entries[root]
+                if entry.name.casefold() in owned - free and not package_copy(entry)}
+    guard = Guard()
+    work.mkdir(parents=True, exist_ok=True)
+    for leftover in work.glob("skill-guard.*"):        # from a run that was killed; runs never overlap
+        if leftover.is_dir() and not leftover.is_symlink():
+            backups.save(leftover)                      # it may hold the only copy of a skill the install replaced
+            shutil.rmtree(leftover)
+    with TemporaryDirectory(dir=work, prefix="skill-guard.") as tmp:
+        saved: dict[Path, tuple[str | None, Path | None]] = {}
+        for index, path in enumerate(sorted(watched)):
+            state = entry_state(path)
+            copy = Path(tmp) / str(index) / path.name if state is not None else None
+            if copy is not None:
+                copy_entry(path, copy)
+            saved[path] = state, copy
+        try:
+            yield guard
+        finally:
+            after = locked(home)
+            credited = {name.casefold(): (key, package) for package in sorted(packages)
+                        for name, key in package_folders(after, package).items()}
+            changed = {path.name.casefold() for path, (state, _) in saved.items()
+                       if (guard.failed or path.name.casefold() in credited) and entry_state(path) != state}
+            for path, (state, copy) in sorted(saved.items()):
+                if path.name.casefold() in changed and entry_state(path) != state:
+                    put_back(path, copy)
+            if new := {credited[name][0] for name in changed - owned if name in credited}:
+                unlock(home, before, new)
+            sole = next(iter(packages)) if len(packages) == 1 else None
+            guard.restored += sorted({credited[name] if name in credited else (name, sole) for name in changed
+                                      if name in credited or sole})
 
 
 def shipped(checkout: Path) -> list[str]:

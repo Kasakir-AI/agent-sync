@@ -106,6 +106,12 @@ def hold(key: str) -> None:
                 run.seen[name] = item
 
 
+def earlier(prefix: str, suffix: str) -> list[str]:
+    """The keys of earlier runs' questions that start with `prefix` and end with `suffix`."""
+    run = current.get()
+    return sorted(key for key in run.previous if key.startswith(prefix) and key.endswith(suffix)) if run else []
+
+
 def retry(*namespaces: str) -> None:
     if (run := current.get()) is not None:
         for key in list(run.seen):

@@ -214,3 +214,183 @@ def test_review_and_repair_warn_and_skip_malformed_mcp_settings(tmp_path, monkey
     assert any(line.startswith("WARN") and str(cursor) in line for line in lines)
     assert any("updated ~/.claude.json" in line for line in lines)
     assert cursor.read_text() == '{"mcpServers":[]}'
+
+
+def moved_checkout(tmp_path):
+    """A checkout moved from ~/tool to ~/Projects/tool: Claude Code and Codex name the new place, Cursor the old."""
+    new = tmp_path / "Projects/tool/bin"
+    new.mkdir(parents=True)
+    (new / "tool.js").write_text("")
+    old = tmp_path / "tool/bin"
+
+    def entry(folder):
+        return {"command": "node", "args": [str(folder / "tool.js"), "mcp"]}
+    return old, new, entry
+
+
+def test_upkeep_repairs_copies_left_at_a_checkout_s_old_folder(tmp_path):
+    old, new, entry = moved_checkout(tmp_path)
+    setup(tmp_path, new, new, cursor_dir=old)
+    for name, folder in ((".claude.json", new), (".cursor/mcp.json", old)):
+        (tmp_path / name).write_text(json.dumps({"mcpServers": {"repl": entry(folder)}}))
+    (tmp_path / ".codex/config.toml").write_text(
+        f'[mcp_servers.repl]\ncommand = "node"\nargs = ["{new}/tool.js", "mcp"]\nenabled_tools = ["run"]\n')
+    cfg = Config(home=tmp_path)
+
+    lines = writes.repair_mcp(tmp_path, cfg)
+    assert [line.split(" (")[0] for line in lines] == ["updated ~/.cursor/mcp.json"]
+    assert "Cursor pointed at files that no longer exist" in lines[0]
+    assert json.loads((tmp_path / ".cursor/mcp.json").read_text())["mcpServers"]["repl"]["args"] == entry(new)["args"]
+    assert writes.repair_mcp(tmp_path, cfg) == []
+
+
+@pytest.mark.parametrize("stale", [
+    {"command": "node", "args": ["{old}/tool.js", "serve"]},          # other settings differ too
+    {"command": "node", "args": ["{old}/other.js", "mcp"]},           # a different file
+])
+def test_a_stale_copy_that_differs_by_more_than_the_folder_is_left_for_review(tmp_path, stale):
+    old, new, entry = moved_checkout(tmp_path)
+    setup(tmp_path, new, new, cursor_dir=old)
+    stale = json.loads(json.dumps(stale).replace("{old}", str(old)))
+    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {"repl": entry(new)}}))
+    (tmp_path / ".codex/config.toml").write_text(
+        f'[mcp_servers.repl]\ncommand = "node"\nargs = ["{new}/tool.js", "mcp"]\n')
+    (tmp_path / ".cursor/mcp.json").write_text(json.dumps({"mcpServers": {"repl": stale}}))
+    before = (tmp_path / ".cursor/mcp.json").read_bytes()
+
+    assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+    assert (tmp_path / ".cursor/mcp.json").read_bytes() == before
+
+
+def test_upkeep_repairs_a_moved_path_inside_an_argument(tmp_path):
+    old, new, _ = moved_checkout(tmp_path)
+    setup(tmp_path, new, new, cursor_dir=old)
+    for name, folder in ((".claude.json", new), (".cursor/mcp.json", old)):
+        (tmp_path / name).write_text(json.dumps({"mcpServers": {"repl": {
+            "command": "node", "args": [f"--script={folder}/tool.js"]}}}))
+    (tmp_path / ".codex/config.toml").write_text(
+        f'[mcp_servers.repl]\ncommand = "node"\nargs = ["--script={new}/tool.js"]\n')
+
+    assert [line.split(" (")[0] for line in writes.repair_mcp(tmp_path, Config(home=tmp_path))] == [
+        "updated ~/.cursor/mcp.json"]
+    assert json.loads((tmp_path / ".cursor/mcp.json").read_text())["mcpServers"]["repl"]["args"] == [
+        f"--script={new}/tool.js"]
+
+
+def test_a_repair_needs_every_changed_path_to_be_the_same_move(tmp_path):
+    """The checkout moved, and a separate output folder is gone too: the working copy's output folder is a
+    different place, not the same move, so the stale copy is left for review."""
+    old, new, _ = moved_checkout(tmp_path)
+    (tmp_path / "elsewhere/out").mkdir(parents=True)
+    setup(tmp_path, new, new, cursor_dir=old)
+
+    def entry(folder, out):
+        return {"command": "node", "args": [str(folder / "tool.js")], "env": {"OUTPUT_DIR": str(out)}}
+    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {"repl": entry(new, tmp_path / "elsewhere/out")}}))
+    (tmp_path / ".cursor/mcp.json").write_text(json.dumps({"mcpServers": {"repl": entry(old, tmp_path / "gone/out")}}))
+    (tmp_path / ".codex/config.toml").write_text(
+        f'[mcp_servers.repl]\ncommand = "node"\nargs = ["{new}/tool.js"]\n\n'
+        f'[mcp_servers.repl.env]\nOUTPUT_DIR = "{tmp_path}/elsewhere/out"\n')
+    before = (tmp_path / ".cursor/mcp.json").read_bytes()
+
+    assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+    assert (tmp_path / ".cursor/mcp.json").read_bytes() == before
+
+
+def test_upkeep_repairs_a_server_naming_a_moved_folder_and_a_file_inside_it(tmp_path):
+    old, new, _ = moved_checkout(tmp_path)
+    setup(tmp_path, new, new, cursor_dir=old)
+
+    def entry(folder):
+        return {"command": "node", "args": [str(folder / "tool.js")], "env": {"TOOL_HOME": str(folder)}}
+    for name, folder in ((".claude.json", new), (".cursor/mcp.json", old)):
+        (tmp_path / name).write_text(json.dumps({"mcpServers": {"repl": entry(folder)}}))
+    (tmp_path / ".codex/config.toml").write_text(
+        f'[mcp_servers.repl]\ncommand = "node"\nargs = ["{new}/tool.js"]\n\n'
+        f'[mcp_servers.repl.env]\nTOOL_HOME = "{new}"\n')
+
+    assert [line.split(" (")[0] for line in writes.repair_mcp(tmp_path, Config(home=tmp_path))] == [
+        "updated ~/.cursor/mcp.json"]
+    assert json.loads((tmp_path / ".cursor/mcp.json").read_text())["mcpServers"]["repl"]["env"] == {
+        "TOOL_HOME": str(new)}
+
+
+def test_a_different_log_path_alone_is_not_a_move(tmp_path):
+    old, new, _ = moved_checkout(tmp_path)
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs/run.log").write_text("")
+    setup(tmp_path, new, new, cursor_dir=new)
+
+    def entry(log):
+        return {"command": "node", "args": [str(new / "tool.js")], "env": {"LOG_FILE": str(log)}}
+    (tmp_path / ".claude.json").write_text(json.dumps({"mcpServers": {"repl": entry(tmp_path / "logs/run.log")}}))
+    (tmp_path / ".cursor/mcp.json").write_text(json.dumps({"mcpServers": {"repl": entry(tmp_path / "gone/run.log")}}))
+    (tmp_path / ".codex/config.toml").write_text(
+        f'[mcp_servers.repl]\ncommand = "node"\nargs = ["{new}/tool.js"]\n\n'
+        f'[mcp_servers.repl.env]\nLOG_FILE = "{tmp_path}/logs/run.log"\n')
+    before = (tmp_path / ".cursor/mcp.json").read_bytes()
+
+    assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+    assert (tmp_path / ".cursor/mcp.json").read_bytes() == before
+
+
+def test_a_folder_setting_follows_the_move_of_the_script_inside_it(tmp_path):
+    """~/tool moved to ~/Projects/tool: TOOL_HOME=~/tool is not 'missing' (its parent, home, exists), but it
+    follows the same move as the script, so the whole copy is repaired."""
+    new = tmp_path / "Projects/tool"
+    new.mkdir(parents=True)
+    (new / "server.js").write_text("")
+    old = tmp_path / "tool"
+    setup(tmp_path, new, new, cursor_dir=old)
+
+    def entry(folder):
+        return {"command": "node", "args": [str(folder / "server.js")], "env": {"TOOL_HOME": str(folder)}}
+    for name, folder in ((".claude.json", new), (".cursor/mcp.json", old)):
+        (tmp_path / name).write_text(json.dumps({"mcpServers": {"repl": entry(folder)}}))
+    (tmp_path / ".codex/config.toml").write_text(
+        f'[mcp_servers.repl]\ncommand = "node"\nargs = ["{new}/server.js"]\n\n'
+        f'[mcp_servers.repl.env]\nTOOL_HOME = "{new}"\n')
+
+    assert [line.split(" (")[0] for line in writes.repair_mcp(tmp_path, Config(home=tmp_path))] == [
+        "updated ~/.cursor/mcp.json"]
+    assert json.loads((tmp_path / ".cursor/mcp.json").read_text())["mcpServers"]["repl"]["env"] == {
+        "TOOL_HOME": str(new)}
+
+
+def test_a_live_path_under_the_old_parent_is_not_moved_along(tmp_path):
+    """tool/ moved into Projects/, but logs/ beside it did not: a stale copy logging there keeps that for review."""
+    old, new, _ = moved_checkout(tmp_path)
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs/out.log").write_text("")
+    (tmp_path / "Projects/logs").mkdir()
+    (tmp_path / "Projects/logs/out.log").write_text("")
+    setup(tmp_path, new, new, cursor_dir=old)
+
+    def entry(folder, log):
+        return {"command": "node", "args": [str(folder / "tool.js")], "env": {"LOG_FILE": str(log)}}
+    for name, server in ((".claude.json", entry(new, tmp_path / "Projects/logs/out.log")),
+                         (".cursor/mcp.json", entry(old, tmp_path / "logs/out.log"))):
+        (tmp_path / name).write_text(json.dumps({"mcpServers": {"repl": server}}))
+    (tmp_path / ".codex/config.toml").write_text(
+        f'[mcp_servers.repl]\ncommand = "node"\nargs = ["{new}/tool.js"]\n\n'
+        f'[mcp_servers.repl.env]\nLOG_FILE = "{tmp_path}/Projects/logs/out.log"\n')
+    before = (tmp_path / ".cursor/mcp.json").read_bytes()
+    assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+    assert (tmp_path / ".cursor/mcp.json").read_bytes() == before
+
+
+def test_a_folder_argument_follows_the_move_of_the_script(tmp_path):
+    new = tmp_path / "Projects/tool"
+    new.mkdir(parents=True)
+    (new / "run.js").write_text("")
+    old = tmp_path / "tool"
+    setup(tmp_path, new, new, cursor_dir=old)
+
+    def entry(folder):
+        return {"command": "node", "args": [str(folder / "run.js"), "--cwd", str(folder)]}
+    for name, folder in ((".claude.json", new), (".cursor/mcp.json", old)):
+        (tmp_path / name).write_text(json.dumps({"mcpServers": {"repl": entry(folder)}}))
+    (tmp_path / ".codex/config.toml").write_text(
+        f'[mcp_servers.repl]\ncommand = "node"\nargs = ["{new}/run.js", "--cwd", "{new}"]\n')
+    assert [line.split(" (")[0] for line in writes.repair_mcp(tmp_path, Config(home=tmp_path))] == [
+        "updated ~/.cursor/mcp.json"]

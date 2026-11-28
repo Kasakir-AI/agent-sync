@@ -232,7 +232,17 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
         guarded(log, "Desktop launcher",
                 lambda: log.lines(filter(None, [schedule.refresh_launcher(home, dry, tools.PATH)])))
     guarded(log, "skill packages", lambda: sync_packages(cfg, log, work, dry), "skill", "agent")
-    guarded(log, "skills update", lambda: tools.update_skills(log, dry, cfg.skills_cli, home=home, enabled=enabled))
+    def update_skills() -> None:
+        sources = {str(meta.get("source")) for meta in skills.locked(home).values() if meta.get("source")}
+        kept, allowed = collision_answers(cfg, sources)
+        if dry:
+            tools.update_skills(log, dry, cfg.skills_cli, home=home, enabled=enabled, hold=kept)
+            return
+        # the updater writes to every agent it finds installed, not only the enabled ones
+        with skills.guard_installs(home, tuple(TOOLS), sources, set(allowed.values()), work) as guard:
+            guard.failed = not tools.update_skills(log, dry, cfg.skills_cli, home=home, enabled=enabled, hold=kept)
+        settle_collisions(log, guard, {})        # an approval stays until a package install applies it
+    guarded(log, "skills update", update_skills)
     if cfg.plugin_skills:
         log("WARN", "plugin_skills is no longer used: Cursor loads Claude Code plugins' skills itself, so copies "
             "made it load them twice. To give Codex a plugin's skills, install the plugin in Codex "
@@ -362,13 +372,21 @@ def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
         blocked = {skills.installed_name(name, meta) for name, meta in installed.items()
                    if meta.get("source") in cfg.skill_packages and meta.get("source") != package}
         unsafe = {name for name in shipped if not safe_skill(name)}
-        if blocked.intersection(shipped) or unsafe:
-            names = [name for name in shipped if name not in blocked and name not in unsafe]
+        kept, allowed = collision_answers(cfg, {package}, shipped)
+        if blocked.intersection(shipped) or unsafe or kept:
+            names = [name for name in shipped
+                     if name not in blocked and name not in unsafe and name.casefold() not in kept]
         if names != []:
-            if not dry:
-                skills.backup_installs(cfg.home, cfg.agents, shipped if names is None else names)
-            tools.act(log, dry, f"skills from {package} for {', '.join(tools.skill_agents(cfg.agents))}",
-                      tools.skill_args(cfg.skills_cli, package, names, enabled=cfg.agents))
+            label = f"skills from {package} for {', '.join(tools.skill_agents(cfg.agents))}"
+            args = tools.skill_args(cfg.skills_cli, package, names, enabled=cfg.agents)
+            if dry:
+                tools.act(log, dry, label, args)
+            else:
+                skills.backup_installs(cfg.home, cfg.agents,
+                                       {*(shipped if names is None else names), *allowed.values()})
+                with skills.guard_installs(cfg.home, cfg.agents, {package}, set(allowed.values()), work) as guard:
+                    guard.failed = not tools.act(log, dry, label, args)
+                settle_collisions(log, guard, allowed)
         if (checkout / "agents").is_dir():
             manifest = checkout / ".cursor-plugin/plugin.json"
             version = json.loads(manifest.read_text()).get("version", "0") if manifest.exists() else "0"
@@ -378,6 +396,39 @@ def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
                 log("ok", f"agents from {package} mirrored")
             except (ValueError, OSError) as e:
                 log("FAIL", f"agents from {package}: {e}")
+
+
+def replace_skill(name: str, package: str) -> str:
+    return f"replace skill {name} with the one from {package}"
+
+
+def collision_answers(cfg: Config, packages: set[str], shipped=()) -> tuple[set[str], dict[str, str]]:
+    """Skills of the same name as one of yours that an earlier install from `packages` replaced (upkeep put
+    yours back and asked): the names still held (case folded), and the approved ones (pending key -> name).
+    A name you chose to keep is held too."""
+    kept, allowed = set(), {}
+    keep = {key.casefold() for key in cfg.keep_installed}
+    for package in packages:
+        for key in pending.earlier("skill:", f"@{package}"):
+            name = key.removeprefix("skill:").removesuffix(f"@{package}")
+            if pending.due(key, replace_skill(name, package)):
+                allowed[key] = name
+            else:
+                kept.add(name.casefold())
+        kept |= {name.casefold() for name in shipped if f"skill:{name}@{package}".casefold() in keep}
+        kept |= {key.removeprefix("skill:").rpartition("@")[0] for key in keep
+                 if key.startswith("skill:") and key.endswith(f"@{package}".casefold())}
+    return kept - {name.casefold() for name in allowed.values()}, allowed
+
+
+def settle_collisions(log: Log, guard: skills.Guard, allowed: dict[str, str]) -> None:
+    for name, package in guard.restored:
+        log("info", f"put back skill {name}: installing from {package} replaced it, and {package} had not installed it")
+        pending.due(f"skill:{name}@{package}", replace_skill(name, package))
+    restored = {f"skill:{name}@{package}".casefold() for name, package in guard.restored}
+    for key in allowed if not guard.failed else ():
+        if key.casefold() not in restored:
+            pending.removed(key)
 
 
 def log_review(cfg: Config, log: Log) -> None:

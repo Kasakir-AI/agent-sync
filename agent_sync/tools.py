@@ -134,12 +134,13 @@ def act(log, dry: bool, label: str, args: list[str], timeout: int = 900, *, run=
     return code == 0
 
 
-def update_skills(log, dry: bool, cli: str, *, home: Path, enabled=DEFAULT_AGENTS) -> None:
-    """Check for global skill updates and back up the installs the updater can change."""
+def update_skills(log, dry: bool, cli: str, *, home: Path, enabled=DEFAULT_AGENTS, hold=frozenset()) -> bool:
+    """Check for global skill updates and back up the installs the updater can change. `hold`: names (any
+    case) to leave out. False when the update ran and failed."""
     from . import skills as installed_skills
 
     if not (locked := installed_skills.locked(home)):
-        return
+        return True
     command = ["npx", "-y", "--prefer-online", cli]
     label = "skills from every source (skills update)"
     names = []
@@ -149,24 +150,35 @@ def update_skills(log, dry: bool, cli: str, *, home: Path, enabled=DEFAULT_AGENT
         reported = set(re.findall(r"^↑ (.+) has an update$", report, re.MULTILINE))
         legacy = re.findall(r"^  ↑ (.+)$", report, re.MULTILINE)
         names = sorted(name for name in reported if name in locked and safe_id(name))
+        held = [name for name in names if name.casefold() in hold]
+        names = [name for name in names if name not in held]
+        reported -= set(held)
         failed = report == failure or any(message in report for message in (
             "Failed to check skills from", "Failed to update", "Could not check ",
         ))
         if failed or reported != set(names):
             log("FAIL", "skills check did not confirm all global updates")
+        if legacy and hold:                     # it can't leave one out, and one is waiting for your answer
+            log("info", "skills update skipped: this skills CLI updates every skill at once, and a skill is "
+                "waiting for your answer (agent-sync pending)")
+            return True
         if legacy:
             log("info", "this skills CLI updates all skills at once; backing up all locked skills")
             names = []
         elif not names:
-            if failed or reported or any(line in report.splitlines() for line in (
+            if held or failed or reported or any(line in report.splitlines() for line in (
                 "✓ All global skills are up to date", "✓ All skills are up to date",
                 "No global skills to check.", "No GitHub skills to check.",
                 "No global skills tracked in lock file.", "No skills tracked in lock file.",
             )):
-                return
+                return True
+            if hold:
+                log("info", "skills update skipped: its list could not be read, and a skill is waiting for your "
+                    "answer (agent-sync pending)")
+                return True
             log("info", "skills update list could not be read; backing up all locked skills before updating")
         installed_skills.backup_installs(home, enabled, names or locked)
-    act(log, dry, label, [*command, "update", "-g", "-y", *names])
+    return act(log, dry, label, [*command, "update", "-g", "-y", *names])
 
 
 GLOBAL_MANAGERS = ("npm", "pipx", "uv", "homebrew")
