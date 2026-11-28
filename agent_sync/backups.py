@@ -1,6 +1,7 @@
 """Keep the originals of files changed during upkeep."""
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from stat import S_IMODE, S_ISDIR, S_ISLNK, S_ISREG
 
-FOLDER_NAME = re.compile(r"(?:run|review|repair|dedupe|pins)-([0-9]{8}-[0-9]{6})")
+FOLDER_NAME = re.compile(r"(?:run|review|repair|dedupe|pins|restore|skill)-([0-9]{8}-[0-9]{6})")
 MIB = 1024 * 1024
 
 
@@ -24,6 +25,7 @@ class Run:
     now: datetime
     folder: Path | None = None
     seen: set[Path] = field(default_factory=set)
+    prefix: str = "run"
     originals: dict[Path, Path] = field(default_factory=dict)
 
     def save(self, path: Path) -> None:
@@ -33,7 +35,7 @@ class Run:
             if not path.is_symlink() and self.root.resolve().is_relative_to(path.resolve()):
                 raise OSError(f"cannot back up {path} inside itself")
             if self.folder is None:
-                self.folder = new_folder(self.root, "run", self.now)
+                self.folder = new_folder(self.root, self.prefix, self.now)
             self.originals[self.folder / relative_path(path, self.home)] = path
             copy(path, self.home, self.folder, seen=self.seen)
         self.seen.add(path)
@@ -119,8 +121,8 @@ def save(path: Path, *, follow: bool = False) -> None:
 
 
 @contextmanager
-def during(home: Path, root: Path, *, now: datetime | None = None):
-    run = Run(home, root, now or datetime.now())
+def during(home: Path, root: Path, *, now: datetime | None = None, prefix: str = "run"):
+    run = Run(home, root, now or datetime.now(), prefix=prefix)
     token = current.set(run)
     try:
         yield run
@@ -222,3 +224,63 @@ def prune(root: Path, days: int, max_mb: int, current: Path | None, dry: bool, l
             shutil.rmtree(path)
         log("info", f"{'Would delete' if dry else 'Deleted'} backup {path}")
         total -= size
+
+
+def backup_folders(root: Path) -> list[Path]:
+    """Backup folders agent-sync made, newest first."""
+    found = [folder for folder in root.iterdir() if folder.is_dir() and not folder.is_symlink()
+             and FOLDER_NAME.fullmatch(folder.name)] if root.is_dir() else []
+    return sorted(found, key=lambda folder: (FOLDER_NAME.fullmatch(folder.name)[1], folder.name), reverse=True)
+
+
+def original_path(saved: Path, folder: Path, home: Path) -> Path:
+    """Where a saved file came from: under your home folder, or the absolute path kept under _outside/."""
+    relative = saved.relative_to(folder)
+    return Path("/", *relative.parts[1:]) if relative.parts[0] == "_outside" else home.resolve() / relative
+
+
+def saved_files(folder: Path) -> list[Path]:
+    """The files and links a backup holds. Folders are restored file by file, so nothing added since is removed."""
+    return sorted(path for path in folder.rglob("*") if path.is_symlink() or path.is_file())
+
+
+def restore(folder: Path, home: Path, root: Path, only: list[str], dry: bool) -> list[str]:
+    """Put a backup's files back where they came from. The files they replace are saved first, in a restore-
+    backup of their own, so a restore can be undone the same way. `only`: paths (or folders) to limit it to."""
+    wanted = [Path(os.path.realpath(Path(item).expanduser())) for item in only]
+    changes = []
+    with during(home, root, prefix="restore"):
+        for saved in saved_files(folder):
+            target = original_path(saved, folder, home)
+            if wanted and not any(target == item or target.is_relative_to(item) for item in wanted):
+                continue
+            if target.parent.resolve() != target.parent:      # a folder on the way is a link to elsewhere now
+                changes.append(f"WARN  skipped {target}: a folder in its path is now a link")
+                continue
+            if target.is_symlink() == saved.is_symlink() and (
+                    os.readlink(target) == os.readlink(saved) if saved.is_symlink()
+                    else target.is_file() and same_bytes(saved, target)
+                    and S_IMODE(target.stat().st_mode) == S_IMODE(saved.stat().st_mode)):
+                continue
+            if dry:
+                changes.append(f"would restore {target}")
+                continue
+            if target.is_dir() and not target.is_symlink():
+                changes.append(f"WARN  skipped {target}: a folder is there now")
+                continue
+            try:
+                save(target)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                staged = target.with_name(f".{target.name}.agent-sync-restore")
+                if staged.exists() or staged.is_symlink():
+                    staged.unlink()
+                if saved.is_symlink():
+                    os.symlink(os.readlink(saved), staged)
+                else:
+                    shutil.copy2(saved, staged)
+                os.replace(staged, target)
+            except OSError as error:          # a folder on the way is a file now, say: skip it, restore the rest
+                changes.append(f"WARN  skipped {target}: {error.strerror or error}")
+                continue
+            changes.append(f"restored {target}")
+    return changes

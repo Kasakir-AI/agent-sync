@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.0 (2026-11-28)
+
+**A skill catalog, restoring backups, and a shorter README**
+
+- `agent-sync skill suggest` looks at the project you're in (its `package.json`, `pyproject.toml`, `Cargo.toml`,
+  `go.mod`, `Gemfile`, `composer.json`, a `Dockerfile` and more) and suggests skills for the technologies it uses,
+  with the reason for each. `--install` asks which to install; `--install --all` installs them all.
+- `agent-sync skill install <name>` installs a skill from the catalog: 140+ skills for 80+ technologies. Skills
+  from other makers, such as Angular, Vercel, Cloudflare, Expo and Stripe, install from their own repositories.
+  Every skill was read before it was listed and is pinned to that commit, so what you install is what was read.
+  41 were left out (paid-service steering, installing other skills on their own, commands run without asking,
+  unsafe or broken advice); `catalog/excluded.toml` lists each with its reason.
+- `skill install` never replaces a skill of yours with the same name without asking, and backs it up first. `skill list
+  <words>` searches the catalog. Skills install into the project; `--global` installs them for every project.
+- The catalog's own skills live in [Kasakir-AI/agent-sync-skills](https://github.com/Kasakir-AI/agent-sync-skills).
+- `agent-sync restore` lists your backups, and `agent-sync restore <backup>` puts its files back after showing
+  you what changes. The files it replaces are backed up first, so a restore can be undone the same way.
+- The README is shorter. The details moved to pages under `docs/`.
+
 ## 0.9.9 (2026-11-28)
 
 **Package installs keep your own skills; MCP copies follow a moved folder**

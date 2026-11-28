@@ -63,6 +63,17 @@
 - [x] Keep backups of changed files within the age and size limits. Clean up agent-sync's own state even when upkeep is skipped.
 - [x] One status line in Claude Code, Cursor CLI and Antigravity.
 
+0.10.0:
+
+- [x] A skill catalog: `agent-sync skill suggest` spots a project's technologies and suggests skills;
+      `skill install` and `skill list`. Skills from other makers install from their own repositories, pinned to a
+      checked commit.
+- [x] `agent-sync restore`: put a backup's files back.
+
 Later:
+
+- A security check of installed skills and MCP settings (credential values, `curl | sh`, paths outside the skill).
+- `--json` output for `status`, `inventory` and `pending`.
+- Repair MCP copies whose launcher names only the moved folder (`uv --directory <folder> run`).
 
 - Cursor as the source of global instructions (its User Rules live in the app's own database).

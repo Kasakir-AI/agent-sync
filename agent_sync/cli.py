@@ -656,6 +656,200 @@ def status() -> int:
     return 0
 
 
+def restore_command(name: str | None, only: list[str], dry: bool, yes: bool) -> int:
+    cfg = load()
+    root = cfg.state_dir / "backups"
+    found = backups.backup_folders(root)
+    if not name:
+        if not found:
+            print(f"No backups in {root}")
+            return 0
+        print("Backups, newest first (agent-sync restore <name> to put one back):")
+        for folder in found[:20]:
+            files = backups.saved_files(folder)
+            print(f"  {folder.name:<26} {len(files):>4} files, {backups.tree_size(folder) / backups.MIB:.1f} MiB")
+        return 0
+    folder = found[0] if name == "latest" and found else root / name
+    if folder not in found:
+        print(f"No backup named {name}. Run agent-sync restore to list them.")
+        return 1
+    with ExitStack() as stack:
+        if not dry and not stack.enter_context(run_lock(cfg.state_dir / "lock")):
+            print("Upkeep is running; try again when it's done.")
+            return 1
+        plan = backups.restore(folder, cfg.home, root, only, dry=True)
+        if not plan:
+            print(f"Nothing to restore: every file in {folder.name} matches what's there now.")
+            return 0
+        print("\n".join(plan))
+        if dry:
+            return 0
+        if not yes:
+            if not sys.stdin.isatty():
+                print("Run it in a terminal to confirm, or add --yes.")
+                return 1
+            if input(f"Restore {len(plan)} file(s)? The current ones are backed up first. [y/N] ").strip().lower() \
+                    not in ("y", "yes"):
+                return 0
+        lines = backups.restore(folder, cfg.home, root, only, dry=False)
+        print("\n".join(lines))
+        return 1 if any(line.startswith("WARN") for line in lines) else 0
+
+
+def skill_command(a: argparse.Namespace) -> int:
+    from . import catalog
+
+    cfg = load()
+    data = catalog.load()
+    root = a.path.expanduser().resolve()
+    if a.skill_action in ("list", "search"):
+        found = catalog.search(data, " ".join(a.words))
+        if a.json:
+            print(json.dumps([skill_json(skill) for skill in found], indent=1))
+            return 0
+        for skill in sorted(found, key=lambda skill: skill.id):
+            print(f"  {skill.id:<34} {skill.summary}  ({skill.source})")
+        print(f"{len(found)} of {len(data.skills)} skills. Install one: agent-sync skill install <name>")
+        return 0
+    if a.skill_action == "install":
+        chosen = []
+        for name in a.names:
+            skill = data.skills.get(name) or data.skills.get(name.lower()) or direct_skill(name)
+            if skill is None:
+                close = [s.id for s in catalog.search(data, name.replace("-", " "))][:5]
+                print(f"No skill named {name} in the catalog." + (f" Did you mean: {', '.join(close)}?" if close else
+                                                                   " Try: agent-sync skill list <words>"))
+                return 1
+            chosen.append(skill)
+        return install_skills(cfg, chosen, None if a.everywhere else root)
+    if not root.is_dir():
+        print(f"{root} is not a folder")
+        return 1
+    found = catalog.detect(data, catalog.scan(root))
+    suggestions = catalog.suggest(data, found)
+    have = catalog.installed(None if a.everywhere else root, cfg.home, cfg.agents)
+    if a.json and a.install:
+        print("--json lists suggestions only; install them without --json.")
+        return 2
+    if a.json:
+        print(json.dumps({"technologies": found, "skills": [
+            {**skill_json(s.skill), "reasons": list(s.reasons), "installed": installed_skill(s.skill, have)}
+            for s in suggestions]}, indent=1))
+        return 0
+    if not found:
+        print(f"No technologies from the catalog spotted in {root}.")
+        return 0
+    names = {tech.id: tech.name for tech in data.technologies}
+    print(f"Spotted in {root}: {', '.join(names[tech] for tech in found)}")
+    todo = []
+    for number, suggestion in enumerate(suggestions, 1):
+        done = installed_skill(suggestion.skill, have)
+        if not done:
+            todo.append(suggestion.skill)
+        print(f"  {number:>2}. {suggestion.skill.id:<32} {suggestion.skill.summary}"
+              + ("  [installed]" if done else ""))
+        print(f"      for {'; '.join(suggestion.reasons)}  ({suggestion.skill.source})")
+    if not todo:
+        print("Every suggested skill is installed.")
+        return 0
+    if not a.install:
+        print("Install them: agent-sync skill suggest --install (asks which), or --install --all")
+        return 0
+    if not a.all:
+        if not sys.stdin.isatty():
+            print("Choose skills in a terminal, or add --all to install every suggestion.")
+            return 1
+        answer = input("Install which? Numbers (1 3 5), 'all', or Enter for none: ").strip().lower()
+        if not answer:
+            return 0
+        if answer != "all":
+            picked = {int(word) for word in re.findall(r"\d+", answer)}
+            todo = [s.skill for n, s in enumerate(suggestions, 1) if n in picked and s.skill in todo]
+    return install_skills(cfg, todo, None if a.everywhere else root)
+
+
+def skill_json(skill) -> dict:
+    return {"id": skill.id, "title": skill.title, "summary": skill.summary, "source": skill.source,
+            "path": skill.path, "commit": skill.commit}
+
+
+def installed_skill(skill, have: set[str]) -> bool:
+    return (skill.name or skill.id).lower() in have
+
+
+def direct_skill(name: str):
+    """owner/repo/name, for a skill the catalog doesn't list: `name` is the one in its SKILL.md, which the `skills`
+    CLI looks up in that repository's default branch (not pinned)."""
+    from . import catalog
+
+    parts = name.split("/")
+    if len(parts) != 3 or not all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", part) for part in parts):
+        return None
+    return catalog.Skill(parts[2], f"{parts[0]}/{parts[1]}", "", parts[2], "", "")
+
+
+def same_source(skill, root: Path | None, home: Path) -> bool:
+    """The skill of that name there now came from the same repository, by the `skills` CLI's lock file."""
+    if root is None:
+        lock = skills.locked(home)
+    else:
+        try:
+            lock = json.loads((root / "skills-lock.json").read_text()).get("skills") or {}
+        except (OSError, ValueError, AttributeError):
+            lock = {}
+    entry = lock.get(skill.name or skill.id)
+    return isinstance(entry, dict) and str(entry.get("source", "")).casefold() == skill.source.casefold()
+
+
+def replace_ok(skill, there: list[Path]) -> bool:
+    """Ask before a catalog skill replaces one of the same name; never replace without an answer."""
+    if not sys.stdin.isatty():
+        return False
+    answer = input(f"  {there[0]} already exists. Replace it with {skill.id} from {skill.source}? "
+                   "It is backed up first. [y/N] ")
+    return answer.strip().lower() in ("y", "yes")
+
+
+def install_skills(cfg: Config, chosen: list, root: Path | None) -> int:
+    """Install through the `skills` CLI, each skill pinned to the commit the catalog checked, into the project
+    (`root`) or, with root None, for your account."""
+    from . import catalog
+
+    agents = tools.skill_agents(cfg.agents)
+    where = "your account" if root is None else str(root)
+    print(f"Installing for {', '.join(agents)} in {where}. Skills run with your agents' permissions: "
+          "read one before you rely on it.")
+    failed = 0
+    roots = catalog.skill_roots(root, cfg.home, cfg.agents)
+    for skill in chosen:
+        if not tools.safe_id(skill.id):
+            print(f"  skipped {skill.id!r}: not a usable skill name")
+            failed += 1
+            continue
+        name = skill.name or skill.id
+        there = [folder / name for folder in sorted(roots) if (folder / name).exists() or (folder / name).is_symlink()]
+        # an earlier install of this same skill is updated in place; anything else of that name needs a yes
+        if there and not same_source(skill, root, cfg.home) and not replace_ok(skill, there):
+            print(f"  kept your {name}: a skill of that name is already in {there[0].parent}")
+            continue
+        where_from = [skill.url] if skill.commit else [skill.source, "-s", skill.id]     # pinned, or newest
+        args = ["npx", "-y", cfg.skills_cli, "add", *where_from, "-a", *agents, "-y", *(["-g"] if root is None else [])]
+        # the backup run stays open through the install, so the copies it saved are kept once the files change
+        with backups.during(cfg.home, cfg.state_dir / "backups", prefix="skill") as saved:
+            for path in there:
+                backups.save(path, follow=True)       # a link's target too: the skill body may live there
+            code, out = tools.sh(args, timeout=600, cwd=root)
+        if saved.folder:
+            print(f"  backed up the {name} that was there to {saved.folder}")
+        # the CLI can skip a skill and still exit 0 (a folder of that name holds other skills): check it landed
+        landed = code == 0 and installed_skill(skill, catalog.installed(root, cfg.home, cfg.agents))
+        print(f"  {'installed' if landed else 'FAILED'} {skill.id} from {skill.source}"
+              + (f" at {skill.commit[:12]}" if skill.commit else "")
+              + ("" if landed else f": {out or 'the skills CLI did not install it'}"))
+        failed += not landed
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="agent-sync", description=__doc__.split("\n")[0])
     ap.add_argument("--version", action="version", version=f"agent-sync {__version__}")
@@ -686,7 +880,31 @@ def main(argv: list[str] | None = None) -> int:
     review_parser = sub.add_parser("review", help="compare settings and choose which versions to keep")
     review_parser.add_argument("--list", action="store_true", help="print the comparison and recommendations")
     review_parser.add_argument("--no-open", action="store_true", help="print the page URL without opening the browser")
+    restore_parser = sub.add_parser("restore", help="list backups, or put a backup's files back")
+    restore_parser.add_argument("backup", nargs="?", help="a backup folder name from the list (newest: latest)")
+    restore_parser.add_argument("--only", metavar="PATH", nargs="+", default=[], help="restore only these paths")
+    restore_parser.add_argument("--dry-run", action="store_true", help="show what would be restored")
+    restore_parser.add_argument("--yes", action="store_true", help="don't ask before restoring")
+    skill_parser = sub.add_parser("skill", aliases=["skills"], help="suggest, find and install skills from the catalog")
+    skill_commands = skill_parser.add_subparsers(dest="skill_action", required=True)
+    suggest = skill_commands.add_parser("suggest", help="spot the project's technologies and suggest skills for them")
+    suggest.add_argument("--install", action="store_true", help="install suggested skills (asks which)")
+    suggest.add_argument("--all", action="store_true", help="with --install, install every suggestion without asking")
+    install_skill = skill_commands.add_parser("install", help="install skills by name")
+    install_skill.add_argument("names", metavar="name", nargs="+",
+                               help="a catalog name, or owner/repo/name for any skill (the name in its SKILL.md)")
+    find = skill_commands.add_parser("list", aliases=["search"], help="list catalog skills, or those matching words")
+    find.add_argument("words", nargs="*")
+    for command in (suggest, install_skill, find):
+        command.add_argument("--path", type=Path, default=Path("."), help="the project folder (default: here)")
+        command.add_argument("--global", dest="everywhere", action="store_true",
+                             help="install for your account (every project) instead of this project")
+        command.add_argument("--json", action="store_true", help="print JSON")
     a = ap.parse_args(argv)
+    if a.cmd in ("skill", "skills"):
+        return skill_command(a)
+    if a.cmd == "restore":
+        return restore_command(a.backup, a.only, a.dry_run, a.yes)
     if a.cmd == "agents":
         return membership.run(load(), a.agent_action, getattr(a, "ids", []))
     if a.cmd == "run":

@@ -2,4 +2,4 @@
 
 Skill packages, agents, model roles, MCP servers and the CLIs.
 """
-__version__ = "0.9.9"
+__version__ = "0.10.0"

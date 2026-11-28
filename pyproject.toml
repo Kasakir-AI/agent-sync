@@ -8,6 +8,7 @@ dynamic = ["version"]
 description = "Keep AI coding agents in step (Claude Code, Codex, Cursor, Gemini CLI, Antigravity): skill packages, agents, model roles, MCP servers and CLI updates."
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_LICENSES.md"]
 requires-python = ">=3.11"
 dependencies = []
 
@@ -22,7 +23,7 @@ version = { attr = "agent_sync.__version__" }
 include = ["agent_sync*"]
 
 [tool.setuptools.package-data]
-agent_sync = ["review.html"]
+agent_sync = ["review.html", "skill_catalog.json"]
 
 [tool.ruff]
 line-length = 120

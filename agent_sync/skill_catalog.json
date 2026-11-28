@@ -1,0 +1,2745 @@
+{
+ "version": 1,
+ "built": "2026-11-28",
+ "sources": {
+  "Kasakir-AI/agent-sync-skills": "f06506e7e079787a5c28db8f9dca652b504999fc",
+  "Kotlin/kotlin-agent-skills": "087f5689c1934135ed58718cdf524525e452b7e9",
+  "addyosmani/web-quality-skills": "afa8da942115f2961fdbfa80807ea0b232ff6c00",
+  "affaan-m/everything-claude-code": "4adeee6732a12d1540f49a4d50a38ce8c97f9a53",
+  "angular/angular": "63fa515ec74cb3690c2c48587d627c0c3120d0f0",
+  "angular/skills": "8be7db32d66e643c5e8e2a871dedd44435df6b7a",
+  "antfu/skills": "0ecc25a6dcc805074133f7315fb6965450c70990",
+  "anthropics/skills": "e4bb5d960d87126ff3b3a8af1a104b7db67560ba",
+  "astrolicious/agent-skills": "cb4839f3794189ebf35c55d3ba5d3876dff7acf0",
+  "avdlee/swiftui-agent-skill": "62bd760f005093d1e2e4de5db156e456a5f96400",
+  "better-auth/skills": "20c9e88a5c007461a703f1c213572b073196113e",
+  "clerk/skills": "0a5a49e6fe3d57c34d307a17e0f711ccd63fb409",
+  "cloudai-x/threejs-skills": "0e181866f095b5f06d005133876e926515390d95",
+  "cloudflare/skills": "ff191de7d903788eceaf516a514ae7d3b56b924a",
+  "cloudflare/vinext": "659aabc162490957762be96521ba6fc5172458bb",
+  "currents-dev/playwright-best-practices-skill": "0b75b5835a87de1fdd202ba965f3bc5a27738fdf",
+  "davila7/claude-code-templates": "0f656c8787b3e60862e8f054d268d060871aa0b4",
+  "delexw/claude-code-misc": "c729be07588f3b64a3878cc9f5e99c362388554c",
+  "denoland/skills": "d5f6ace6b113aee71ba5286612fa1bde34c7d102",
+  "dominikmartn/nothing-design-skill": "6bec3c79022db860c739531e1c3bcecef3922d89",
+  "expo/skills": "8f2b6c0c65533e695243aa401eaa1cb6f1fe86c2",
+  "github/awesome-copilot": "93fc8b9ee3ef56b9b5e7261e6ce92d314cb2c1cf",
+  "greensock/gsap-skills": "aed9cfd3277740755f6bfc1155c7aa645403b760",
+  "hyf0/vue-skills": "198f0cd8f7f9c0a3d9b566ccc16de6677519ee78",
+  "jeffallan/claude-skills": "bdbd3bb9179a3512b92d2b0ce593b42e4b8fd819",
+  "kadajett/agent-nestjs-skills": "3986e0cede33958e000f959031cbee0cd83c2941",
+  "microsoft/github-copilot-for-azure": "b405cdbeac3e52ae20baa152e7672bc7b6e3dd6e",
+  "midudev/autoskills": "579bc98259b0ba5f8ce0d9702c7d761a8fbd451a",
+  "mindrally/skills": "7682ca77710e0971eab4e0ae5dddfa281aea0ba5",
+  "pproenca/dot-skills": "cf93c57cac89d6fc3e4194686000411567f5caf3",
+  "prisma/skills": "b4bebffd0d0c3499c3d342f69380886a28e28880",
+  "remotion-dev/skills": "a3f4098a2afd0e13f6a6f8c8760e275f75457ea9",
+  "stripe/ai": "d4b19a989bf12bdbd4d42de1f9bfd3aec56fd9da",
+  "supabase/agent-skills": "c9be0e931b7930f7d02126d04774d904c381e7d7",
+  "sveltejs/ai-tools": "5c3ad9bac30f332e3e539d0a36a2c7822c44def2",
+  "vercel-labs/agent-skills": "5a37a6329fbad3666c3207392a6a7c0110e92efb",
+  "vercel/ai": "71aa4dd03a840c9a98bc7426402a96fb9fe147c2",
+  "vercel/turborepo": "64bf84900de7d64918059e491666a8411640fa3e",
+  "vintasoftware/django-ai-plugins": "b8af2688d994747666e6a793d441365807d6772f",
+  "vuejs-ai/skills": "198f0cd8f7f9c0a3d9b566ccc16de6677519ee78",
+  "wordpress/agent-skills": "32ea909f7d01be2e08fee6aff6ae449a42b9b34f",
+  "wshobson/agents": "c96b5f6552dba32e4492307493ee613581430715"
+ },
+ "skills": [
+  {
+   "id": "accessibility",
+   "name": "accessibility",
+   "source": "addyosmani/web-quality-skills",
+   "path": "skills/accessibility",
+   "title": "Accessibility",
+   "summary": "Audit and improve web accessibility following WCAG guidance."
+  },
+  {
+   "id": "best-practices",
+   "name": "best-practices",
+   "source": "addyosmani/web-quality-skills",
+   "path": "skills/best-practices",
+   "title": "Best Practices",
+   "summary": "Apply modern development best practices for security, compatibility, and code quality."
+  },
+  {
+   "id": "core-web-vitals",
+   "name": "core-web-vitals",
+   "source": "addyosmani/web-quality-skills",
+   "path": "skills/core-web-vitals",
+   "title": "Core Web Vitals",
+   "summary": "Optimize LCP, INP, and CLS for better page experience."
+  },
+  {
+   "id": "docker-expert",
+   "name": "docker-expert",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/docker-expert",
+   "title": "Docker Expert",
+   "summary": "Build, optimize, and troubleshoot Docker images and Compose services."
+  },
+  {
+   "id": "frontend-design",
+   "name": "frontend-design",
+   "source": "anthropics/skills",
+   "path": "skills/frontend-design",
+   "title": "Frontend Design",
+   "summary": "Create polished, production-grade frontend interfaces."
+  },
+  {
+   "id": "nothing-design",
+   "name": "nothing-design",
+   "source": "dominikmartn/nothing-design-skill",
+   "path": "nothing-design",
+   "title": "Nothing Design",
+   "summary": "Design Nothing-inspired landing pages and web interfaces with disciplined visual hierarchy."
+  },
+  {
+   "id": "github-actions",
+   "name": "github-actions",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/github-actions",
+   "title": "GitHub Actions",
+   "summary": "Designs, secures, and troubleshoots GitHub Actions workflows."
+  },
+  {
+   "id": "makefile",
+   "name": "makefile",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/makefile",
+   "title": "Makefile",
+   "summary": "Write and debug GNU Make build rules, dependency graphs, and recipes."
+  },
+  {
+   "id": "performance",
+   "name": "performance",
+   "source": "addyosmani/web-quality-skills",
+   "path": "skills/performance",
+   "title": "Performance",
+   "summary": "Optimize application performance and loading behavior."
+  },
+  {
+   "id": "pinned-tag",
+   "name": "pinned-tag",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/pinned-tag",
+   "title": "Pinned Tag",
+   "summary": "Pin GitHub Actions and reusable workflows to verified commits."
+  },
+  {
+   "id": "rust-async-patterns",
+   "name": "rust-async-patterns",
+   "source": "wshobson/agents",
+   "path": "plugins/systems-programming/skills/rust-async-patterns",
+   "title": "Rust Async Patterns",
+   "summary": "Use Tokio and idiomatic async Rust implementation patterns."
+  },
+  {
+   "id": "seo",
+   "name": "seo",
+   "source": "addyosmani/web-quality-skills",
+   "path": "skills/seo",
+   "title": "SEO",
+   "summary": "Improve search engine visibility and metadata quality."
+  },
+  {
+   "id": "grafana-dashboards",
+   "name": "grafana-dashboards",
+   "source": "wshobson/agents",
+   "path": "plugins/observability-monitoring/skills/grafana-dashboards",
+   "title": "Grafana Dashboards",
+   "summary": "Create and manage production Grafana dashboards for real-time visualization."
+  },
+  {
+   "id": "markdown-a11y",
+   "name": "markdown-a11y",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/markdown-a11y",
+   "title": "Markdown Accessibility",
+   "summary": "Write and review Markdown for accessible rendered documentation."
+  },
+  {
+   "id": "skill-creator",
+   "name": "skill-creator",
+   "source": "anthropics/skills",
+   "path": "skills/skill-creator",
+   "title": "Skill Creator",
+   "summary": "Creates new AI agent skills following a generic Agent Skills specification."
+  },
+  {
+   "id": "sql-optimization-patterns",
+   "name": "sql-optimization-patterns",
+   "source": "wshobson/agents",
+   "path": "plugins/developer-essentials/skills/sql-optimization-patterns",
+   "title": "SQL Optimization",
+   "summary": "SQL query optimization, indexing strategies, and EXPLAIN analysis."
+  },
+  {
+   "id": "web-quality-audit",
+   "name": "web-quality-audit",
+   "source": "addyosmani/web-quality-skills",
+   "path": "skills/web-quality-audit",
+   "title": "Web Quality Audit",
+   "summary": "Comprehensive web quality audit covering performance, accessibility, SEO, and best practices."
+  },
+  {
+   "id": "webapp-testing",
+   "name": "webapp-testing",
+   "source": "anthropics/skills",
+   "path": "skills/webapp-testing",
+   "title": "Web App Testing",
+   "summary": "Toolkit for interacting with and testing local web applications using Playwright."
+  },
+  {
+   "id": "angular-developer",
+   "name": "angular-developer",
+   "source": "angular/skills",
+   "path": "angular-developer",
+   "title": "Angular Developer",
+   "summary": "Build Angular applications following official best practices and patterns."
+  },
+  {
+   "id": "angular-reference-core",
+   "name": "reference-core",
+   "source": "angular/angular",
+   "path": ".agent/skills/reference-core",
+   "title": "Angular Core Reference",
+   "summary": "Reference guide for Angular core APIs and architecture."
+  },
+  {
+   "id": "angular-reference-signal-forms",
+   "name": "reference-signal-forms",
+   "source": "angular/angular",
+   "path": ".agent/skills/reference-signal-forms",
+   "title": "Angular Signal Forms Reference",
+   "summary": "Reference guide for Angular signal-based forms."
+  },
+  {
+   "id": "angular-reference-compiler-cli",
+   "name": "reference-compiler-cli",
+   "source": "angular/angular",
+   "path": ".agent/skills/reference-compiler-cli",
+   "title": "Angular Compiler CLI Reference",
+   "summary": "Reference guide for the Angular compiler CLI."
+  },
+  {
+   "id": "angular-adev-writing-guide",
+   "name": "adev-writing-guide",
+   "source": "angular/angular",
+   "path": ".agent/skills/adev-writing-guide",
+   "title": "Angular Dev Writing Guide",
+   "summary": "Writing guide for Angular documentation contributions."
+  },
+  {
+   "id": "astrolicious-astro",
+   "name": "astro",
+   "source": "astrolicious/agent-skills",
+   "path": "skills/astro",
+   "title": "Astro Best Practices",
+   "summary": "Build Astro sites following framework best practices and patterns."
+  },
+  {
+   "id": "azure-ai",
+   "name": "azure-ai",
+   "source": "microsoft/github-copilot-for-azure",
+   "path": "plugins/azure-skills/skills/azure-ai",
+   "title": "Azure AI",
+   "summary": "Build AI solutions with Azure AI services."
+  },
+  {
+   "id": "azure-diagnostics",
+   "name": "azure-diagnostics",
+   "source": "microsoft/github-copilot-for-azure",
+   "path": "plugins/azure-skills/skills/azure-diagnostics",
+   "title": "Azure Diagnostics",
+   "summary": "Diagnose and troubleshoot Azure resource issues."
+  },
+  {
+   "id": "better-auth-best-practices",
+   "name": "better-auth-best-practices",
+   "source": "better-auth/skills",
+   "path": "better-auth/best-practices",
+   "title": "Better Auth Best Practices",
+   "summary": "Implement authentication with Better Auth following best practices."
+  },
+  {
+   "id": "better-auth-email-password",
+   "name": "email-and-password-best-practices",
+   "source": "better-auth/skills",
+   "path": "better-auth/emailAndPassword",
+   "title": "Better Auth Email & Password",
+   "summary": "Implement email and password authentication with Better Auth."
+  },
+  {
+   "id": "better-auth-two-factor",
+   "name": "two-factor-authentication-best-practices",
+   "source": "better-auth/skills",
+   "path": "better-auth/twoFactor",
+   "title": "Better Auth Two-Factor",
+   "summary": "Implement two-factor authentication with Better Auth."
+  },
+  {
+   "id": "clerk",
+   "name": "clerk",
+   "source": "clerk/skills",
+   "path": "skills/clerk",
+   "title": "Clerk",
+   "summary": "Integrate Clerk authentication into your application."
+  },
+  {
+   "id": "clerk-custom-ui",
+   "name": "clerk-custom-ui",
+   "source": "clerk/skills",
+   "path": "skills/clerk-custom-ui",
+   "title": "Clerk Custom UI",
+   "summary": "Build custom authentication UI with Clerk components."
+  },
+  {
+   "id": "clerk-nextjs-patterns",
+   "name": "clerk-nextjs-patterns",
+   "source": "clerk/skills",
+   "path": "skills/clerk-nextjs-patterns",
+   "title": "Clerk Next.js Patterns",
+   "summary": "Implement Clerk authentication patterns in Next.js apps."
+  },
+  {
+   "id": "clerk-orgs",
+   "name": "clerk-orgs",
+   "source": "clerk/skills",
+   "path": "skills/clerk-orgs",
+   "title": "Clerk Organizations",
+   "summary": "Implement organization management with Clerk."
+  },
+  {
+   "id": "clerk-webhooks",
+   "name": "clerk-webhooks",
+   "source": "clerk/skills",
+   "path": "skills/clerk-webhooks",
+   "title": "Clerk Webhooks",
+   "summary": "Handle Clerk webhooks for event-driven authentication flows."
+  },
+  {
+   "id": "clerk-testing",
+   "name": "clerk-testing",
+   "source": "clerk/skills",
+   "path": "skills/clerk-testing",
+   "title": "Clerk Testing",
+   "summary": "Test Clerk authentication integrations."
+  },
+  {
+   "id": "clerk-nuxt-patterns",
+   "name": "clerk-nuxt-patterns",
+   "source": "clerk/skills",
+   "path": "skills/clerk-nuxt-patterns",
+   "title": "Clerk Nuxt Patterns",
+   "summary": "Implement Clerk authentication patterns in Nuxt apps."
+  },
+  {
+   "id": "clerk-vue-patterns",
+   "name": "clerk-vue-patterns",
+   "source": "clerk/skills",
+   "path": "skills/clerk-vue-patterns",
+   "title": "Clerk Vue Patterns",
+   "summary": "Implement Clerk authentication patterns in Vue apps."
+  },
+  {
+   "id": "clerk-react-patterns",
+   "name": "clerk-react-patterns",
+   "source": "clerk/skills",
+   "path": "skills/clerk-react-patterns",
+   "title": "Clerk React Patterns",
+   "summary": "Implement Clerk authentication patterns in React apps."
+  },
+  {
+   "id": "clerk-astro-patterns",
+   "name": "clerk-astro-patterns",
+   "source": "clerk/skills",
+   "path": "skills/clerk-astro-patterns",
+   "title": "Clerk Astro Patterns",
+   "summary": "Implement Clerk authentication patterns in Astro apps."
+  },
+  {
+   "id": "clerk-react-router-patterns",
+   "name": "clerk-react-router-patterns",
+   "source": "clerk/skills",
+   "path": "skills/clerk-react-router-patterns",
+   "title": "Clerk React Router Patterns",
+   "summary": "Implement Clerk authentication patterns with React Router."
+  },
+  {
+   "id": "clerk-tanstack-patterns",
+   "name": "clerk-tanstack-patterns",
+   "source": "clerk/skills",
+   "path": "skills/clerk-tanstack-patterns",
+   "title": "Clerk TanStack Start Patterns",
+   "summary": "Implement Clerk authentication patterns with TanStack Start."
+  },
+  {
+   "id": "clerk-chrome-extension-patterns",
+   "name": "clerk-chrome-extension-patterns",
+   "source": "clerk/skills",
+   "path": "skills/clerk-chrome-extension-patterns",
+   "title": "Clerk Chrome Extension Patterns",
+   "summary": "Implement Clerk authentication patterns in Chrome extensions."
+  },
+  {
+   "id": "migrate-to-vinext",
+   "name": "migrate-to-vinext",
+   "source": "cloudflare/vinext",
+   "path": ".agents/skills/migrate-to-vinext",
+   "title": "Migrate to Vinext",
+   "summary": "Migrate Vite applications to Cloudflare Vinext patterns."
+  },
+  {
+   "id": "cloudflare",
+   "name": "cloudflare",
+   "source": "cloudflare/skills",
+   "path": "skills/cloudflare",
+   "title": "Cloudflare",
+   "summary": "Build and deploy on the Cloudflare platform."
+  },
+  {
+   "id": "cloudflare-wrangler",
+   "name": "wrangler",
+   "source": "cloudflare/skills",
+   "path": "skills/wrangler",
+   "title": "Cloudflare Wrangler",
+   "summary": "Use Wrangler CLI for Cloudflare Workers development."
+  },
+  {
+   "id": "cloudflare-workers-best-practices",
+   "name": "workers-best-practices",
+   "source": "cloudflare/skills",
+   "path": "skills/workers-best-practices",
+   "title": "Cloudflare Workers Best Practices",
+   "summary": "Build Cloudflare Workers following best practices."
+  },
+  {
+   "id": "cloudflare-web-perf",
+   "name": "web-perf",
+   "source": "cloudflare/skills",
+   "path": "skills/web-perf",
+   "title": "Cloudflare Web Performance",
+   "summary": "Optimize web performance with Cloudflare."
+  },
+  {
+   "id": "cloudflare-durable-objects",
+   "name": "durable-objects",
+   "source": "cloudflare/skills",
+   "path": "skills/durable-objects",
+   "title": "Cloudflare Durable Objects",
+   "summary": "Build stateful applications with Cloudflare Durable Objects."
+  },
+  {
+   "id": "cloudflare-agents-sdk",
+   "name": "agents-sdk",
+   "source": "cloudflare/skills",
+   "path": "skills/agents-sdk",
+   "title": "Cloudflare Agents SDK",
+   "summary": "Build AI agents with the Cloudflare Agents SDK."
+  },
+  {
+   "id": "deno-frontend",
+   "name": "deno-frontend",
+   "source": "denoland/skills",
+   "path": "skills/deno-frontend",
+   "title": "Deno Frontend",
+   "summary": "Build frontend applications with Deno."
+  },
+  {
+   "id": "deno-deploy",
+   "name": "deno-deploy",
+   "source": "denoland/skills",
+   "path": "skills/deno-deploy",
+   "title": "Deno Deploy",
+   "summary": "Deploy applications to Deno Deploy."
+  },
+  {
+   "id": "deno-sandbox",
+   "name": "deno-sandbox",
+   "source": "denoland/skills",
+   "path": "skills/deno-sandbox",
+   "title": "Deno Sandbox",
+   "summary": "Use Deno sandbox for secure code execution."
+  },
+  {
+   "id": "deno-typescript",
+   "name": "deno-typescript",
+   "source": "mindrally/skills",
+   "path": "deno-typescript",
+   "title": "Deno TypeScript",
+   "summary": "Write TypeScript applications for the Deno runtime."
+  },
+  {
+   "id": "expo-dev-client",
+   "name": "expo-dev-client",
+   "source": "expo/skills",
+   "path": "plugins/expo/skills/expo-dev-client",
+   "title": "Expo Dev Client",
+   "summary": "Configure and use Expo development client."
+  },
+  {
+   "id": "gsap-core",
+   "name": "gsap-core",
+   "source": "greensock/gsap-skills",
+   "path": "skills/gsap-core",
+   "title": "GSAP Core",
+   "summary": "Animate with GSAP core tweens and timelines."
+  },
+  {
+   "id": "gsap-scrolltrigger",
+   "name": "gsap-scrolltrigger",
+   "source": "greensock/gsap-skills",
+   "path": "skills/gsap-scrolltrigger",
+   "title": "GSAP ScrollTrigger",
+   "summary": "Create scroll-driven animations with GSAP ScrollTrigger."
+  },
+  {
+   "id": "gsap-performance",
+   "name": "gsap-performance",
+   "source": "greensock/gsap-skills",
+   "path": "skills/gsap-performance",
+   "title": "GSAP Performance",
+   "summary": "Optimize GSAP animation performance."
+  },
+  {
+   "id": "gsap-plugins",
+   "name": "gsap-plugins",
+   "source": "greensock/gsap-skills",
+   "path": "skills/gsap-plugins",
+   "title": "GSAP Plugins",
+   "summary": "Use GSAP plugins for advanced animation effects."
+  },
+  {
+   "id": "gsap-timeline",
+   "name": "gsap-timeline",
+   "source": "greensock/gsap-skills",
+   "path": "skills/gsap-timeline",
+   "title": "GSAP Timeline",
+   "summary": "Sequence complex animations with GSAP timelines."
+  },
+  {
+   "id": "gsap-utils",
+   "name": "gsap-utils",
+   "source": "greensock/gsap-skills",
+   "path": "skills/gsap-utils",
+   "title": "GSAP Utilities",
+   "summary": "Use GSAP utility methods for common animation tasks."
+  },
+  {
+   "id": "gsap-frameworks",
+   "name": "gsap-frameworks",
+   "source": "greensock/gsap-skills",
+   "path": "skills/gsap-frameworks",
+   "title": "GSAP Frameworks",
+   "summary": "Integrate GSAP with React, Vue, and other frameworks."
+  },
+  {
+   "id": "gsap-react",
+   "name": "gsap-react",
+   "source": "greensock/gsap-skills",
+   "path": "skills/gsap-react",
+   "title": "GSAP React",
+   "summary": "Use GSAP animations in React applications."
+  },
+  {
+   "id": "java-docs",
+   "name": "java-docs",
+   "source": "github/awesome-copilot",
+   "path": "skills/java-docs",
+   "title": "Java Documentation",
+   "summary": "Write and maintain Java documentation."
+  },
+  {
+   "id": "java-coding-standards",
+   "name": "java-coding-standards",
+   "source": "affaan-m/everything-claude-code",
+   "path": "skills/java-coding-standards",
+   "title": "Java Coding Standards",
+   "summary": "Follow Java coding standards and conventions."
+  },
+  {
+   "id": "java-springboot",
+   "name": "java-springboot",
+   "source": "github/awesome-copilot",
+   "path": "skills/java-springboot",
+   "title": "Java Spring Boot",
+   "summary": "Build Spring Boot applications following best practices."
+  },
+  {
+   "id": "kotlin-cocoapods-spm-migration",
+   "name": "kotlin-tooling-cocoapods-spm-migration",
+   "source": "Kotlin/kotlin-agent-skills",
+   "path": "skills/kotlin-tooling-cocoapods-spm-migration",
+   "title": "Kotlin CocoaPods/SPM Migration",
+   "summary": "Migrate Kotlin Multiplatform from CocoaPods to SPM."
+  },
+  {
+   "id": "kotlin-agp9-migration",
+   "name": "kotlin-tooling-agp9-migration",
+   "source": "Kotlin/kotlin-agent-skills",
+   "path": "skills/kotlin-tooling-agp9-migration",
+   "title": "Kotlin AGP 9 Migration",
+   "summary": "Migrate Kotlin projects to Android Gradle Plugin 9."
+  },
+  {
+   "id": "nestjs-best-practices",
+   "name": "nestjs-best-practices",
+   "source": "kadajett/agent-nestjs-skills",
+   "path": "skills/nestjs-best-practices",
+   "title": "NestJS Best Practices",
+   "summary": "Build NestJS applications following best practices."
+  },
+  {
+   "id": "nuxt",
+   "name": "nuxt",
+   "source": "antfu/skills",
+   "path": "skills/nuxt",
+   "title": "Nuxt",
+   "summary": "Build Nuxt applications following best practices."
+  },
+  {
+   "id": "oxlint",
+   "name": "oxlint",
+   "source": "delexw/claude-code-misc",
+   "path": "skills/oxlint",
+   "title": "OxLint",
+   "summary": "Configure and use OxLint for fast JavaScript/TypeScript linting."
+  },
+  {
+   "id": "vue-pinia-best-practices",
+   "name": "vue-pinia-best-practices",
+   "source": "vuejs-ai/skills",
+   "path": "skills/vue-pinia-best-practices",
+   "title": "Vue Pinia Best Practices",
+   "summary": "Use Pinia state management in Vue apps following best practices."
+  },
+  {
+   "id": "python-testing-patterns",
+   "name": "python-testing-patterns",
+   "source": "wshobson/agents",
+   "path": "plugins/python-development/skills/python-testing-patterns",
+   "title": "Python Testing Patterns",
+   "summary": "Apply robust Python testing patterns and workflows."
+  },
+  {
+   "id": "fastapi-templates",
+   "name": "fastapi-templates",
+   "source": "wshobson/agents",
+   "path": "plugins/api-scaffolding/skills/fastapi-templates",
+   "title": "FastAPI Templates",
+   "summary": "Build FastAPI services using proven templates and patterns."
+  },
+  {
+   "id": "fastapi-python",
+   "name": "fastapi-python",
+   "source": "mindrally/skills",
+   "path": "fastapi-python",
+   "title": "FastAPI Python",
+   "summary": "Develop FastAPI applications in Python."
+  },
+  {
+   "id": "django-expert",
+   "name": "django-expert",
+   "source": "vintasoftware/django-ai-plugins",
+   "path": "skills/django-expert",
+   "title": "Django Expert",
+   "summary": "Apply expert Django development practices."
+  },
+  {
+   "id": "django-patterns",
+   "name": "django-patterns",
+   "source": "affaan-m/everything-claude-code",
+   "path": "skills/django-patterns",
+   "title": "Django Patterns",
+   "summary": "Use effective Django application patterns."
+  },
+  {
+   "id": "django-security",
+   "name": "django-security",
+   "source": "affaan-m/everything-claude-code",
+   "path": "skills/django-security",
+   "title": "Django Security",
+   "summary": "Harden Django applications using security best practices."
+  },
+  {
+   "id": "pandas-pro",
+   "name": "pandas-pro",
+   "source": "jeffallan/claude-skills",
+   "path": "plugin/skills/pandas-pro",
+   "title": "Pandas Pro",
+   "summary": "Analyze and transform data with Pandas."
+  },
+  {
+   "id": "scikit-learn",
+   "name": "scikit-learn",
+   "source": "davila7/claude-code-templates",
+   "path": "cli-tool/components/skills/scientific/scikit-learn",
+   "title": "Scikit-Learn",
+   "summary": "Build machine learning workflows with scikit-learn."
+  },
+  {
+   "id": "python-background-jobs",
+   "name": "python-background-jobs",
+   "source": "wshobson/agents",
+   "path": "plugins/python-development/skills/python-background-jobs",
+   "title": "Python Background Jobs",
+   "summary": "Build background job systems in Python."
+  },
+  {
+   "id": "python-patterns",
+   "name": "python-patterns",
+   "source": "affaan-m/everything-claude-code",
+   "path": "skills/python-patterns",
+   "title": "Python Patterns",
+   "summary": "Apply effective Python development patterns."
+  },
+  {
+   "id": "playwright-best-practices",
+   "name": "playwright-best-practices",
+   "source": "currents-dev/playwright-best-practices-skill",
+   "path": "playwright-best-practices",
+   "title": "Playwright Best Practices",
+   "summary": "Write reliable end-to-end tests with Playwright."
+  },
+  {
+   "id": "prisma-client-api",
+   "name": "prisma-client-api",
+   "source": "prisma/skills",
+   "path": "prisma-client-api",
+   "title": "Prisma Client API",
+   "summary": "Use the Prisma Client API for type-safe database queries."
+  },
+  {
+   "id": "prisma-cli",
+   "name": "prisma-cli",
+   "source": "prisma/skills",
+   "path": "prisma-cli",
+   "title": "Prisma CLI",
+   "summary": "Use the Prisma CLI for database management."
+  },
+  {
+   "id": "vercel-react-best-practices",
+   "name": "vercel-react-best-practices",
+   "source": "vercel-labs/agent-skills",
+   "path": "skills/react-best-practices",
+   "title": "React Best Practices",
+   "summary": "Build React applications following Vercel best practices."
+  },
+  {
+   "id": "vercel-composition-patterns",
+   "name": "vercel-composition-patterns",
+   "source": "vercel-labs/agent-skills",
+   "path": "skills/composition-patterns",
+   "title": "React Composition Patterns",
+   "summary": "Use React composition patterns for scalable architectures."
+  },
+  {
+   "id": "zod",
+   "name": "zod",
+   "source": "pproenca/dot-skills",
+   "path": "skills/.curated/zod",
+   "title": "Zod",
+   "summary": "Use Zod schemas for type-safe validation and parsing."
+  },
+  {
+   "id": "chrome-extension-development",
+   "name": "chrome-extension-development",
+   "source": "mindrally/skills",
+   "path": "chrome-extension-development",
+   "title": "Chrome Extension Development",
+   "summary": "Build Chrome extensions using manifest and extension platform best practices."
+  },
+  {
+   "id": "threejs-animation",
+   "name": "threejs-animation",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-animation",
+   "title": "Three.js Animation",
+   "summary": "Create animation systems and motion patterns in Three.js."
+  },
+  {
+   "id": "threejs-fundamentals",
+   "name": "threejs-fundamentals",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-fundamentals",
+   "title": "Three.js Fundamentals",
+   "summary": "Apply core Three.js scene, camera, renderer, and object patterns."
+  },
+  {
+   "id": "threejs-shaders",
+   "name": "threejs-shaders",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-shaders",
+   "title": "Three.js Shaders",
+   "summary": "Build custom shader materials and GLSL effects in Three.js."
+  },
+  {
+   "id": "threejs-geometry",
+   "name": "threejs-geometry",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-geometry",
+   "title": "Three.js Geometry",
+   "summary": "Work with geometry, buffers, and mesh construction in Three.js."
+  },
+  {
+   "id": "threejs-interaction",
+   "name": "threejs-interaction",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-interaction",
+   "title": "Three.js Interaction",
+   "summary": "Add picking, controls, and interactive behavior to Three.js scenes."
+  },
+  {
+   "id": "threejs-materials",
+   "name": "threejs-materials",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-materials",
+   "title": "Three.js Materials",
+   "summary": "Use materials and rendering properties effectively in Three.js."
+  },
+  {
+   "id": "threejs-postprocessing",
+   "name": "threejs-postprocessing",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-postprocessing",
+   "title": "Three.js Postprocessing",
+   "summary": "Implement postprocessing pipelines and visual effects in Three.js."
+  },
+  {
+   "id": "threejs-lighting",
+   "name": "threejs-lighting",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-lighting",
+   "title": "Three.js Lighting",
+   "summary": "Design lighting setups and illumination models in Three.js."
+  },
+  {
+   "id": "threejs-textures",
+   "name": "threejs-textures",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-textures",
+   "title": "Three.js Textures",
+   "summary": "Load, configure, and optimize textures in Three.js."
+  },
+  {
+   "id": "threejs-loaders",
+   "name": "threejs-loaders",
+   "source": "cloudai-x/threejs-skills",
+   "path": "skills/threejs-loaders",
+   "title": "Three.js Loaders",
+   "summary": "Load models and assets with Three.js loaders."
+  },
+  {
+   "id": "bun",
+   "name": "bun",
+   "source": "midudev/autoskills",
+   "path": "packages/autoskills/skills-registry/bun",
+   "title": "Bun",
+   "summary": "Use Bun for JavaScript runtime, package management, and tooling workflows."
+  },
+  {
+   "id": "remotion-best-practices",
+   "name": "remotion-best-practices",
+   "source": "remotion-dev/skills",
+   "path": "skills/remotion-best-practices",
+   "title": "Remotion Best Practices",
+   "summary": "Create programmatic videos with Remotion following best practices."
+  },
+  {
+   "id": "stripe-best-practices",
+   "name": "stripe-best-practices",
+   "source": "stripe/ai",
+   "path": "skills/stripe-best-practices",
+   "title": "Stripe Best Practices",
+   "summary": "Implement Stripe payments following recommended practices."
+  },
+  {
+   "id": "supabase-postgres-best-practices",
+   "name": "supabase-postgres-best-practices",
+   "source": "supabase/agent-skills",
+   "path": "skills/supabase-postgres-best-practices",
+   "title": "Supabase Postgres Best Practices",
+   "summary": "Use Supabase Postgres following best practices."
+  },
+  {
+   "id": "svelte-code-writer",
+   "name": "svelte-code-writer",
+   "source": "sveltejs/ai-tools",
+   "path": "packages/opencode/skills/svelte-code-writer",
+   "title": "Svelte Code Writer",
+   "summary": "Generate Svelte code with AI-assisted tooling."
+  },
+  {
+   "id": "swiftui-expert",
+   "name": "swiftui-expert-skill",
+   "source": "avdlee/swiftui-agent-skill",
+   "path": "skills/swiftui-expert-skill",
+   "title": "SwiftUI Expert",
+   "summary": "Build SwiftUI applications with expert-level patterns."
+  },
+  {
+   "id": "tauri-v2",
+   "name": "tauri-v2",
+   "source": "delexw/claude-code-misc",
+   "path": "skills/tauri-v2",
+   "title": "Tauri v2",
+   "summary": "Build desktop applications with Tauri v2."
+  },
+  {
+   "id": "turborepo",
+   "name": "turborepo",
+   "source": "vercel/turborepo",
+   "path": "skills/turborepo",
+   "title": "Turborepo",
+   "summary": "Configure and optimize Turborepo monorepos."
+  },
+  {
+   "id": "ai-sdk",
+   "name": "ai-sdk",
+   "source": "vercel/ai",
+   "path": "skills/ai-sdk",
+   "title": "Vercel AI SDK",
+   "summary": "Build AI-powered applications with the Vercel AI SDK."
+  },
+  {
+   "id": "vite",
+   "name": "vite",
+   "source": "antfu/skills",
+   "path": "skills/vite",
+   "title": "Vite",
+   "summary": "Configure and optimize Vite build tooling."
+  },
+  {
+   "id": "vitest",
+   "name": "vitest",
+   "source": "antfu/skills",
+   "path": "skills/vitest",
+   "title": "Vitest",
+   "summary": "Write and run tests with Vitest."
+  },
+  {
+   "id": "hyf0-vue-best-practices",
+   "name": "vue-best-practices",
+   "source": "hyf0/vue-skills",
+   "path": "skills/vue-best-practices",
+   "title": "Vue Best Practices (hyf0)",
+   "summary": "Build Vue applications following community best practices."
+  },
+  {
+   "id": "vue-debug-guides",
+   "name": "vue-debug-guides",
+   "source": "hyf0/vue-skills",
+   "path": "skills/vue-debug-guides",
+   "title": "Vue Debug Guides",
+   "summary": "Debug Vue applications effectively."
+  },
+  {
+   "id": "vue",
+   "name": "vue",
+   "source": "antfu/skills",
+   "path": "skills/vue",
+   "title": "Vue (antfu)",
+   "summary": "Build Vue applications with antfu's patterns and tooling."
+  },
+  {
+   "id": "wp-plugin-development",
+   "name": "wp-plugin-development",
+   "source": "wordpress/agent-skills",
+   "path": "skills/wp-plugin-development",
+   "title": "WordPress Plugin Development",
+   "summary": "Develop WordPress plugins following best practices."
+  },
+  {
+   "id": "wp-rest-api",
+   "name": "wp-rest-api",
+   "source": "wordpress/agent-skills",
+   "path": "skills/wp-rest-api",
+   "title": "WordPress REST API",
+   "summary": "Build and consume the WordPress REST API."
+  },
+  {
+   "id": "wp-block-themes",
+   "name": "wp-block-themes",
+   "source": "wordpress/agent-skills",
+   "path": "skills/wp-block-themes",
+   "title": "WordPress Block Themes",
+   "summary": "Create WordPress block-based themes."
+  },
+  {
+   "id": "wp-block-development",
+   "name": "wp-block-development",
+   "source": "wordpress/agent-skills",
+   "path": "skills/wp-block-development",
+   "title": "WordPress Block Development",
+   "summary": "Develop custom WordPress Gutenberg blocks."
+  },
+  {
+   "id": "wp-performance",
+   "name": "wp-performance",
+   "source": "wordpress/agent-skills",
+   "path": "skills/wp-performance",
+   "title": "WordPress Performance",
+   "summary": "Optimize WordPress site performance."
+  },
+  {
+   "id": "wordpress-router",
+   "name": "wordpress-router",
+   "source": "wordpress/agent-skills",
+   "path": "skills/wordpress-router",
+   "title": "WordPress Router",
+   "summary": "Use WordPress routing and URL handling."
+  },
+  {
+   "id": "wp-project-triage",
+   "name": "wp-project-triage",
+   "source": "wordpress/agent-skills",
+   "path": "skills/wp-project-triage",
+   "title": "WordPress Project Triage",
+   "summary": "Triage and debug WordPress project issues."
+  },
+  {
+   "id": "wp-wpcli-and-ops",
+   "name": "wp-wpcli-and-ops",
+   "source": "wordpress/agent-skills",
+   "path": "skills/wp-wpcli-and-ops",
+   "title": "WordPress WP-CLI & Ops",
+   "summary": "Use WP-CLI for WordPress operations and management."
+  },
+  {
+   "id": "grpc-api",
+   "name": "grpc-api",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/grpc-api",
+   "title": "gRPC API Development",
+   "summary": "Designs and implements gRPC APIs with Protocol Buffers."
+  },
+  {
+   "id": "go-development",
+   "name": "go-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/go-development",
+   "title": "Go Development",
+   "summary": "Develops and reviews Go packages, commands, and services."
+  },
+  {
+   "id": "ruby-development",
+   "name": "ruby-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/ruby-development",
+   "title": "Ruby Development",
+   "summary": "Guides Ruby application, library, and gem development."
+  },
+  {
+   "id": "php-development",
+   "name": "php-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/php-development",
+   "title": "PHP Development",
+   "summary": "Develop and maintain PHP applications with Composer, typed code, and automated tests."
+  },
+  {
+   "id": "elixir-development",
+   "name": "elixir-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/elixir-development",
+   "title": "Elixir Development",
+   "summary": "Build and maintain Elixir applications with Mix, OTP, Phoenix, and Ecto."
+  },
+  {
+   "id": "zig-development",
+   "name": "zig-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/zig-development",
+   "title": "Zig Development",
+   "summary": "Build, test, and migrate Zig systems code with explicit memory ownership and error handling."
+  },
+  {
+   "id": "express-api",
+   "name": "express-api",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/express-api",
+   "title": "Express.js API",
+   "summary": "Build and maintain HTTP APIs with Express, including routing, validation, and error handling."
+  },
+  {
+   "id": "rails-development",
+   "name": "rails-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/rails-development",
+   "title": "Ruby on Rails",
+   "summary": "Guides Rails application development across controllers, Active Record, and Active Job."
+  },
+  {
+   "id": "jest-testing",
+   "name": "jest-testing",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/jest-testing",
+   "title": "Jest Testing",
+   "summary": "Writes and debugs Jest tests for JavaScript and TypeScript."
+  },
+  {
+   "id": "cypress-e2e",
+   "name": "cypress-e2e",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/cypress-e2e",
+   "title": "Cypress E2E Testing",
+   "summary": "Write and debug Cypress end-to-end tests for browser workflows."
+  },
+  {
+   "id": "testing-library",
+   "name": "testing-library",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/testing-library",
+   "title": "Testing Library",
+   "summary": "Test web interfaces with Testing Library queries, user interactions, and async assertions."
+  },
+  {
+   "id": "kubernetes-orchestration",
+   "name": "kubernetes-orchestration",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/kubernetes-orchestration",
+   "title": "Kubernetes Orchestration",
+   "summary": "Deploy, configure, and troubleshoot Kubernetes workloads and services."
+  },
+  {
+   "id": "helm-charts",
+   "name": "helm-charts",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/helm-charts",
+   "title": "Helm Charts",
+   "summary": "Authors, validates, and upgrades Helm charts for Kubernetes."
+  },
+  {
+   "id": "solidjs-development",
+   "name": "solidjs-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/solidjs-development",
+   "title": "Solid.js Development",
+   "summary": "Build and debug SolidJS interfaces and SolidStart routes using fine-grained reactivity."
+  },
+  {
+   "id": "qwik-development",
+   "name": "qwik-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/qwik-development",
+   "title": "Qwik Development",
+   "summary": "Guides development of resumable Qwik apps and server-backed routes."
+  },
+  {
+   "id": "swift-ios-development",
+   "name": "swift-ios-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/swift-ios-development",
+   "title": "Swift/iOS Development",
+   "summary": "Build and maintain Swift apps with SwiftUI, UIKit, structured concurrency, and Swift Package Manager."
+  },
+  {
+   "id": "eslint-config",
+   "name": "eslint-config",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/eslint-config",
+   "title": "ESLint Configuration",
+   "summary": "Configure ESLint for JavaScript and TypeScript, including typed linting, plugins, and custom rules."
+  },
+  {
+   "id": "prettier-formatting",
+   "name": "prettier-formatting",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/prettier-formatting",
+   "title": "Prettier Formatting",
+   "summary": "Configures Prettier and verifies consistent formatting across editors, hooks, and CI."
+  },
+  {
+   "id": "postgresql-development",
+   "name": "postgresql-development",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/postgresql-development",
+   "title": "PostgreSQL Development",
+   "summary": "Guides PostgreSQL schema design, query tuning, and database operations."
+  },
+  {
+   "id": "tensorflow-ml",
+   "name": "tensorflow-ml",
+   "source": "Kasakir-AI/agent-sync-skills",
+   "path": "skills/tensorflow-ml",
+   "title": "TensorFlow ML",
+   "summary": "Train, evaluate, and export TensorFlow models with Keras and tf.data."
+  }
+ ],
+ "technologies": [
+  {
+   "id": "rust",
+   "name": "Rust",
+   "skills": [
+    "rust-async-patterns"
+   ],
+   "detect": {
+    "files": [
+     "Cargo.toml"
+    ]
+   }
+  },
+  {
+   "id": "python",
+   "name": "Python",
+   "skills": [
+    "python-testing-patterns"
+   ],
+   "detect": {
+    "files": [
+     "pyproject.toml",
+     "uv.lock",
+     "poetry.lock",
+     "requirements.txt",
+     "setup.py",
+     "setup.cfg",
+     "Pipfile"
+    ]
+   }
+  },
+  {
+   "id": "fastapi",
+   "name": "FastAPI",
+   "skills": [
+    "fastapi-templates",
+    "fastapi-python"
+   ],
+   "detect": {
+    "packages": [
+     "fastapi"
+    ],
+    "content": {
+     "files": [
+      "setup.py",
+      "setup.cfg"
+     ],
+     "patterns": [
+      "fastapi",
+      "FastAPI"
+     ]
+    }
+   }
+  },
+  {
+   "id": "django",
+   "name": "Django",
+   "skills": [
+    "django-expert",
+    "django-patterns",
+    "django-security"
+   ],
+   "detect": {
+    "packages": [
+     "django"
+    ],
+    "files": [
+     "manage.py"
+    ],
+    "content": {
+     "files": [
+      "setup.py",
+      "setup.cfg"
+     ],
+     "patterns": [
+      "django",
+      "Django"
+     ]
+    }
+   }
+  },
+  {
+   "id": "pytest",
+   "name": "Pytest",
+   "skills": [
+    "python-testing-patterns"
+   ],
+   "detect": {
+    "packages": [
+     "pytest"
+    ],
+    "content": {
+     "files": [
+      "setup.py",
+      "setup.cfg"
+     ],
+     "patterns": [
+      "pytest",
+      "Pytest"
+     ]
+    }
+   }
+  },
+  {
+   "id": "pandas",
+   "name": "Pandas",
+   "skills": [
+    "pandas-pro"
+   ],
+   "detect": {
+    "packages": [
+     "pandas"
+    ],
+    "content": {
+     "files": [
+      "setup.py",
+      "setup.cfg"
+     ],
+     "patterns": [
+      "pandas",
+      "Pandas"
+     ]
+    }
+   }
+  },
+  {
+   "id": "scikit_learn",
+   "name": "Scikit-Learn",
+   "skills": [
+    "scikit-learn"
+   ],
+   "detect": {
+    "packages": [
+     "scikit-learn",
+     "sklearn"
+    ],
+    "content": {
+     "files": [
+      "setup.py",
+      "setup.cfg"
+     ],
+     "patterns": [
+      "scikit-learn",
+      "scikit_learn",
+      "sklearn"
+     ]
+    }
+   }
+  },
+  {
+   "id": "celery",
+   "name": "Celery",
+   "skills": [
+    "python-background-jobs"
+   ],
+   "detect": {
+    "packages": [
+     "celery"
+    ],
+    "content": {
+     "files": [
+      "setup.py",
+      "setup.cfg"
+     ],
+     "patterns": [
+      "celery",
+      "Celery"
+     ]
+    }
+   }
+  },
+  {
+   "id": "requests",
+   "name": "Requests",
+   "skills": [
+    "python-patterns"
+   ],
+   "detect": {
+    "packages": [
+     "requests"
+    ],
+    "content": {
+     "files": [
+      "setup.py",
+      "setup.cfg"
+     ],
+     "patterns": [
+      "requests",
+      "Requests"
+     ]
+    }
+   }
+  },
+  {
+   "id": "go",
+   "name": "Go",
+   "skills": [
+    "go-development"
+   ],
+   "detect": {
+    "files": [
+     "go.mod",
+     "go.sum"
+    ],
+    "extensions": [
+     ".go"
+    ]
+   }
+  },
+  {
+   "id": "ruby",
+   "name": "Ruby",
+   "skills": [
+    "ruby-development"
+   ],
+   "detect": {
+    "files": [
+     "Gemfile",
+     "Gemfile.lock",
+     ".ruby-version"
+    ]
+   }
+  },
+  {
+   "id": "php",
+   "name": "PHP",
+   "skills": [
+    "php-development"
+   ],
+   "detect": {
+    "files": [
+     "composer.json",
+     "composer.lock"
+    ],
+    "extensions": [
+     ".php"
+    ]
+   }
+  },
+  {
+   "id": "elixir",
+   "name": "Elixir",
+   "skills": [
+    "elixir-development"
+   ],
+   "detect": {
+    "files": [
+     "mix.exs",
+     "mix.lock"
+    ]
+   }
+  },
+  {
+   "id": "zig",
+   "name": "Zig",
+   "skills": [
+    "zig-development"
+   ],
+   "detect": {
+    "files": [
+     "build.zig",
+     "build.zig.zon"
+    ]
+   }
+  },
+  {
+   "id": "express",
+   "name": "Express.js",
+   "skills": [
+    "express-api"
+   ],
+   "detect": {
+    "packages": [
+     "express"
+    ]
+   }
+  },
+  {
+   "id": "rails",
+   "name": "Ruby on Rails",
+   "skills": [
+    "rails-development"
+   ],
+   "detect": {
+    "files": [
+     "Gemfile",
+     "config/routes.rb",
+     "Rakefile"
+    ],
+    "content": {
+     "files": [
+      "Gemfile"
+     ],
+     "patterns": [
+      "rails"
+     ]
+    }
+   }
+  },
+  {
+   "id": "jest",
+   "name": "Jest",
+   "skills": [
+    "jest-testing"
+   ],
+   "detect": {
+    "packages": [
+     "jest"
+    ],
+    "files": [
+     "jest.config.js",
+     "jest.config.ts",
+     "jest.config.cjs",
+     "jest.config.mjs"
+    ]
+   }
+  },
+  {
+   "id": "cypress",
+   "name": "Cypress",
+   "skills": [
+    "cypress-e2e"
+   ],
+   "detect": {
+    "packages": [
+     "cypress"
+    ],
+    "files": [
+     "cypress.config.js",
+     "cypress.config.ts",
+     "cypress/"
+    ]
+   }
+  },
+  {
+   "id": "testing_library",
+   "name": "Testing Library",
+   "skills": [
+    "testing-library"
+   ],
+   "detect": {
+    "packages": [
+     "@testing-library/react",
+     "@testing-library/vue",
+     "@testing-library/svelte",
+     "@testing-library/dom",
+     "@testing-library/jest-dom"
+    ]
+   }
+  },
+  {
+   "id": "kubernetes",
+   "name": "Kubernetes",
+   "skills": [
+    "kubernetes-orchestration"
+   ],
+   "detect": {
+    "files": [
+     "kustomization.yaml",
+     "kustomization.yml"
+    ]
+   }
+  },
+  {
+   "id": "helm",
+   "name": "Helm",
+   "skills": [
+    "helm-charts"
+   ],
+   "detect": {
+    "files": [
+     "Chart.yaml"
+    ]
+   }
+  },
+  {
+   "id": "solidjs",
+   "name": "Solid.js",
+   "skills": [
+    "solidjs-development"
+   ],
+   "detect": {
+    "packages": [
+     "solid-js"
+    ],
+    "files": [
+     "solid-start.config.ts",
+     "solid-start.config.js"
+    ]
+   }
+  },
+  {
+   "id": "qwik",
+   "name": "Qwik",
+   "skills": [
+    "qwik-development"
+   ],
+   "detect": {
+    "packages": [
+     "@builder.io/qwik"
+    ]
+   }
+  },
+  {
+   "id": "swift_ios",
+   "name": "Swift/iOS",
+   "skills": [
+    "swift-ios-development"
+   ],
+   "detect": {
+    "extensions": [
+     ".swift"
+    ]
+   }
+  },
+  {
+   "id": "eslint",
+   "name": "ESLint",
+   "skills": [
+    "eslint-config"
+   ],
+   "detect": {
+    "packages": [
+     "eslint"
+    ],
+    "files": [
+     "eslint.config.js",
+     "eslint.config.mjs",
+     "eslint.config.cjs",
+     ".eslintrc.json",
+     ".eslintrc.js",
+     ".eslintrc.yml"
+    ]
+   }
+  },
+  {
+   "id": "prettier",
+   "name": "Prettier",
+   "skills": [
+    "prettier-formatting"
+   ],
+   "detect": {
+    "packages": [
+     "prettier"
+    ],
+    "files": [
+     ".prettierrc",
+     ".prettierrc.json",
+     ".prettierrc.yml",
+     ".prettierrc.js",
+     "prettier.config.js",
+     "prettier.config.mjs"
+    ]
+   }
+  },
+  {
+   "id": "postgresql",
+   "name": "PostgreSQL",
+   "skills": [
+    "postgresql-development"
+   ],
+   "detect": {
+    "packages": [
+     "pg",
+     "postgres",
+     "@vercel/postgres"
+    ]
+   }
+  },
+  {
+   "id": "tensorflow",
+   "name": "TensorFlow",
+   "skills": [
+    "tensorflow-ml"
+   ],
+   "detect": {
+    "packages": [
+     "@tensorflow/tfjs",
+     "@tensorflow/tfjs-node"
+    ]
+   }
+  },
+  {
+   "id": "astro",
+   "name": "Astro",
+   "skills": [
+    "frontend-design",
+    "accessibility",
+    "performance",
+    "core-web-vitals",
+    "seo",
+    "astrolicious-astro"
+   ],
+   "detect": {
+    "packages": [
+     "astro"
+    ],
+    "files": [
+     "astro.config.mjs",
+     "astro.config.js",
+     "astro.config.ts"
+    ]
+   }
+  },
+  {
+   "id": "github_actions",
+   "name": "GitHub Actions",
+   "skills": [
+    "github-actions",
+    "pinned-tag"
+   ],
+   "detect": {
+    "files": [
+     ".github/workflows"
+    ]
+   }
+  },
+  {
+   "id": "docker",
+   "name": "Docker",
+   "skills": [
+    "docker-expert"
+   ],
+   "detect": {
+    "files": [
+     "Dockerfile",
+     "compose.yml",
+     "compose.yaml",
+     "docker-compose.yml",
+     "docker-compose.yaml"
+    ]
+   }
+  },
+  {
+   "id": "make",
+   "name": "Make",
+   "skills": [
+    "makefile"
+   ],
+   "detect": {
+    "files": [
+     "Makefile",
+     "GNUmakefile"
+    ]
+   }
+  },
+  {
+   "id": "react",
+   "name": "React",
+   "skills": [
+    "vercel-react-best-practices",
+    "vercel-composition-patterns"
+   ],
+   "detect": {
+    "packages": [
+     "react",
+     "react-dom"
+    ]
+   }
+  },
+  {
+   "id": "react-hook-form",
+   "name": "React Hook Form",
+   "skills": [],
+   "detect": {
+    "packages": [
+     "react-hook-form"
+    ]
+   }
+  },
+  {
+   "id": "zod",
+   "name": "Zod",
+   "skills": [
+    "zod"
+   ],
+   "detect": {
+    "packages": [
+     "zod"
+    ]
+   }
+  },
+  {
+   "id": "nextjs",
+   "name": "Next.js",
+   "skills": [],
+   "detect": {
+    "packages": [
+     "next"
+    ],
+    "files": [
+     "next.config.js",
+     "next.config.mjs",
+     "next.config.ts"
+    ]
+   }
+  },
+  {
+   "id": "vue",
+   "name": "Vue",
+   "skills": [
+    "hyf0-vue-best-practices",
+    "vue-debug-guides",
+    "vue"
+   ],
+   "detect": {
+    "packages": [
+     "vue"
+    ]
+   }
+  },
+  {
+   "id": "nuxt",
+   "name": "Nuxt",
+   "skills": [
+    "nuxt"
+   ],
+   "detect": {
+    "packages": [
+     "nuxt"
+    ],
+    "files": [
+     "nuxt.config.js",
+     "nuxt.config.ts"
+    ]
+   }
+  },
+  {
+   "id": "pinia",
+   "name": "Pinia",
+   "skills": [
+    "vue-pinia-best-practices"
+   ],
+   "detect": {
+    "packages": [
+     "pinia"
+    ]
+   }
+  },
+  {
+   "id": "svelte",
+   "name": "Svelte",
+   "skills": [
+    "svelte-code-writer"
+   ],
+   "detect": {
+    "packages": [
+     "svelte",
+     "@sveltejs/kit"
+    ],
+    "files": [
+     "svelte.config.js"
+    ]
+   }
+  },
+  {
+   "id": "angular",
+   "name": "Angular",
+   "skills": [
+    "angular-developer",
+    "angular-reference-core",
+    "angular-reference-signal-forms",
+    "angular-reference-compiler-cli",
+    "angular-adev-writing-guide"
+   ],
+   "detect": {
+    "packages": [
+     "@angular/core"
+    ],
+    "files": [
+     "angular.json"
+    ]
+   }
+  },
+  {
+   "id": "shadcn",
+   "name": "shadcn/ui",
+   "skills": [],
+   "detect": {
+    "files": [
+     "components.json"
+    ]
+   }
+  },
+  {
+   "id": "supabase",
+   "name": "Supabase",
+   "skills": [
+    "supabase-postgres-best-practices"
+   ],
+   "detect": {
+    "packages": [
+     "@supabase/supabase-js",
+     "@supabase/ssr"
+    ]
+   }
+  },
+  {
+   "id": "playwright",
+   "name": "Playwright",
+   "skills": [
+    "playwright-best-practices",
+    "webapp-testing"
+   ],
+   "detect": {
+    "packages": [
+     "@playwright/test",
+     "playwright"
+    ],
+    "files": [
+     "playwright.config.ts",
+     "playwright.config.js",
+     "playwright.config.mjs"
+    ]
+   }
+  },
+  {
+   "id": "expo",
+   "name": "Expo",
+   "skills": [
+    "expo-dev-client"
+   ],
+   "detect": {
+    "packages": [
+     "expo"
+    ]
+   }
+  },
+  {
+   "id": "kotlin_multiplatform",
+   "name": "Kotlin Multiplatform",
+   "skills": [
+    "kotlin-cocoapods-spm-migration",
+    "kotlin-agp9-migration"
+   ],
+   "detect": {
+    "content": {
+     "files": [
+      "build.gradle",
+      "build.gradle.kts",
+      "settings.gradle",
+      "settings.gradle.kts"
+     ],
+     "patterns": [
+      "kotlin\\(\"multiplatform\"\\)",
+      "org\\.jetbrains\\.kotlin\\.multiplatform",
+      "id\\(\"org\\\\.jetbrains\\\\.kotlin\\\\.multiplatform\"\\)",
+      "kotlin-multiplatform"
+     ]
+    }
+   }
+  },
+  {
+   "id": "remotion",
+   "name": "Remotion",
+   "skills": [
+    "remotion-best-practices"
+   ],
+   "detect": {
+    "packages": [
+     "remotion",
+     "@remotion/cli"
+    ]
+   }
+  },
+  {
+   "id": "react_router",
+   "name": "React Router",
+   "skills": [
+    "vercel-react-best-practices"
+   ],
+   "detect": {
+    "packages": [
+     "react-router",
+     "@react-router/node",
+     "@react-router/dev",
+     "@react-router/serve"
+    ]
+   }
+  },
+  {
+   "id": "clerk",
+   "name": "Clerk",
+   "skills": [
+    "clerk",
+    "clerk-custom-ui",
+    "clerk-nextjs-patterns",
+    "clerk-orgs",
+    "clerk-webhooks",
+    "clerk-testing"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/nextjs",
+     "@clerk/remix",
+     "@clerk/astro",
+     "@clerk/express",
+     "@clerk/fastify",
+     "@clerk/nuxt",
+     "@clerk/vue",
+     "@clerk/react",
+     "@clerk/expo",
+     "@clerk/tanstack-react-start",
+     "@clerk/react-router",
+     "@clerk/chrome-extension",
+     "@clerk/backend"
+    ]
+   }
+  },
+  {
+   "id": "clerk-nextjs",
+   "name": "Clerk Next.js",
+   "skills": [
+    "clerk"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/nextjs"
+    ]
+   }
+  },
+  {
+   "id": "clerk-nuxt",
+   "name": "Clerk Nuxt",
+   "skills": [
+    "clerk"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/nuxt"
+    ]
+   }
+  },
+  {
+   "id": "clerk-vue",
+   "name": "Clerk Vue",
+   "skills": [
+    "clerk"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/vue"
+    ]
+   }
+  },
+  {
+   "id": "clerk-react",
+   "name": "Clerk React",
+   "skills": [
+    "clerk"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/react",
+     "@clerk/clerk-react"
+    ]
+   }
+  },
+  {
+   "id": "clerk-astro",
+   "name": "Clerk Astro",
+   "skills": [
+    "clerk"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/astro"
+    ]
+   }
+  },
+  {
+   "id": "clerk-expo",
+   "name": "Clerk Expo",
+   "skills": [
+    "clerk"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/expo",
+     "@clerk/clerk-expo"
+    ]
+   }
+  },
+  {
+   "id": "clerk-react-router",
+   "name": "Clerk React Router",
+   "skills": [
+    "clerk"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/react-router"
+    ]
+   }
+  },
+  {
+   "id": "clerk-tanstack",
+   "name": "Clerk TanStack Start",
+   "skills": [
+    "clerk"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/tanstack-react-start"
+    ]
+   }
+  },
+  {
+   "id": "clerk-chrome-extension",
+   "name": "Clerk Chrome Extension",
+   "skills": [
+    "clerk"
+   ],
+   "detect": {
+    "packages": [
+     "@clerk/chrome-extension"
+    ]
+   }
+  },
+  {
+   "id": "better_auth",
+   "name": "Better Auth",
+   "skills": [
+    "better-auth-best-practices",
+    "better-auth-email-password",
+    "better-auth-two-factor"
+   ],
+   "detect": {
+    "packages": [
+     "better-auth"
+    ]
+   }
+  },
+  {
+   "id": "turborepo",
+   "name": "Turborepo",
+   "skills": [
+    "turborepo"
+   ],
+   "detect": {
+    "packages": [
+     "turbo"
+    ],
+    "files": [
+     "turbo.json"
+    ]
+   }
+  },
+  {
+   "id": "vite",
+   "name": "Vite",
+   "skills": [
+    "vite"
+   ],
+   "detect": {
+    "packages": [
+     "vite"
+    ],
+    "files": [
+     "vite.config.js",
+     "vite.config.ts",
+     "vite.config.mjs"
+    ]
+   }
+  },
+  {
+   "id": "tanstack-start",
+   "name": "TanStack Start",
+   "skills": [],
+   "detect": {
+    "packages": [
+     "@tanstack/react-start",
+     "@tanstack/start"
+    ]
+   }
+  },
+  {
+   "id": "chrome-extension",
+   "name": "Chrome Extension",
+   "skills": [
+    "chrome-extension-development"
+   ],
+   "detect": {
+    "content": {
+     "files": [
+      "manifest.json"
+     ],
+     "patterns": [
+      "manifest_version"
+     ]
+    }
+   }
+  },
+  {
+   "id": "bun",
+   "name": "Bun",
+   "skills": [
+    "bun"
+   ],
+   "detect": {
+    "files": [
+     "bun.lockb",
+     "bun.lock",
+     "bunfig.toml"
+    ]
+   }
+  },
+  {
+   "id": "threejs",
+   "name": "Three.js",
+   "skills": [
+    "threejs-animation",
+    "threejs-fundamentals",
+    "threejs-shaders",
+    "threejs-geometry",
+    "threejs-interaction",
+    "threejs-materials",
+    "threejs-postprocessing",
+    "threejs-lighting",
+    "threejs-textures",
+    "threejs-loaders"
+   ],
+   "detect": {
+    "packages": [
+     "three"
+    ]
+   }
+  },
+  {
+   "id": "azure",
+   "name": "Azure",
+   "skills": [
+    "azure-ai",
+    "azure-diagnostics"
+   ],
+   "detect": {
+    "package_patterns": [
+     "^@azure/"
+    ]
+   }
+  },
+  {
+   "id": "vercel_ai",
+   "name": "Vercel AI SDK",
+   "skills": [
+    "ai-sdk"
+   ],
+   "detect": {
+    "packages": [
+     "ai",
+     "@ai-sdk/openai",
+     "@ai-sdk/anthropic",
+     "@ai-sdk/google",
+     "@ai-sdk/react"
+    ]
+   }
+  },
+  {
+   "id": "stripe",
+   "name": "Stripe",
+   "skills": [
+    "stripe-best-practices"
+   ],
+   "detect": {
+    "packages": [
+     "stripe",
+     "@stripe/stripe-js",
+     "@stripe/react-stripe-js"
+    ]
+   }
+  },
+  {
+   "id": "cloudflare",
+   "name": "Cloudflare",
+   "skills": [
+    "cloudflare",
+    "cloudflare-wrangler",
+    "cloudflare-workers-best-practices",
+    "cloudflare-web-perf"
+   ],
+   "detect": {
+    "packages": [
+     "wrangler",
+     "@cloudflare/workers-types",
+     "@astrojs/cloudflare"
+    ],
+    "files": [
+     "wrangler.toml",
+     "wrangler.json",
+     "wrangler.jsonc"
+    ]
+   }
+  },
+  {
+   "id": "cloudflare_durable_objects",
+   "name": "Cloudflare Durable Objects",
+   "skills": [
+    "cloudflare-durable-objects"
+   ],
+   "detect": {
+    "content": {
+     "files": [
+      "wrangler.json",
+      "wrangler.jsonc",
+      "wrangler.toml"
+     ],
+     "patterns": [
+      "durable_objects"
+     ]
+    }
+   }
+  },
+  {
+   "id": "cloudflare_agents",
+   "name": "Cloudflare Agents",
+   "skills": [
+    "cloudflare-agents-sdk"
+   ],
+   "detect": {
+    "packages": [
+     "agents"
+    ]
+   }
+  },
+  {
+   "id": "swiftui",
+   "name": "SwiftUI",
+   "skills": [
+    "swiftui-expert"
+   ],
+   "detect": {
+    "files": [
+     "Package.swift"
+    ]
+   }
+  },
+  {
+   "id": "oxlint",
+   "name": "OxLint",
+   "skills": [
+    "oxlint"
+   ],
+   "detect": {
+    "packages": [
+     "oxlint"
+    ],
+    "files": [
+     ".oxlintrc.json",
+     "oxlint.config.ts"
+    ]
+   }
+  },
+  {
+   "id": "gsap",
+   "name": "GSAP",
+   "skills": [
+    "gsap-core",
+    "gsap-scrolltrigger",
+    "gsap-performance",
+    "gsap-plugins",
+    "gsap-timeline",
+    "gsap-utils",
+    "gsap-frameworks"
+   ],
+   "detect": {
+    "packages": [
+     "gsap"
+    ]
+   }
+  },
+  {
+   "id": "deno",
+   "name": "Deno",
+   "skills": [
+    "deno-frontend",
+    "deno-deploy",
+    "deno-sandbox",
+    "deno-typescript"
+   ],
+   "detect": {
+    "files": [
+     "deno.json",
+     "deno.jsonc",
+     "deno.lock"
+    ]
+   }
+  },
+  {
+   "id": "wordpress",
+   "name": "WordPress",
+   "skills": [
+    "wp-plugin-development",
+    "wp-rest-api",
+    "wp-block-themes",
+    "wp-block-development",
+    "wp-performance",
+    "wordpress-router",
+    "wp-project-triage",
+    "wp-wpcli-and-ops"
+   ],
+   "detect": {
+    "files": [
+     "wp-config.php",
+     "wp-login.php"
+    ],
+    "package_patterns": [
+     "^@wordpress/"
+    ],
+    "content": {
+     "files": [
+      "composer.json",
+      "style.css"
+     ],
+     "patterns": [
+      "johnpbloch/wordpress",
+      "wpackagist",
+      "Theme Name:"
+     ]
+    }
+   }
+  },
+  {
+   "id": "java",
+   "name": "Java",
+   "skills": [
+    "java-docs",
+    "java-coding-standards"
+   ],
+   "detect": {
+    "files": [
+     "pom.xml"
+    ],
+    "content": {
+     "files": [
+      "build.gradle",
+      "build.gradle.kts",
+      "settings.gradle",
+      "settings.gradle.kts"
+     ],
+     "patterns": [
+      "sourceCompatibility",
+      "targetCompatibility",
+      "JavaVersion",
+      "id\\(\"java\"\\)",
+      "id 'java'",
+      "id\\(\"java-library\"\\)",
+      "id 'java-library'"
+     ]
+    }
+   }
+  },
+  {
+   "id": "springboot",
+   "name": "Spring Boot",
+   "skills": [
+    "java-springboot"
+   ],
+   "detect": {
+    "files": [
+     "src/main/resources/application.properties",
+     "src/main/resources/application.yml",
+     "src/main/resources/application.yaml"
+    ],
+    "content": {
+     "files": [
+      "pom.xml"
+     ],
+     "patterns": [
+      "spring-boot-starter",
+      "org\\.springframework\\.boot"
+     ]
+    }
+   }
+  },
+  {
+   "id": "prisma",
+   "name": "Prisma",
+   "skills": [
+    "prisma-client-api",
+    "prisma-cli"
+   ],
+   "detect": {
+    "packages": [
+     "prisma",
+     "@prisma/client"
+    ]
+   }
+  },
+  {
+   "id": "vitest",
+   "name": "Vitest",
+   "skills": [
+    "vitest"
+   ],
+   "detect": {
+    "packages": [
+     "vitest"
+    ],
+    "files": [
+     "vitest.config.ts",
+     "vitest.config.js",
+     "vitest.config.mts"
+    ]
+   }
+  },
+  {
+   "id": "nestjs",
+   "name": "NestJS",
+   "skills": [
+    "nestjs-best-practices"
+   ],
+   "detect": {
+    "packages": [
+     "@nestjs/core"
+    ]
+   }
+  },
+  {
+   "id": "tauri",
+   "name": "Tauri",
+   "skills": [
+    "tauri-v2"
+   ],
+   "detect": {
+    "packages": [
+     "@tauri-apps/api",
+     "@tauri-apps/cli"
+    ],
+    "files": [
+     "src-tauri/tauri.conf.json"
+    ]
+   }
+  },
+  {
+   "id": "web_frontend",
+   "name": "Web Frontend",
+   "skills": [
+    "frontend-design",
+    "accessibility",
+    "seo",
+    "best-practices",
+    "performance",
+    "core-web-vitals",
+    "web-quality-audit"
+   ],
+   "detect": {
+    "extensions": [
+     ".html",
+     ".htm",
+     ".css",
+     ".scss",
+     ".sass",
+     ".less",
+     ".vue",
+     ".svelte",
+     ".jsx",
+     ".tsx",
+     ".twig",
+     ".tpl",
+     ".ejs",
+     ".hbs",
+     ".pug",
+     ".njk"
+    ]
+   }
+  },
+  {
+   "id": "grafana",
+   "name": "Grafana",
+   "skills": [
+    "grafana-dashboards"
+   ],
+   "detect": {
+    "files": [
+     "grafana.ini",
+     "provisioning/dashboards"
+    ]
+   }
+  },
+  {
+   "id": "sql",
+   "name": "SQL",
+   "skills": [
+    "sql-optimization-patterns"
+   ],
+   "detect": {
+    "extensions": [
+     ".sql"
+    ],
+    "files": [
+     "knexfile.js",
+     "knexfile.ts",
+     "ormconfig.json",
+     "ormconfig.ts"
+    ]
+   }
+  },
+  {
+   "id": "grpc",
+   "name": "gRPC",
+   "skills": [
+    "grpc-api"
+   ],
+   "detect": {
+    "packages": [
+     "@grpc/grpc-js",
+     "@grpc/proto-loader",
+     "grpc"
+    ],
+    "extensions": [
+     ".proto"
+    ]
+   }
+  }
+ ],
+ "combos": [
+  {
+   "id": "react-hook-form-zod",
+   "name": "React Hook Form + Zod",
+   "requires": [
+    "react-hook-form",
+    "zod"
+   ],
+   "skills": [
+    "zod"
+   ]
+  },
+  {
+   "id": "nextjs-supabase",
+   "name": "Next.js + Supabase",
+   "requires": [
+    "nextjs",
+    "supabase"
+   ],
+   "skills": [
+    "supabase-postgres-best-practices"
+   ]
+  },
+  {
+   "id": "nextjs-playwright",
+   "name": "Next.js + Playwright",
+   "requires": [
+    "nextjs",
+    "playwright"
+   ],
+   "skills": [
+    "playwright-best-practices"
+   ]
+  },
+  {
+   "id": "react-shadcn",
+   "name": "React + shadcn/ui",
+   "requires": [
+    "react",
+    "shadcn"
+   ],
+   "skills": [
+    "vercel-react-best-practices"
+   ]
+  },
+  {
+   "id": "gsap-react",
+   "name": "GSAP + React",
+   "requires": [
+    "gsap",
+    "react"
+   ],
+   "skills": [
+    "gsap-react"
+   ]
+  },
+  {
+   "id": "cloudflare-vite",
+   "name": "Cloudflare + Vite",
+   "requires": [
+    "cloudflare",
+    "vite"
+   ],
+   "skills": [
+    "migrate-to-vinext"
+   ]
+  },
+  {
+   "id": "nuxt-clerk",
+   "name": "Nuxt + Clerk",
+   "requires": [
+    "nuxt",
+    "clerk-nuxt"
+   ],
+   "skills": [
+    "clerk-nuxt-patterns"
+   ]
+  },
+  {
+   "id": "vue-clerk",
+   "name": "Vue + Clerk",
+   "requires": [
+    "vue",
+    "clerk-vue"
+   ],
+   "skills": [
+    "clerk-vue-patterns"
+   ]
+  },
+  {
+   "id": "react-clerk",
+   "name": "React + Clerk",
+   "requires": [
+    "react",
+    "clerk-react"
+   ],
+   "skills": [
+    "clerk-react-patterns"
+   ]
+  },
+  {
+   "id": "astro-clerk",
+   "name": "Astro + Clerk",
+   "requires": [
+    "astro",
+    "clerk-astro"
+   ],
+   "skills": [
+    "clerk-astro-patterns"
+   ]
+  },
+  {
+   "id": "react-router-clerk",
+   "name": "React Router + Clerk",
+   "requires": [
+    "react_router",
+    "clerk-react-router"
+   ],
+   "skills": [
+    "clerk-react-router-patterns",
+    "clerk"
+   ]
+  },
+  {
+   "id": "tanstack-clerk",
+   "name": "TanStack Start + Clerk",
+   "requires": [
+    "tanstack-start",
+    "clerk-tanstack"
+   ],
+   "skills": [
+    "clerk-tanstack-patterns",
+    "clerk"
+   ]
+  },
+  {
+   "id": "chrome-extension-clerk",
+   "name": "Chrome Extension + Clerk",
+   "requires": [
+    "chrome-extension",
+    "clerk-chrome-extension"
+   ],
+   "skills": [
+    "clerk-chrome-extension-patterns",
+    "clerk"
+   ]
+  },
+  {
+   "id": "nextjs-clerk",
+   "name": "Next.js + Clerk",
+   "requires": [
+    "nextjs",
+    "clerk-nextjs"
+   ],
+   "skills": [
+    "clerk-nextjs-patterns",
+    "clerk"
+   ]
+  }
+ ]
+}
