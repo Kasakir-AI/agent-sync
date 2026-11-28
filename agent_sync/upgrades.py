@@ -86,16 +86,26 @@ def forward(installed: str, target: str) -> bool:
 
 # ---------- npm ----------
 
-def npm_listing() -> dict[str, Package] | None:
+def npm_symlink(location: object) -> bool:
+    return isinstance(location, str) and Path(location).is_symlink()
+
+
+def npm_listing(state: UpdateState | None = None) -> dict[str, Package] | None:
     if not (text := tools.raw(["npm", "outdated", "-g", "--json"], ok_codes=(0, 1))).strip():
         return None
-    report = tools.json_object(text)
-    # A linked package (`npm link`, `npm install -g ./dir`) is a local folder, not a registry install: npm still
-    # compares it with whatever registry package shares its name, which can be a stranger's code.
-    return {name: Package("npm", name, entry["current"], entry["latest"]) for name, entry in report.items()
-            if isinstance(entry, dict) and isinstance(entry.get("current"), str)
-            and isinstance(entry.get("latest"), str)
-            and not (isinstance(entry.get("location"), str) and Path(entry["location"]).is_symlink())}
+    state = state or UpdateState()
+    found = {}
+    for name, entry in tools.json_object(text).items():
+        if not (isinstance(entry, dict) and isinstance(current := entry.get("current"), str)
+                and isinstance(entry.get("latest"), str)):
+            continue
+        # npm compares every global with the registry package of the same name, which can be a stranger's code.
+        # It records no source for globals, so: a link to a local folder, or a version the registry never published
+        # (installed from git, a tarball or a fork), is not the registry's package.
+        if npm_symlink(entry.get("location")) or current not in state.npm.released(name):
+            continue
+        found[name] = Package("npm", name, current, entry["latest"])
+    return found
 
 
 def npm_newest(state: UpdateState, package: Package, in_major: int | None) -> str:
@@ -163,6 +173,8 @@ def pipx_listing() -> dict[str, Package] | None:
             package, version, spec = main["package"], main["package_version"], main["package_or_url"]
         except (KeyError, TypeError):
             continue
+        if main.get("pip_args") or metadata.get("injected_packages"):
+            continue
         if all(isinstance(value, str) for value in (package, version, spec)) and (source := PYPI_SPEC.fullmatch(spec)):
             suffix = main.get("suffix") or ""
             if isinstance(suffix, str):
@@ -224,37 +236,35 @@ def uv_registry_requirement(fields: dict, version: str = "") -> str:
 
 
 def uv_install(package: Package, version: str) -> list[str] | None:
-    upgrade = ["uv", "tool", "upgrade", f"{package.name}=={version}"]
     if (directory := package.uv_directory) is None:
-        return upgrade
+        return None
     try:
         with (directory / "uv-receipt.toml").open("rb") as file:
             receipt = tomllib.load(file).get("tool")
     except (OSError, ValueError):
-        return upgrade
+        return None
     if not isinstance(receipt, dict) or not isinstance(requirements := receipt.get("requirements"), list):
-        return upgrade
+        return None
     if not requirements or not isinstance(first := requirements[0], dict) or first.get("name") != package.name:
-        return upgrade
-    pin = first.get("specifier")
-    if pin in (None, ""):
-        return upgrade
-    # uv adds the upgrade's version to a range the install stored, and refuses one outside it.
-    if not isinstance(pin, str) or not re.fullmatch(rf"=={FINAL.pattern}", pin):
         return None
 
-    # A positional upgrade constraint cannot replace a pin written by an earlier install.
     if any(receipt.get(key) for key in ("options", "constraints", "overrides", "excludes",
-                                             "build-constraint-dependencies")):
+                                       "build-constraint-dependencies")):
+        return None
+    specs = [uv_registry_requirement(fields, version if i == 0 else "") if isinstance(fields, dict) else ""
+             for i, fields in enumerate(requirements)]
+    if not all(specs):
+        return None
+    pin = first.get("specifier", "")
+    if not pin:
+        return ["uv", "tool", "upgrade", f"{package.name}=={version}"]
+    # A positional upgrade constraint cannot replace a pin or leave an installed range.
+    if not re.fullmatch(rf"=={FINAL.pattern}", pin):
         return None
     entrypoints = receipt.get("entrypoints", [])
     if not isinstance(entrypoints, list) or any(
         not isinstance(entry, dict) or entry.get("from") not in (None, package.name) for entry in entrypoints
     ):
-        return None
-    specs = [uv_registry_requirement(fields, version if i == 0 else "") if isinstance(fields, dict) else ""
-             for i, fields in enumerate(requirements)]
-    if not all(specs):
         return None
     python = receipt.get("python")      # the request it was installed with, such as "3.14", stays as written
     if not (isinstance(python, str) and python):
@@ -342,7 +352,7 @@ def brew_newest(state: UpdateState, package: Package, in_major: int | None) -> s
 @dataclass(frozen=True)
 class Manager:
     label: str
-    listing: Callable[[], dict[str, Package] | None]                # packages it may upgrade, by name; None: failed
+    listing: Callable[[UpdateState], dict[str, Package] | None]     # packages it may upgrade, by name; None: failed
     newest: Callable[[UpdateState, Package, int | None], str]       # newest release (in a major version), "" unknown
     released: Callable[[UpdateState, Package, str], str | None] | None   # when a release came out; None: no wait
     install: Callable[[Package, str], list[str] | None]
@@ -351,15 +361,15 @@ class Manager:
 MANAGERS = {
     "npm": Manager("npm", npm_listing, npm_newest, npm_released,
                    lambda package, version: ["npm", "install", "-g", f"{package.name}@{version}"]),
-    "pipx": Manager("pipx", pipx_listing, pypi_newest, pypi_released, pipx_install),
-    "uv": Manager("uv", uv_listing, pypi_newest, pypi_released, uv_install),
-    "homebrew": Manager("Homebrew", brew_listing, brew_newest, None,
+    "pipx": Manager("pipx", lambda _: pipx_listing(), pypi_newest, pypi_released, pipx_install),
+    "uv": Manager("uv", lambda _: uv_listing(), pypi_newest, pypi_released, uv_install),
+    "homebrew": Manager("Homebrew", lambda _: brew_listing(), brew_newest, None,
                         lambda package, version: ["brew", "upgrade", f"--{package.kind}", package.name]),
 }
 
 
 def installed(state: UpdateState, manager: str) -> dict[str, Package]:
-    return state.once(("listing", manager), MANAGERS[manager].listing) or {}
+    return state.once(("listing", manager), lambda: MANAGERS[manager].listing(state)) or {}
 
 
 def listed(state: UpdateState, manager: str) -> bool:

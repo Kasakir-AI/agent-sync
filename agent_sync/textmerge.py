@@ -5,11 +5,13 @@ baselines (a JSON file in agent-sync's state folder)."""
 from __future__ import annotations
 
 import json
+import os
 import re
-import secrets
+import tempfile
 from collections.abc import Iterable
 from difflib import SequenceMatcher
 from pathlib import Path
+from stat import S_ISREG
 
 
 def comment(line: str) -> bool:
@@ -124,11 +126,37 @@ def load_baselines(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def save_baselines(path: Path, stored: dict) -> None:
-    text = json.dumps(stored, indent=2, sort_keys=True) + "\n"
-    if path.is_file() and path.read_bytes().decode("utf-8") == text:
+def private_file(path: Path) -> None:
+    if path.is_symlink() or not path.is_file():
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}")
-    temp.write_text(text)
-    temp.replace(path)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return
+    try:
+        info = os.fstat(fd)
+        if S_ISREG(info.st_mode) and info.st_mode & 0o777 != 0o600:
+            os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+
+
+def save_baselines(path: Path, stored: dict) -> None:
+    text = (json.dumps(stored, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+    if not path.is_symlink() and path.is_file() and path.read_bytes() == text:
+        private_file(path)
+        return
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(text)
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)

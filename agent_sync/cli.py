@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -162,7 +163,7 @@ def upkeep(cfg: Config, log: Log, work: Path, force: bool, dry: bool, stack: Exi
     if removals is not None:
         for key in approved:
             removals.seen[key]["approved"] = True
-        stamp.touch()
+        stamp.touch(mode=0o600)
         summary = f", backups: {saved.folder}" if saved and saved.folder else ""
         log("done", f"agent-sync finished: {log.summary()}{summary}")
     return 1 if log.problems else 0
@@ -286,6 +287,9 @@ def steps(cfg: Config, log: Log, work: Path, dry: bool, updates: tools.UpdateSta
     if cfg.mirror_memory:
         guarded(log, "shared memory", lambda: log.lines(memory.mirror(
             home, dry, enabled=enabled, private_memory=cfg.private_memory, share_memory=cfg.share_memory)), "memory")
+    elif cfg.mirror_memory is False:
+        guarded(log, "shared memory", lambda: log.lines(memory.mirror(
+            home, dry, enabled=TOOLS, sharing=False)), "memory")
     if cfg.status_line:
         guarded(log, "status line", lambda: log.lines(statuslines.apply(home, dry, cfg, removals)),
                 *(f"statusline:{tool}" for tool in enabled if tool != "gemini"))
@@ -318,6 +322,15 @@ def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
         return
     taken: set[str] = set()
     packages = []
+
+    def safe_skill(name: str) -> bool:
+        # One argv word, no shell: only option-like names, wildcards and control characters could misfire.
+        if (name.strip() and not name.startswith("-") and name not in {"*", "."}
+                and not re.search(r"[\x00-\x1f\\]", name)):
+            return True
+        log("WARN", f"invalid skill name {name!r}; skipped")
+        return False
+
     for package in cfg.skill_packages:
         checkout = root / cleanup.checkout_name(package)
         if checkout.is_symlink():
@@ -334,10 +347,12 @@ def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
             for name in skills.dropped(cfg.home, package, checkout):
                 removals.setdefault(name, f"no longer in {package}")
         for name, reason in removals.items():
+            if not safe_skill(name):
+                continue
             what = f"skill {name} ({reason})"
             key = f"skill:{name}"
             if pending.due(key, what) and not dry:
-                skills.backup_installs(cfg.home, cfg.agents, [name])
+                skills.backup_installs(cfg.home, cfg.agents, {name, skills.install_name(name)})
                 if tools.act(log, dry, f"remove {what}", tools.remove_args(cfg.skills_cli, name, enabled=cfg.agents)):
                     pending.removed(key)
 
@@ -346,8 +361,9 @@ def sync_packages(cfg: Config, log: Log, work: Path, dry: bool) -> None:
         shipped = skills.shipped(checkout) if names is None else names
         blocked = {skills.installed_name(name, meta) for name, meta in installed.items()
                    if meta.get("source") in cfg.skill_packages and meta.get("source") != package}
-        if blocked.intersection(shipped):
-            names = [name for name in shipped if name not in blocked]
+        unsafe = {name for name in shipped if not safe_skill(name)}
+        if blocked.intersection(shipped) or unsafe:
+            names = [name for name in shipped if name not in blocked and name not in unsafe]
         if names != []:
             if not dry:
                 skills.backup_installs(cfg.home, cfg.agents, shipped if names is None else names)

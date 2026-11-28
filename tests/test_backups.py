@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from agent_sync import backups, cli, mcp, memory, schedule, skills
+from agent_sync import agents, backups, cli, mcp, memory, schedule, skills
 from agent_sync.config import Config
 from tests.test_agents import HELPER
 from tests.test_inventory import write
@@ -82,11 +82,15 @@ def test_upkeep_writers_share_one_pre_run_backup(tmp_path, monkeypatch, capsys):
     workspace.write_text("Prefer local worktrees.\n")
     gone.unlink()
     files["claude"].write_text("Include the date.\n")
+    initial = tmp_path / "initial-package"
+    write(initial, "agents/helper.md", HELPER.replace("report back.", "send a note."))
+    write(initial, "agents/dropped.md", HELPER.replace("name: helper", "name: dropped"))
+    agents.mirror(initial, "example/pack", tmp_path, cfg.agent_models, enabled=cfg.agents)
     old = [
         write(tmp_path, files["codex"].relative_to(tmp_path), "Codex note.\n"),
         write(tmp_path, ".agents/pstack-models.md", "feature: old\n"),
-        write(tmp_path, ".claude/agents/helper.md", "old agent\n"),
-        write(tmp_path, ".cursor/plugins/local/pack-agents/agents/dropped.md", "old copied agent\n"),
+        tmp_path / ".claude/agents/helper.md",
+        tmp_path / ".cursor/plugins/local/pack-agents/agents/dropped.md",
         memory_dir / "workspace.md",
         memory_dir / "gone.md",
         write(tmp_path, schedule.launcher_path(tmp_path).relative_to(tmp_path), schedule.LAUNCHER_MARK + "\n"),
@@ -186,3 +190,17 @@ def test_size_retention_removes_oldest_folders_and_protects_current_run(tmp_path
     assert set(root.iterdir()) == {newer, current}
     backups.prune(root, 0, 0, current, False, log, now=now)
     assert set(root.iterdir()) == {current}
+
+
+def test_size_retention_evicts_large_backups_before_smaller_ones(tmp_path):
+    root = tmp_path / "backups"
+    small = root / "review-20261101-000000"
+    oldest_large = root / "run-20261102-000000"
+    newest_large = root / "run-20261103-000000"
+    write(small, "file", "review notes")
+    for folder in (oldest_large, newest_large):
+        write(folder, "file", "x" * (3 * backups.MIB // 4))
+
+    backups.prune(root, 30, 1, None, False, lambda *_: None, now=datetime(2026, 11, 4))
+    assert (small / "file").read_text() == "review notes"
+    assert not oldest_large.exists() and newest_large.exists()

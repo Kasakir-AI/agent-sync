@@ -417,3 +417,78 @@ def test_memory_preserves_an_edit_arriving_before_each_write_attempt(tmp_path, m
     lines = memory.mirror(tmp_path, False, enabled=TOOLS)
     assert note.read_text() == "Concurrent edit\n"
     assert any(line.startswith("WARN") and "changed while" in line for line in lines)
+
+
+def test_shared_index_uses_only_links_to_shareable_notes(tmp_path):
+    source, files, dest = setup(tmp_path)
+    (source / "private.md").write_text("---\nprivate: true\n---\nPrivate.\n")
+    index = ("Unlinked home address.\n"
+             "- [Private](private.md)\n  Excluded bullet continuation.\n"
+             "- [Missing](missing.md)\n"
+             + INDEX)
+    (source / "MEMORY.md").write_text(index)
+
+    memory.mirror(tmp_path, False, enabled=TOOLS)
+
+    assert (dest / "MEMORY.md").read_text() == INDEX
+    assert "workspace.md" in files["codex"].read_text()
+    assert all(text not in files["codex"].read_text()
+               for text in ("home address", "Excluded bullet continuation", "missing.md", "private.md"))
+    assert (source / "MEMORY.md").read_text() == index
+
+
+def test_cli_memory_opt_out_removes_managed_sharing_and_keeps_backups(tmp_path, monkeypatch):
+    """Turning sharing off removes the index blocks and untouched copies (backed up); edited copies wait for an OK."""
+    from agent_sync import cli
+
+    source, files, dest = setup(tmp_path)
+    (source / "other.md").write_text("Another note.\n")
+    memory.mirror(tmp_path, False, enabled=TOOLS)
+    (dest / "mine.md").write_text("Unowned.\n")
+    (dest / "workspace.md").write_text("Edited copy.\n")
+    before = {tool: files[tool].read_text() for tool in ("codex", "cursor", "gemini")}
+    files["codex"].write_text("Local setting.\n\n" + before["codex"])
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setattr(cli, "online", lambda: True)
+    monkeypatch.setattr(cli.tools, "skills", lambda *args: (0, "test version"))
+    config = config_path(tmp_path)
+    config.parent.mkdir(parents=True)
+    config.write_text("skill_packages = []\nmirror_instructions = false\nmirror_memory = false\n"
+                      "mirror_mcp = false\nmirror_roles = false\nmirror_skills = false\n"
+                      "update_plugins = false\nupdate_clis = false\nupdate_self = false\n")
+
+    assert cli.main(["run", "--force", "--dry-run"]) == 0
+    assert (dest / "workspace.md").exists() and before["codex"] in files["codex"].read_text()
+    assert cli.main(["run", "--force", "--echo"]) == 0
+
+    assert all(instructions.MEMORY_START not in files[tool].read_text() for tool in before)
+    assert files["codex"].read_text() == "Local setting.\n\n"
+    assert (dest / "workspace.md").read_text() == "Edited copy.\n"
+    assert not (dest / "other.md").exists() and not (dest / "MEMORY.md").exists()
+    assert (dest / "mine.md").read_text() == "Unowned.\n"
+    assert (source / "MEMORY.md").read_text() == INDEX
+    backup = next((load().state_dir / "backups").glob("run-*"))
+    assert (backup / ".agents/memory/other.md").read_text() == "Another note.\n"
+    assert (backup / ".codex/AGENTS.md").read_text() == "Local setting.\n\n" + before["codex"]
+
+
+def test_a_note_you_chose_to_share_keeps_its_index_line(tmp_path):
+    """share_memory overrides the privacy screen for a note; its index line must come along, or no agent finds it."""
+    source, files, dest = setup(tmp_path)
+    (source / "trip.md").write_text("Flights booked.\n")
+    (source / "MEMORY.md").write_text(INDEX + "- [Trip](trip.md) — my home address and phone number for the booking\n")
+    memory.mirror(tmp_path, False, enabled=TOOLS)
+    assert "trip.md" not in (dest / "MEMORY.md").read_text()
+    memory.mirror(tmp_path, False, enabled=TOOLS, share_memory=["trip"])
+    assert "trip.md" in (dest / "MEMORY.md").read_text()
+
+
+def test_share_memory_by_the_notes_own_name_keeps_its_index_line(tmp_path):
+    """share_memory may name a note by its front-matter name, not its file name; its index line still comes along."""
+    source, files, dest = setup(tmp_path)
+    (source / "trip-2026.md").write_text("---\nname: trip\n---\nFlights booked.\n")
+    (source / "MEMORY.md").write_text(INDEX + "- [Trip](trip-2026.md) — my home address and phone number\n")
+    memory.mirror(tmp_path, False, enabled=TOOLS, share_memory=["trip"])
+    assert "trip-2026.md" in (dest / "MEMORY.md").read_text()

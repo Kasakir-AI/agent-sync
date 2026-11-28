@@ -20,6 +20,7 @@ import filecmp
 import hashlib
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -68,9 +69,15 @@ def folders(home: Path, enabled=DEFAULT_AGENTS) -> dict[str, Path]:
     return paths(home, enabled, "skills_dir")
 
 
+def lock_file(home: Path) -> Path:
+    """Where the `skills` CLI records what it installed: under XDG_STATE_HOME when that is set."""
+    state = os.environ.get("XDG_STATE_HOME", "").strip()
+    return Path(state) / "skills/.skill-lock.json" if state else home / ".agents/.skill-lock.json"
+
+
 def locked(home: Path) -> dict[str, dict]:
     """The skills a package installed, from the `skills` CLI's lock file."""
-    p = home / ".agents/.skill-lock.json"
+    p = lock_file(home)
     try:
         data = json.loads(p.read_text())
     except (OSError, ValueError, AttributeError):
@@ -248,9 +255,17 @@ def mirror(home: Path, source: str, skip: list[str] | None = None, dry: bool = F
                     tmp = Path(staged) / name
                     shutil.copytree(src, tmp, symlinks=True, ignore=shutil.ignore_patterns(".DS_Store"))
                     (tmp / MARKER).write_text(mark)
+                    old = Path(f"{staged}.previous")
                     if dest.exists():
-                        shutil.rmtree(dest)
-                    tmp.rename(dest)
+                        dest.rename(old)
+                    try:
+                        tmp.rename(dest)
+                    except OSError:
+                        if old.exists():
+                            old.rename(dest)
+                        raise
+                    if old.exists():
+                        shutil.rmtree(old)
                 pending.removed(key)
             changes.append(f"{verb('copied', 'would copy')} skill {name}{note} to {target}")
         for d in sorted(target.iterdir()) if target.is_dir() else []:
@@ -276,11 +291,22 @@ def installed_name(name: str, meta: dict) -> str:
     return str(meta.get("skillName") or name).lower()
 
 
-def backup_installs(home: Path, enabled, names) -> None:
-    backups.save(home / ".agents/.skill-lock.json", follow=True)
+def install_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9._]+", "-", name.lower()).strip(".-")[:255] or "unnamed-skill"
+
+
+def install_roots(home: Path, enabled) -> set[Path]:
     roots = set(folders(home, enabled).values())
     roots.add(home / ".agents/skills")
     roots.update(home / root for tool, root in EXTRA_ROOTS.items() if tool in enabled)
+    if "claude" in enabled and (claude_home := os.environ.get("CLAUDE_CONFIG_DIR", "").strip()):
+        roots.add(Path(claude_home) / "skills")
+    return roots
+
+
+def backup_installs(home: Path, enabled, names) -> None:
+    backups.save(lock_file(home), follow=True)
+    roots = install_roots(home, enabled)
     for name in names:
         if name in {"", ".", ".."} or "/" in name:
             continue
@@ -293,7 +319,20 @@ def shipped(checkout: Path) -> list[str]:
 
     root = checkout / "skills" if (checkout / "skills").is_dir() else checkout
     found = walk(root) or ([root] if (root / "SKILL.md").is_file() else [])
-    return sorted({skill_name(d) for d in found})
+    return sorted({skill_name(d) for d in found if not internal(d)})
+
+
+def internal(folder: Path) -> bool:
+    """A skill marked `internal: true`, which the skills CLI installs only with INSTALL_INTERNAL_SKILLS set."""
+    if os.environ.get("INSTALL_INTERNAL_SKILLS") in {"1", "true"}:
+        return False
+    try:
+        text = (folder / "SKILL.md").read_text(errors="replace").lstrip("\ufeff")
+    except OSError:
+        return False
+    front = re.match(r"^---\n(.*?)\n---", text, re.S)
+    metadata = front and re.search(r"(?m)^metadata:[ \t]*(\{[^\n]*\}|\n(?:[ \t]+[^\n]*\n?)*)", front[1])
+    return bool(metadata and re.search(r"""(?:^|[\s{,])internal\s*:\s*["']?(?:true|1)\b""", metadata[1]))
 
 
 def package_choice(home: Path, package: str, checkout: Path, taken: set[str]) -> tuple[list[str] | None, list[str]]:

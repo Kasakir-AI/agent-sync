@@ -103,10 +103,12 @@ def test_google_subagent_markdown_and_model_checks(tmp_path):
     agents.mirror(package, "example/package", tmp_path, AgentModels(), enabled=GOOGLE)
     gemini = tmp_path / ".gemini/agents/go.md"
     agy = tmp_path / ".gemini/config/agents/go.md"
-    assert gemini.read_text() == "---\nname: go\ndescription: 'Plan: do it'\n---\nStart here.\n"
+    assert gemini.read_text().startswith("---\n")
+    assert gemini.read_text().endswith("name: go\ndescription: 'Plan: do it'\n---\nStart here.\n")
     assert not (gemini.parent / "Upper.md").exists()
-    assert agy.read_text() == (
-        "---\nname: go\ndescription: 'Plan: do it'\nsubagent: true\nmainAgent: false\n"
+    assert agy.read_text().startswith("---\n")
+    assert agy.read_text().endswith(
+        "name: go\ndescription: 'Plan: do it'\nsubagent: true\nmainAgent: false\n"
         "tools: [read_file, edit_file, write_file, run_command, manage_task, search_web]\n---\nStart here.\n")
     agents.mirror(package, "example/package", tmp_path, AgentModels(gemini="gemini-model"), enabled=GOOGLE)
     assert "model: gemini-model" in gemini.read_text() and "model:" not in agy.read_text()

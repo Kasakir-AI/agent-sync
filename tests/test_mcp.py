@@ -378,6 +378,34 @@ def test_mirror_leaves_credentials_behind_and_names_the_variable(tmp_path):
     assert (tmp_path / ".cursor/mcp.json").stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.parametrize("field,value,needs", [
+    ("args", ["--token", "fixture-credential"], "args"),
+    ("args", ["--auth", "ghp_" + "a" * 36], "args"),
+    ("args", ["--header", "Authorization: Bearer opaque-value-1"], "args"),
+    ("args", ["--header", "Cookie: session=opaque-value-2"], "args"),
+    ("args", ["mcp-remote", "https://user:fixture-pass@example.test/mcp"], "args"),
+    ("args", ["--url=https://user:fixture-pass@example.test/mcp"], "args"),
+    ("url", "https://example.test/mcp?token=fixture-credential", "url"),
+    ("url", "https://example.test/mcp?key=opaque123", "url"),
+])
+def test_mirror_skips_servers_with_credentials_in_args_or_url(tmp_path, field, value, needs):
+    from tests.test_inventory import write
+
+    server = {field: value}
+    if field != "url":
+        server["command"] = "example"
+    write(tmp_path, ".claude.json", {"mcpServers": {"example": server}})
+    original = {"mcpServers": {"other": {"command": "other"}}}
+    target = write(tmp_path, ".cursor/mcp.json", original)
+    before = target.read_bytes()
+
+    for dry in (True, False):
+        changes = mcp.mirror(tmp_path, "claude", dry, enabled=("claude", "cursor"))
+        assert changes == [f"WARN  MCP server example in Cursor needs {needs} set: agent-sync does not copy "
+                           "values that look like credentials"]
+        assert target.read_bytes() == before
+
+
 @pytest.mark.parametrize("args,expected", [
     (["-y", "pkg@1.0.0", "other@2.0.0"], [(1, "pkg", "1.0.0")]),
     (["--yes", "-p", "a@1.0.0", "--package=b@1.0.0", "bin"], [(2, "a", "1.0.0"), (3, "b", "1.0.0")]),
@@ -439,3 +467,15 @@ def test_pin_update_is_suppressed_when_settings_only_spell_out_defaults(tmp_path
 def test_npm_release_times_are_read_from_every_npm_answer_shape(monkeypatch, answer):
     monkeypatch.setattr(mcp.tools, "raw", lambda args, **_: json.dumps(answer))
     assert mcp.npm_released("cf")["1.0.0"] == "2026-11-25T16:40:39Z"
+
+
+def test_mirror_copies_a_server_whose_header_names_an_environment_variable(tmp_path):
+    """`Bearer ${TOKEN}` refers to a value each tool sets itself, so the server is copied as written."""
+    from tests.test_inventory import write
+
+    args = ["mcp-remote", "https://example.test/mcp", "--header", "Authorization: Bearer ${MCP_TOKEN}"]
+    write(tmp_path, ".claude.json", {"mcpServers": {"remote": {"command": "npx", "args": args}}})
+    changes = mcp.mirror(tmp_path, "claude", enabled=("claude", "cursor"))
+    assert changes == ["added MCP server remote to cursor"]
+    assert json.loads((tmp_path / ".cursor/mcp.json").read_text())["mcpServers"]["remote"]["args"] == args
+

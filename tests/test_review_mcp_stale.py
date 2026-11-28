@@ -64,6 +64,20 @@ def test_upkeep_replaces_stale_copies_with_the_working_one_and_keeps_tool_settin
     assert writes.repair_mcp(tmp_path, cfg) == []
 
 
+def test_upkeep_leaves_stale_mcp_copies_with_local_credentials_alone(tmp_path):
+    old, new = versioned(tmp_path, "1.0", exists=False), versioned(tmp_path, "2.0")
+    setup(tmp_path, old, new)
+    source, target = tmp_path / ".codex/config.toml", tmp_path / ".claude.json"
+    source.write_text(source.read_text() + 'API_KEY = "fixture-credential"\n')
+    data = json.loads(target.read_text())
+    data["mcpServers"]["repl"]["env"]["API_KEY"] = "fixture-credential"
+    target.write_text(json.dumps(data))
+    before = target.read_bytes()
+
+    assert writes.repair_mcp(tmp_path, Config(home=tmp_path)) == []
+    assert target.read_bytes() == before
+
+
 def test_working_copies_that_disagree_are_left_for_review(tmp_path):
     old, new = versioned(tmp_path, "1.0", exists=False), versioned(tmp_path, "2.0")
     other = versioned(tmp_path, "custom")

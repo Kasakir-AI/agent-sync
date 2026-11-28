@@ -325,3 +325,48 @@ def test_a_legacy_copy_identical_to_its_available_previous_source_can_refresh(tm
 
     assert skills.mirror(tmp_path, "claude") == [f"copied skill notes to {shared}"]
     assert "new source" in (dest / "SKILL.md").read_text()
+
+
+def test_mirror_keeps_the_previous_skill_if_publishing_the_copy_fails(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    source, shared = tmp_path / ".claude/skills", tmp_path / ".agents/skills"
+    make_skill(source, "notes", "original")
+    skills.mirror(tmp_path, "claude")
+    dest = shared / "notes"
+    previous = (dest / "SKILL.md").read_bytes()
+    (source / "notes/SKILL.md").write_text("revised\n")
+    rename = Path.rename
+
+    def rename_skill(path, target):
+        if target == dest and path.name == "notes":
+            raise OSError("could not publish the staged skill")
+        return rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", rename_skill)
+    with pytest.raises(OSError, match="could not publish"):
+        skills.mirror(tmp_path, "claude")
+    assert dest.is_dir() and (dest / "SKILL.md").read_bytes() == previous
+
+
+def test_package_ownership_is_read_where_the_skills_cli_writes_it(tmp_path, monkeypatch):
+    """With XDG_STATE_HOME set the skills CLI keeps its lock file there; reading another file would make a package's
+    own skills look like someone else's and ask about them on every run."""
+    from tests.test_inventory import write
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    write(tmp_path, "state/skills/.skill-lock.json", {"skills": {"notes": {"source": "org/pack"}}})
+    write(tmp_path, ".agents/.skill-lock.json", {"skills": {}})
+    assert skills.locked(tmp_path) == {"notes": {"source": "org/pack"}}
+
+
+def test_internal_skills_are_read_from_their_metadata_only(tmp_path):
+    """The skills CLI skips a skill only when `metadata.internal` is true; the words elsewhere don't count."""
+    make_skill(tmp_path / "pack/skills", "hidden")
+    make_skill(tmp_path / "pack/skills", "flow")
+    make_skill(tmp_path / "pack/skills", "public")
+    for name, extra in (("hidden", "metadata:\n  internal: true\n"), ("flow", "metadata: { internal: true }\n"),
+                        ("public", "summary: \"not internal: true at all\"\n")):
+        definition = tmp_path / f"pack/skills/{name}/SKILL.md"
+        definition.write_text(definition.read_text().replace("description:", extra + "description:"))
+    assert skills.shipped(tmp_path / "pack") == ["public"]

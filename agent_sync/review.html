@@ -335,7 +335,10 @@ function defaultRemovals(group, id) {
 }
 
 function resetChoices() {
-  choices = new Map(scan.groups.map(group => [group.key, ["differ", "check"].includes(group.status) ? group.winner : "leave"]));
+  choices = new Map(scan.groups.map(group => {
+    const winner = group.versions.find(version => version.id === group.winner);
+    return [group.key, ["differ", "check"].includes(group.status) && !winner.fixed ? group.winner : "leave"];
+  }));
   removals = new Map(scan.groups.map(group => [group.key, defaultRemovals(group, choices.get(group.key))]));
 }
 
@@ -371,7 +374,7 @@ function showCounts() {
 function versionColumn(group, version, longest, shared, choiceButton) {
   const node = el("div", undefined, "version");
   const ribbon = el("div", undefined, "recommendation");
-  const isWinner = group.status !== "local" && version.id === group.winner;
+  const isWinner = group.status !== "local" && version.id === group.winner && !version.fixed;
   if (isWinner) ribbon.append(el("span", "Recommended", "ribbon"));
   node.append(ribbon);
   const tools = el("div", undefined, "badges");
@@ -406,7 +409,7 @@ function versionColumn(group, version, longest, shared, choiceButton) {
     why.append(...group.reasons.map(reason => el("li", reason)));
     node.append(why);
   }
-  if (version.fixed) return node;   // a plugin's server: its caution says why there is nothing to pick
+  if (version.fixed) return node;
   if (group.status === "local") return node;
   const label = group.status === "missing" ? `Copy to ${toolNames(group.missing)}` : "Keep this one";
   const choose = choiceButton(label, version.id);

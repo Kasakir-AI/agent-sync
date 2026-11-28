@@ -31,3 +31,17 @@ def test_mirror_lines_keep_their_own_kind_and_the_summary_counts_them(tmp_path):
     assert log.summary() == "1 change, no commands run, 1 warning, no problems"
     log("ran", "codex update"); log("dry", "would run: claude update")
     assert log.summary() == "1 change, 2 commands run, 1 warning, no problems"
+
+
+def test_log_is_private_for_new_and_existing_files(tmp_path):
+    from stat import S_IMODE
+
+    for name in ("new.log", "existing.log"):
+        path = tmp_path / name
+        if name == "existing.log":
+            path.write_text("previous entry\n")
+            path.chmod(0o644)
+        log = Log(path)
+        log("ok", "new entry")
+        assert S_IMODE(path.stat().st_mode) == 0o600
+        assert "new entry" in path.read_text()

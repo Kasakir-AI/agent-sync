@@ -82,3 +82,19 @@ def test_schedule_prefers_the_installed_command(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path / "nothing-here"))
     cmd, pythonpath = schedule.command()
     assert cmd[1:] == ["-m", "agent_sync"] and pythonpath and "PYTHONPATH" in schedule.plist(tmp_path / "out")
+
+
+def test_install_keeps_the_scheduled_run_output_private(tmp_path, monkeypatch):
+    """launchd writes the run's output (which can quote instructions and settings) to a file only the user can read."""
+    import sys
+    from stat import S_IMODE
+
+    state = tmp_path / "state"
+    state.mkdir(mode=0o755)
+    (state / schedule.OUTPUT_FILE).write_text("old output\n")
+    (state / schedule.OUTPUT_FILE).chmod(0o644)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(schedule.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 0))
+    schedule.install(tmp_path, state)
+    assert S_IMODE(state.stat().st_mode) == 0o700
+    assert S_IMODE((state / schedule.OUTPUT_FILE).stat().st_mode) == 0o600

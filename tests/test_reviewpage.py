@@ -11,6 +11,7 @@ import pytest
 
 from agent_sync import instructions, reviewpage
 from agent_sync.config import Config, load
+from agent_sync.locking import run_lock
 
 
 @pytest.fixture
@@ -163,8 +164,9 @@ def test_apply_refuses_edited_or_added_versions(request_page, tmp_path, changed)
 def test_apply_conflicts_with_upkeep(request_page, tmp_path):
     paths = instructions.files(tmp_path)
     choice = make_choice(request_page, paths)
-    (Config(home=tmp_path).state_dir / "lock").mkdir(parents=True)
-    status, result = request_page("apply", choice)
+    with run_lock(Config(home=tmp_path).state_dir / "lock") as held:
+        assert held
+        status, result = request_page("apply", choice)
     assert status == 409 and "upkeep run" in result["error"]
     assert paths["codex"].read_text() == "Write fresh fixtures.\n"
     assert not paths["cursor"].exists()
@@ -205,3 +207,59 @@ def test_page_offers_each_target_only_line_and_refuses_other_removals(request_pa
     assert status == 400 and "Run the tests." in result["error"]
     assert "Ask before pushing." in paths["codex"].read_text()
     assert request_page("plan", choose({"~/.codex/AGENTS.md": "Ask before pushing."}))[0] == 400
+
+
+@pytest.mark.parametrize("server,needs", [
+    ({"command": "local", "env": {"API_KEY": "fixture-credential"}}, "API_KEY"),
+    ({"command": "local", "args": ["--token", "fixture-credential"]}, "args"),
+    ({"url": "https://example.test/mcp?token=fixture-credential"}, "url"),
+])
+def test_review_redacts_credentials_and_refuses_to_apply_their_server(request_page, tmp_path, server, needs):
+    source = tmp_path / ".claude.json"
+    target = tmp_path / ".cursor/mcp.json"
+    write(source, json.dumps({"mcpServers": {"docs": server}}))
+    write(target, json.dumps({"mcpServers": {"docs": {"command": "other"}}}))
+    before = source.read_bytes(), target.read_bytes()
+
+    scan, page = scan_on_page(request_page)
+    assert "fixture-credential" not in page
+    group, = scan["groups"]
+    donor = next(version for version in group["versions"] if version["tools"] == ["claude"])
+    assert donor["fixed"] and f"needs {needs} set" in " ".join(donor["cautions"])
+
+    choice = {"choices": {group["key"]: donor["id"]}, "digests": {group["key"]: group["snapshot"]}}
+    for endpoint in ("plan", "apply"):
+        status, response = request_page(endpoint, choice)
+        assert status == 400 and f"needs {needs} set" in response["error"]
+        assert "fixture-credential" not in json.dumps(response)
+        assert (source.read_bytes(), target.read_bytes()) == before
+
+
+def test_mcp_review_preview_hides_credentials_in_the_settings_file(request_page, tmp_path):
+    write(tmp_path / ".claude.json", json.dumps({"mcpServers": {"docs": {"command": "new"}}}))
+    target = tmp_path / ".codex/config.toml"
+    write(target, '[mcp_servers.docs]\ncommand = "old"\nargs = ["--token", "fixture-credential"]\n')
+    scan, _ = scan_on_page(request_page)
+    group, = scan["groups"]
+    donor = next(version for version in group["versions"] if version["tools"] == ["claude"])
+    choice = {"choices": {group["key"]: donor["id"]}, "digests": {group["key"]: group["snapshot"]}}
+
+    status, plan = request_page("plan", choice)
+    assert status == 200
+    assert "fixture-credential" not in json.dumps(plan)
+    assert any("new" in line for file in plan["files"] for line in file["diff"])
+
+
+def test_mcp_review_preview_shows_header_removal_without_its_value(request_page, tmp_path):
+    write(tmp_path / ".claude.json", json.dumps({"mcpServers": {"docs": {"url": "https://new.example/docs"}}}))
+    write(tmp_path / ".codex/config.toml", '[mcp_servers.docs]\nurl = "https://old.example/docs"\n'
+          '[mcp_servers.docs.headers]\nAuthorization = "fixture-header"\n')
+    scan, _ = scan_on_page(request_page)
+    group, = scan["groups"]
+    donor = next(version for version in group["versions"] if version["tools"] == ["claude"])
+    choice = {"choices": {group["key"]: donor["id"]}, "digests": {group["key"]: group["snapshot"]}}
+
+    status, plan = request_page("plan", choice)
+    assert status == 200
+    assert "fixture-header" not in json.dumps(plan)
+    assert any(line.startswith("-") and '"headers"' in line for file in plan["files"] for line in file["diff"])

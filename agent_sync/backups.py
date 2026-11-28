@@ -206,8 +206,14 @@ def prune(root: Path, days: int, max_mb: int, current: Path | None, dry: bool, l
             except ValueError:
                 continue
             candidates.append((stamp, path, size))
-    for stamp, path, size in sorted(candidates):
-        if stamp >= cutoff and total <= max_mb * MIB:
+    limit = max_mb * MIB
+
+    def eviction_order(entry):
+        stamp, path, size = entry
+        return (stamp >= cutoff, stamp >= cutoff and size <= limit // 10, stamp, path)
+
+    for stamp, path, size in sorted(candidates, key=eviction_order):
+        if stamp >= cutoff and total <= limit:
             break
         if path.is_symlink():
             log("WARN", f"skipped symlink {path}")

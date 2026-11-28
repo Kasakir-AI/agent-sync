@@ -89,16 +89,10 @@ def test_scan_failure_warns_without_failing_upkeep(upkeep_home, capsys):
     assert "no problems" in output
 
 
-def test_run_recovers_an_expired_lock(upkeep_home, capsys):
+def test_run_recovers_an_abandoned_lock(upkeep_home, capsys):
     cfg = load(home=upkeep_home)
     lock = cfg.state_dir / "lock"
     lock.mkdir(parents=True)
-    assert cli.main(["run", "--force", "--echo"]) == 0
-    assert "another agent-sync run is in progress" in capsys.readouterr().out
-    assert lock.is_dir() and not (cfg.state_dir / "last-run").exists()
-
-    stale = time.time() - 3 * 60 * 60
-    os.utime(lock, (stale, stale))
     assert cli.main(["run", "--force", "--echo"]) == 0
     assert "no problems" in capsys.readouterr().out
     assert not lock.exists() and (cfg.state_dir / "last-run").exists()

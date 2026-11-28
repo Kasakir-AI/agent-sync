@@ -17,6 +17,7 @@ import time
 import tomllib
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from . import inventory, pending, tools
 from .privacy import secret_values
@@ -159,15 +160,54 @@ ADDERS = {
 }
 
 
+# An authorization header or API key given on the command line, such as `--header "Authorization: Bearer x"`.
+AUTH_ARG = re.compile(r"(?i)\b(?:(?:proxy-)?authorization|x-api-key|api-key|cookie)\s*:\s*"
+                      r"(?:(?:bearer|basic|token)\s+)?(\S+)"
+                      r"|\bbearer\s+(\S{8,})")
+ENV_REFERENCE = re.compile(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?")   # ${TOKEN} names a value each tool sets itself
+
+
+def credential_arg(arg: str) -> bool:
+    if (match := AUTH_ARG.search(arg)) and not ENV_REFERENCE.fullmatch(match[1] or match[2]):
+        return True
+    value = arg.split("=", 1)[1] if arg.startswith("-") and "=" in arg else arg      # --url=https://...
+    return value.lower().startswith(("http://", "https://")) and credential_url(value)
+
+
+CREDENTIAL_PARAM = re.compile(r"(?i)^(?:key|api[-_]?key|apikey|token|access[-_]?token|auth|secret|password|pass|"
+                              r"sig|signature|client[-_]?secret|session)$")
+
+
+def credential_url(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+        userinfo = parts.username is not None
+    except ValueError:
+        return True
+    named = any(CREDENTIAL_PARAM.match(name) and not ENV_REFERENCE.fullmatch(value)
+                for name, value in parse_qsl(parts.query))
+    return userinfo or named or bool(secret_values(unquote(url)))
+
+
 def without_secrets(server: dict) -> tuple[dict, list[str]]:
-    """The server without the env values that look like credentials, and the names of those variables."""
+    """Redact credential-bearing fields and give the names that need local values."""
+    redacted = server.copy()
     env = server.get("env") or {}
     secret = [var for var, value in env.items()
               if secret_values(str(value)) or secret_values(f"{var}={value}")]
-    if not secret:
-        return server, []
-    kept = {var: value for var, value in env.items() if var not in secret}
-    return {**{key: value for key, value in server.items() if key != "env"}, **({"env": kept} if kept else {})}, secret
+    if secret:
+        redacted["env"] = {var: "[redacted]" if var in secret else value for var, value in env.items()}
+    args = server.get("args", [])
+    if any(secret_values(arg) or credential_arg(arg) for arg in args) or any(
+        flag.startswith("--") and "=" not in flag and not value.startswith("--") and secret_values(f"{flag}={value}")
+        for flag, value in zip(args, args[1:], strict=False)
+    ):
+        redacted["args"] = ["[redacted]"]
+        secret.append("args")
+    if (url := server.get("url")) and credential_url(url):
+        redacted["url"] = "[redacted]"
+        secret.append("url")
+    return redacted, secret
 
 
 def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS) -> list[str]:
@@ -206,9 +246,15 @@ def mirror(home: Path, source: str, dry: bool = False, *, enabled=DEFAULT_AGENTS
                     continue
                 if endpoint in endpoints:
                     continue
-                server, unset = without_secrets(server)
+                _, unset = without_secrets(server)
                 found += [f"WARN  MCP server {name} in {tool_names(readers)} needs {var} set: agent-sync does not "
                           "copy values that look like credentials" for var in unset]
+                if "args" in unset or "url" in unset:
+                    continue                    # a credential inside the command line or address can't be left out
+                if unset:                       # copied without the credential env values, which each tool sets itself
+                    kept = {var: value for var, value in server["env"].items() if var not in unset}
+                    server = {**{key: value for key, value in server.items() if key != "env"},
+                              **({"env": kept} if kept else {})}
                 missing[name] = server
             found += [f"{'would add' if dry else 'added'} MCP server {name} to {tool}" for name in missing]
             return ADDERS[TOOLS[tool].mcp_format](text, missing) if missing else text

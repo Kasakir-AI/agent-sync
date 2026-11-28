@@ -67,6 +67,7 @@ class Version:
     note: str
     scoped_rule: bool = False
     missing: tuple[str, ...] = ()    # an MCP server's: the absolute paths it names that don't exist
+    needs: tuple[str, ...] = ()      # MCP settings that need local credential values
 
 
 @dataclass
@@ -141,14 +142,14 @@ def as_text(data: Content | None) -> str | None:
 
 def make_version(kind: str, name: str, tools: tuple[str, ...], path: Path, body: str, origin: Origin,
                  note: str = "", *, key: str = "", digest: str = "", modified: float | None = None,
-                 scoped_rule: bool = False, missing: tuple[str, ...] = ()) -> Version:
+                 scoped_rule: bool = False, missing: tuple[str, ...] = (), needs: tuple[str, ...] = ()) -> Version:
     identity = json.dumps((kind, name, os.fspath(path), key)).encode()
     compared = normalized(body)    # count the lines the comparison reads, so equal text shows an equal length
     return Version(
         hashlib.sha1(identity).hexdigest()[:10], tools, path, key, body,
         digest or hashlib.sha256(compared.encode()).hexdigest(),
         path.stat().st_mtime if modified is None else modified, len(compared.splitlines()), origin, note, scoped_rule,
-        missing,
+        missing, needs,
     )
 
 
@@ -163,6 +164,8 @@ def is_scoped_rule(tool: str, front: str) -> bool:
 def text_version(kind: str, name: str, tool: str, path: Path, origin: Origin) -> Version:
     front, body = instructions.split_front(read_text(path))
     body = instructions.BLOCK.sub("\n", body)
+    if kind == "rule":
+        body = instructions.shared_body(body)
     note = "mirrored global instructions" if origin == Origin.COPY else ""
     return make_version(kind, name, (tool,), path, body, origin, note,
                         scoped_rule=kind == "rule" and is_scoped_rule(tool, front))
@@ -396,15 +399,17 @@ def scan_mcp(home: Path, cfg: Config, configured: dict) -> Iterator[tuple[str, V
         for name, server in sorted(configured.get(readers[0], {}).items()):
             if (value := portable(server)) is not None:
                 body = json.dumps(value, indent=2, sort_keys=True)
+                _, needs = mcp.without_secrets(value)
                 yield name, make_version("mcp", name, readers, path, body, Origin.SETTINGS, key=name,
-                                         missing=missing_paths(value))
+                                         missing=missing_paths(value) if not needs else (), needs=tuple(needs))
     for tool, plugins in inventory.plugins(home, cfg.agents).items():
         for plugin in plugins:
             for path, (name, server) in zip(plugin.server_files, plugin.servers, strict=True):
                 if (value := portable(server)) is not None:
                     body = json.dumps(value, indent=2, sort_keys=True)
+                    _, needs = mcp.without_secrets(value)
                     yield name, make_version("mcp", name, (tool,), path, body, Origin.PLUGIN,
-                                             f"from plugin {plugin.id}", key=name)
+                                             f"from plugin {plugin.id}", key=name, needs=tuple(needs))
 
 
 def shown(home: Path, path: Path) -> str:
@@ -842,6 +847,8 @@ def recommend(group: Group, source: str) -> tuple[Version, list[str]]:
 
 
 def cautions(version: Version, winner: Version) -> list[str]:
+    if version.needs:
+        return [f"needs {joined(list(version.needs))} set locally to use this version"]
     if version.missing and not winner.missing:
         more = f" and {counted(len(version.missing) - 1, 'other path')}" if len(version.missing) > 1 else ""
         return [f"stale: {version.missing[0]}{more} no longer exists"]

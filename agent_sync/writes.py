@@ -161,6 +161,8 @@ def plan(home: Path, scan: Scan, choices: dict[str, str | dict], source: str) ->
             raise ValueError(f"unknown version for {key}")
         if fixed(winner):
             raise ValueError(f"{key} comes with a plugin and can't be copied to the other tools")
+        if winner.needs:
+            raise ChoiceError(f"MCP server {group.name} {review.cautions(winner, winner)[0]}")
         targets: dict[Path, set[str]] = {}
         drop: dict[Path, frozenset[str]] = {}
         same = {version.path.resolve() for version in group.versions if version.digest == winner.digest}
@@ -224,7 +226,8 @@ def rule_text(step: Step, text: str) -> str:
     if not front and "cursor" in step.tools and step.action == "create":
         name = step.key.split(":", 1)[1]
         front = f"---\ndescription: {name}\nalwaysApply: true\n---\n"
-    return front + merge(rest, step.winner.body, step.drop.get(step.path, frozenset()))
+    return front + merge(rest, step.winner.body, step.drop.get(step.path, frozenset()),
+                         protected=instructions.local_rows(rest.splitlines()))
 
 
 def role_text(step: Step, text: str) -> str:
@@ -270,6 +273,11 @@ def write_skill(step: Step, read: Reader) -> dict[Path, tuple[Content, str]]:
 MCP_KEYS = ("command", "args", "env", "url")
 
 
+def auth_setting(key: str) -> bool:
+    """A setting that authenticates to an endpoint, so it must not follow a server to another address."""
+    return any(word in key.lower() for word in ("auth", "header", "token", "bearer", "cookie", "secret", "key"))
+
+
 def codex_mcp_text(text: str, name: str, winner: dict | None) -> str:
     current = tomllib.loads(text).get("mcp_servers", {})
     if winner is None:
@@ -289,13 +297,20 @@ def codex_mcp_text(text: str, name: str, winner: dict | None) -> str:
             raise ValueError(f"could not remove MCP server {name!r} from its TOML table")
         return updated
     server = current.get(name, {})
-    settings = {key: value for key, value in server.items() if key not in MCP_KEYS}
+    moved = (server.get("url") or None) != (winner.get("url") or None)     # changed, added or removed
+    settings = {key: value for key, value in server.items()
+                if key not in MCP_KEYS and not (moved and auth_setting(key))}
+    dropped = len(settings) < sum(key not in MCP_KEYS for key in server)
     if tomledit.has_value(text, None, "mcp_servers"):
         updated = tomledit.set_value(text, None, "mcp_servers", {**current, name: {**settings, **winner}})
     elif tomledit.has_value(text, ("mcp_servers",), name):
         updated = tomledit.set_value(text, ("mcp_servers",), name, {**settings, **winner})
     elif name not in current:
         updated = text + mcp.codex_block(name, winner)
+    elif dropped:                       # rewrite the table without the old address's credentials, keep the rest
+        updated = codex_mcp_text(text, name, None) + mcp.codex_block(name, winner)
+        for key, value in settings.items():
+            updated = tomledit.set_value(updated, ("mcp_servers", name), key, value)
     else:
         updated = text
         table = ("mcp_servers", name)
@@ -320,7 +335,13 @@ def json_mcp_text(text: str, name: str, winner: dict | None, *, aliases: tuple[s
     if winner is None:
         servers.pop(name, None)
     else:
-        entry = {key: value for key, value in (servers.get(name) or {}).items()
+        current = servers.get(name) or {}
+        url_keys = (*aliases, "url") if "httpUrl" in winner else ("url", *aliases)
+        old_url = next((current[key] for key in url_keys if current.get(key)), None)
+        new_url = next((winner[key] for key in url_keys if winner.get(key)), None)
+        if old_url != new_url:                  # changed, added or removed
+            current = {key: value for key, value in current.items() if not auth_setting(key)}
+        entry = {key: value for key, value in current.items()
                  if key not in (*MCP_KEYS, *aliases) or key in winner}
         entry.update(winner)
         if typed:
@@ -445,6 +466,8 @@ def repair(home: Path, cfg: Config, dry: bool = False) -> list[str]:
     choices, why = {}, {}
     for group in scan_now.groups:
         versions = [version for version in group.versions if not fixed(version)]
+        if any(version.needs for version in versions):
+            continue
         working = [version for version in versions if not version.missing]
         if not working:
             continue

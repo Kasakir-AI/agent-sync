@@ -76,8 +76,8 @@ class Run:
 
 
 def change(what: str) -> str:
-    """What approving a question does: an upgrade names itself; anything else is a removal."""
-    return what if what.startswith("upgrade ") else f"remove {what}"
+    """What approving a question does."""
+    return what if what.startswith(("upgrade ", "replace ")) else f"remove {what}"
 
 
 def question(what: str) -> str:

@@ -66,3 +66,18 @@ def test_global_rule_cannot_overwrite_a_scoped_rule_with_the_same_name(tmp_path)
     with pytest.raises(writes.ChoiceError):
         writes.plan(tmp_path, scanned, {group.key: group.versions[0].id}, "claude")
     assert scoped.read_bytes() == original
+
+
+def test_review_rule_copy_excludes_private_donor_text(tmp_path):
+    donor = rule(tmp_path, "claude", "style", "Keep diffs small.\n"
+                 "<!-- agent-sync: private -->\nLocal identifiers.\n<!-- agent-sync: end private -->\n")
+    before = donor.read_bytes()
+    scanned = review.scan(tmp_path, Config(home=tmp_path), ["rule"])
+    group, = scanned.groups
+    steps = writes.plan(tmp_path, scanned, {group.key: group.versions[0].id}, "claude")
+
+    writes.apply(tmp_path, steps, tmp_path / "backup")
+
+    _, body = (tmp_path / ".cursor/rules/style.mdc").read_text().split("---\n", 2)[1:]
+    assert body == "Keep diffs small.\n"
+    assert donor.read_bytes() == before

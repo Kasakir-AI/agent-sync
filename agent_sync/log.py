@@ -11,7 +11,7 @@ from hashlib import sha256
 from itertools import pairwise
 from pathlib import Path
 
-from .textmerge import load_baselines, save_baselines
+from .textmerge import load_baselines, private_file, save_baselines
 
 STAMP = "%Y-%m-%d %H:%M:%S"
 LOG_STAMP = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d"
@@ -50,6 +50,7 @@ class Log:
         self.warnings: list[str] = []
         if write:
             path.parent.mkdir(parents=True, exist_ok=True)
+            private_file(path)
 
     def __call__(self, kind: str, message: str) -> None:
         if kind == "WARN":
@@ -57,7 +58,8 @@ class Log:
             message = message.replace("\n", "\n\t")
         line = f"{datetime.now().strftime(STAMP)} {kind:<5} {message}"
         if self.write:
-            with self.path.open("a") as f:
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "a") as f:
                 f.write(line + "\n")
         self.kinds[kind] += 1
         if self.echo and kind != "WARN":

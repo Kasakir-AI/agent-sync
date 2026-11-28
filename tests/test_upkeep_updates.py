@@ -29,11 +29,16 @@ def npm_releases(output, packages):
     for name, (installed, releases) in packages.items():
         if installed != list(releases)[-1]:         # npm lists only outdated packages
             report[name] = {"current": installed, "latest": list(releases)[-1]}
-        output[("npm", "view", name, "time", "--json")] = json.dumps(releases)
+        output[("npm", "view", name, "time", "--json")] = json.dumps({installed: SETTLED, **releases})
         for major in {version.split(".")[0] for version in [installed, *releases]}:
             output[("npm", "view", f"{name}@^{major}", "version", "--json")] = json.dumps(
                 [version for version in releases if version.split(".")[0] == major])
     output[NPM_OUTDATED] = json.dumps(report)
+
+
+def uv_receipt(tmp_path, commands, name):
+    commands.output[UV_DIR] = str(tmp_path / "uv tools")
+    write(tmp_path, f"uv tools/{name}/uv-receipt.toml", f'[tool]\nrequirements = [{{ name = "{name}" }}]\n')
 
 
 def brew_outdated(formulae=(), casks=()):
@@ -119,6 +124,13 @@ def test_run_updates_global_skills_once_after_packages(tmp_path, monkeypatch, co
                  update_plugins=False, update_self=False)
     monkeypatch.setattr(cli, "load", lambda: cfg)
     monkeypatch.setattr(cli, "online", lambda: True)
+
+    def checkout(package, folder):
+        name = package.split("/")[-1]
+        write(folder, f"skills/{name}/SKILL.md", f"---\nname: {name}\ndescription: Example\n---\nExample\n")
+        return 0, ""
+
+    monkeypatch.setattr(tools, "checkout", checkout)
     assert cli.run(force=True, echo=True, dry=dry) == 0
     output = capsys.readouterr().out
     assert output.count("skills from every source (skills update)") == 1
@@ -383,6 +395,7 @@ def test_mcp_resolves_npm_pipx_uv_and_listed_own_updaters(tmp_path, monkeypatch,
                                    "@org/two": ("2.0.0", {"2.0.0": SETTLED, "2.0.1": SETTLED})})
     commands.output[PIPX_LIST] = pipx_list(**{"pix-package": "3.0.0"})
     commands.output[UV_LIST] = "tool-uv-package v0.4.0\n- tool-uv\n"
+    uv_receipt(tmp_path, commands, "tool-uv-package")
     pypi.update({"pix-package": {"3.0.0": SETTLED, "3.1.0": SETTLED},
                  "tool-uv-package": {"0.4.0": SETTLED, "0.5.0": SETTLED}})
     cfg = Config(home=tmp_path, program_updates={"plannotator": ["plannotator", "update"]})
@@ -420,7 +433,7 @@ def test_npm_outdated_reads_json_when_npm_exits_one(tmp_path, monkeypatch):
 
     answers = {NPM_OUTDATED: (1, '{"npm": {"current": "11.0.0", "latest": "11.1.0"}}'),
                ("npm", "view", "npm@^11", "version", "--json"): (0, '["11.0.0", "11.1.0"]'),
-               ("npm", "view", "npm", "time", "--json"): (0, json.dumps({"11.1.0": SETTLED}))}
+               ("npm", "view", "npm", "time", "--json"): (0, json.dumps({"11.0.0": SETTLED, "11.1.0": SETTLED}))}
 
     def subprocess_run(args, **kwargs):
         code, stdout = answers[tuple(args)]
@@ -498,6 +511,7 @@ def test_global_tools_update_only_selected_managers(tmp_path, commands, pypi, se
                                    "already-updated": ("1.0.0", {"1.0.0": SETTLED, "1.1.0": SETTLED})})
     commands.output.update({PIPX_LIST: pipx_list(pix="2.0.0"), UV_LIST: "tuv v0.2.0\n- tuv\n",
                             BREW_JSON: brew_outdated([("wget", "1.24", "1.25")])})
+    uv_receipt(tmp_path, commands, "tuv")
     pypi.update({"pix": {"2.0.0": SETTLED, "2.1.0": SETTLED}, "tuv": {"0.2.0": SETTLED, "0.3.0": SETTLED}})
     state = tools.UpdateState(handled={("npm", "already-updated")})
     cfg = Config(home=tmp_path, update_global_tools=setting)
@@ -801,6 +815,7 @@ def test_one_run_shares_one_npm_cache_for_mcp_pins_and_tools(tmp_path, monkeypat
 def test_uv_upgrades_the_existing_tool_at_the_guarded_version(tmp_path, commands, pypi):
     program(tmp_path, "uv")
     commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
+    uv_receipt(tmp_path, commands, "demo")
     pypi["demo"] = {"1.1.0": SETTLED, "2.0.0": SETTLED}
     tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
                               state=tools.UpdateState())
@@ -853,6 +868,22 @@ def test_pipx_keeps_extras_and_leaves_tools_from_a_url_alone(tmp_path, commands,
     assert commands.ran == [["pipx", "install", "--force", "black[d]==24.2.0"]]
 
 
+@pytest.mark.parametrize("location, field, value", [
+    ("main_package", "pip_args", "--index-url https://packages.example/simple"),
+    ("metadata", "injected_packages", {"plugin": {"package": "plugin"}}),
+])
+def test_pipx_leaves_custom_environments_alone(tmp_path, commands, pypi, location, field, value):
+    program(tmp_path, "pipx")
+    listing = json.loads(pipx_list(demo="1.0.0"))
+    metadata = listing["venvs"]["demo"]["metadata"]
+    (metadata if location == "metadata" else metadata[location])[field] = value
+    commands.output[PIPX_LIST] = json.dumps(listing)
+    pypi["demo"] = {"1.1.0": SETTLED}
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["pipx"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == []
+
+
 def test_pipx_upgrades_the_suffixed_environment_in_place(tmp_path, commands, pypi):
     program(tmp_path, "pipx")
     commands.output[PIPX_LIST] = json.dumps({"venvs": {
@@ -881,7 +912,7 @@ def test_python_tool_upgrades_to_the_newest_compatible_release(tmp_path, command
         "main_package": {"package": "demo", "package_version": "1.0.0", "package_or_url": "demo"},
     }}}})
     commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
-    commands.output[UV_DIR] = str(tmp_path / "uv tools")
+    uv_receipt(tmp_path, commands, "demo")
     write(tmp_path, "uv tools/demo/pyvenv.cfg", "version_info = 3.10.9.final.0\n")
     pypi["demo"] = {
         "1.1.0": [
@@ -903,7 +934,7 @@ def test_python_tool_upgrades_to_the_newest_compatible_release(tmp_path, command
 def test_pypi_upgrade_waits_for_a_compatible_distribution_to_settle(tmp_path, commands, pypi):
     program(tmp_path, "uv")
     commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
-    commands.output[UV_DIR] = str(tmp_path / "uv tools")
+    uv_receipt(tmp_path, commands, "demo")
     write(tmp_path, "uv tools/demo/pyvenv.cfg", "version_info = 3.10.9.final.0\n")
     pypi["demo"] = {"1.1.0": [
         {"requires_python": ">=3.11", "upload_time_iso_8601": SETTLED},
@@ -984,6 +1015,29 @@ def test_uv_leaves_ranged_or_excluding_installs_to_a_manual_upgrade(tmp_path, co
     assert any("requires a manual upgrade" in message for _, message in commands.lines)
 
 
+@pytest.mark.parametrize("receipt", [
+    None,
+    "[tool",
+    '[tool]\nrequirements = [{ name = "other" }]\n',
+    '[tool]\nrequirements = [{ name = "demo", git = "https://example.com/demo.git" }]\n',
+    '[tool]\nrequirements = [{ name = "demo", directory = "../demo" }]\n',
+    '[tool]\nrequirements = [{ name = "demo", index = "https://packages.example/simple" }]\n',
+    '[tool]\nrequirements = [{ name = "demo" }]\n[tool.options]\nindex-url = "https://packages.example/simple"\n',
+    '[tool]\nrequirements = [{ name = "demo" }, { name = "plugin", path = "../plugin" }]\n',
+])
+def test_uv_skips_unverified_or_custom_receipts(tmp_path, commands, pypi, receipt):
+    program(tmp_path, "uv")
+    commands.output[UV_LIST] = "demo v1.0.0\n- demo\n"
+    commands.output[UV_DIR] = str(tmp_path / "uv tools")
+    if receipt is not None:
+        write(tmp_path, "uv tools/demo/uv-receipt.toml", receipt)
+    pypi["demo"] = {"1.1.0": SETTLED}
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["uv"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == []
+    assert any("requires a manual upgrade" in message for _, message in commands.lines)
+
+
 def test_pipx_leaves_out_an_interpreter_that_moved(tmp_path, commands, pypi):
     program(tmp_path, "pipx")
     commands.output[PIPX_LIST] = json.dumps({"venvs": {"demo": {"metadata": {
@@ -1038,10 +1092,23 @@ def test_npm_listing_skips_linked_packages(tmp_path, monkeypatch):
     root = tmp_path / "lib/node_modules"
     (tmp_path / "own-cli").mkdir()
     (root / "wrangler").mkdir(parents=True)
-    (root / "kas").symlink_to(tmp_path / "own-cli")
+    (root / "local-cli").symlink_to(tmp_path / "own-cli")
     report = {name: {"current": current, "latest": latest, "location": str(root / name)}
-              for name, current, latest in (("kas", "0.4.0", "1.0.0"), ("wrangler", "4.1.0", "4.2.0"))}
-    monkeypatch.setattr(tools, "raw", lambda args, ok_codes=(0,): json.dumps(report))
+              for name, current, latest in (("local-cli", "0.4.0", "1.0.0"), ("wrangler", "4.1.0", "4.2.0"))}
+    monkeypatch.setattr(tools, "raw", lambda args, **kwargs: json.dumps(report))
+    published = SimpleNamespace(npm=SimpleNamespace(released=lambda name: {"0.4.0": SETTLED, "4.1.0": SETTLED}))
 
     from agent_sync import upgrades
-    assert list(upgrades.npm_listing()) == ["wrangler"]
+    assert list(upgrades.npm_listing(published)) == ["wrangler"]
+
+
+def test_npm_leaves_globals_at_versions_the_registry_never_published(tmp_path, commands):
+    """npm records no source for a global installed from git, a tarball or a fork; a version the registry never
+    published is the sign that it isn't the registry's package, so the registry's namesake must not replace it."""
+    program(tmp_path, "npm")
+    npm_releases(commands.output, {"demo": ("1.0.0", {"1.1.0": SETTLED}), "other": ("1.0.0", {"1.1.0": SETTLED})})
+    commands.output[NPM_OUTDATED] = json.dumps({"demo": {"current": "1.0.0-fork.1", "latest": "1.1.0"},
+                                                "other": {"current": "1.0.0", "latest": "1.1.0"}})
+    tools.update_global_tools(commands.log, Config(home=tmp_path, update_global_tools=["npm"]), False,
+                              state=tools.UpdateState())
+    assert commands.ran == [["npm", "install", "-g", "other@1.1.0"]]

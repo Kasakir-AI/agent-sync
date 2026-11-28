@@ -10,6 +10,8 @@ share.
 - **Package subagents** (`agents/*.md`) are written in each enabled agent's format. Cursor gets a local
   subagent plugin. You can set models for Claude Code, Codex, Cursor, and Gemini CLI and add notes to the
   subagent prompts. Gemini CLI and Antigravity keep multiline descriptions as written. Antigravity chooses its own model.
+  Each agent file carries a one-line agent-sync mark. A same-name agent without the mark, or one you edited, is
+  replaced only after you approve it.
 - **Your own skills** (the ones you made in the source tool, not from a package) are copied to the other tools.
   A copy is marked as agent-sync's, so it follows the source and goes away with it; a folder you made by hand in
   the other tool stays in place. Upkeep warns if a file or folder blocks a copy and continues with the other skills.
@@ -29,7 +31,8 @@ share.
   `pstack-models` file to the others, and each tool keeps its own notes on how to run each model.
 - **MCP servers** at user level are added to the tools that don't have them yet. A server a tool's plugin already
   brings is not added again. An exact settings copy of a plugin's server can be removed after you approve it.
-  Environment values that look like secrets are not copied: the run tells you which variable to set. Upkeep brings
+  Environment values that look like secrets are not copied: the run tells you which variable to set. A server with a
+  credential in its arguments or URL is not copied at all, and review never offers to copy one. Upkeep brings
   copies of an app's server, such as Codex's `node_repl`, to the newest working version when only the app version
   differs. Settings such as endpoint URLs and log destinations stay for review. A pinned package
   (`npx -y name@1.2.3`) moves to the newest release in the same major version once it is at least 2 days old.
@@ -52,7 +55,9 @@ share.
   can include breaking changes, so upkeep asks you first (see [Approve removals](#approve-removals));
   `global_major_updates` installs it without asking, still after 2 days. Explicit keep rules still apply.
   Homebrew has no 2-day wait, because Homebrew reviews a release before publishing it. A pipx tool installed from a URL
-  or a folder is left alone. Pipx upgrades use the tool's existing suffix, and uv upgrades keep its extras and
+  or a folder, or with its own pip arguments (such as a private index) or injected packages, is left alone. So is a
+  global npm tool that is linked to a folder or at a version the npm registry never published (installed from git,
+  a tarball or a fork), and a uv tool whose receipt names a git, folder or index source or can't be read. Pipx upgrades use the tool's existing suffix, and uv upgrades keep its extras and
   additional dependencies. Both choose releases compatible with the tool's Python interpreter when its version is known. A uv tool
   installed with a version range or with excluded dependencies is left for you to upgrade.
 - **CLIs** are updated through Homebrew when it installed them or through their own update commands. Gemini CLI
@@ -74,7 +79,7 @@ share.
 It runs hourly and at login but only does the work once every 20 hours, so a day the Mac was off is caught up
 soon after it starts.
 
-> Status: 0.9.7. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
+> Status: 0.9.8. macOS (launchd) and Linux (systemd user timer). See the [roadmap](docs/ROADMAP.md).
 
 ## Install
 
@@ -131,7 +136,8 @@ Upkeep prunes unchanged copies at the end of the run. A run with no changed orig
 
 Every `agent-sync run` checks retention, even when upkeep is skipped, offline, or fails. Backups expire after
 30 days (`backup_days`). If the backup folder exceeds 500 MiB (`backup_max_mb`), upkeep deletes the oldest
-agent-sync backup folders until it reaches the limit or exhausts eligible backups. The current run and any
+agent-sync backup folders until it reaches the limit or exhausts eligible backups, starting with the large ones
+(over a tenth of the limit), so one big program backup doesn't push out small ones. The current run and any
 folders you add yourself can keep the total above the limit. Upkeep skips symlinked backup folders and entries
 and asks you to acknowledge the warning. Run `agent-sync status` to see backup size, folder count, and both limits.
 
@@ -182,8 +188,9 @@ next upkeep. A dry run shows the question without asking you to answer.
 
 If you share, upkeep copies eligible notes to `~/.agents/memory/` and adds the index to the other agents'
 instructions. Upkeep manages only the copies it recorded in its manifest. It skips symlinked notes and asks before
-overwriting an edited copy. If Claude Code's memory folder is removed, upkeep backs up the instruction files and
-clears the index it added.
+overwriting an edited copy. The shared index lists only notes that are shared. If Claude Code's memory folder is
+removed, upkeep backs up the instruction files and clears the index it added. If you set `mirror_memory = false`
+after sharing, upkeep removes the index and the copies it made (backed up) and asks before removing a copy you edited.
 
 The other agents send their instructions to their own companies, so some notes stay in Claude Code:
 

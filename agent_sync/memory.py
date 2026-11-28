@@ -92,7 +92,7 @@ def question(cfg: Config) -> str | None:
             "Notes about credentials, keys and personal details stay in Claude Code.")
 
 
-def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()) -> list[str]:
+def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=(), sharing=True) -> list[str]:
     locations = files(home, enabled)
     claude = files(home, ("claude",))["claude"]
     source = notes(home)
@@ -100,24 +100,28 @@ def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()
         pending.incomplete()
         return []
 
+    messages = [] if sharing else mirror_index(locations, claude, "", dry)
     dest = home / ".agents/memory"
     marker = dest / MARKER
     exists = dest.exists()
     if (dest.is_symlink() or not inside(home, dest)
             or (exists and (marker.is_symlink() or not marker.is_file()))):
+        if not sharing:
+            return messages
         pending.incomplete()
         messages = [f"WARN  {dest} is not an agent-sync-owned memory folder"]
         return messages if source.is_dir() else messages + mirror_index(locations, claude, "", dry)
     resolved_dest = dest.resolve()
 
-    messages = []
     action = "would update" if dry else "updated"
     source_files = {path.name: path.read_bytes() for path in sorted(source.glob("*.md"))
-                    if path.is_file() and not path.is_symlink()}
+                    if path.is_file() and not path.is_symlink()} if sharing else {}
     index = source_files.pop("MEMORY.md", None)
-    private_notes = {}
+    private_notes, chosen = {}, set()        # chosen: notes you listed in share_memory, by name or file name
     for filename, data in source_files.items():
         name, reasons, kinds = note_privacy(filename, data.decode(), private_memory, share_memory)
+        if {name, Path(filename).stem} & set(share_memory):
+            chosen.add(filename)
         if reasons:
             private_notes[filename] = f"{name} ({', '.join(reasons)})"
         if kinds:
@@ -132,14 +136,19 @@ def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()
     if index is not None:
         lines = index.decode().splitlines(keepends=True)
         secrets = secret_rows(lines)
-        index_text = "".join(line for row, line in enumerate(lines) if row not in secrets
-                             and not any(unquote(target) in private_notes for target in LINK_TARGET.findall(line)))
+        index_text = "".join(line for row, line in enumerate(lines)
+                             if row not in secrets and line.startswith("-")
+                             and (link := LINK.match(line)) and unquote(link[2]) in source_files
+                             and all(unquote(target) in source_files for target in LINK_TARGET.findall(line))
+                             and (not sensitive(line) or unquote(link[2]) in chosen))
         source_files["MEMORY.md"] = index_text.encode()
 
     owned = manifest(marker)
     malformed = owned is None
     if malformed:
         messages.append(f"WARN  malformed memory manifest {marker}; existing notes are treated as unowned")
+        if not sharing:
+            return messages
         owned = {}
     written = dict(owned)
 
@@ -196,7 +205,9 @@ def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()
         private = path.name in private_notes
         edited = digest(before) != owned[path.name]
         reason = "the note is private now" if private else "no longer in Claude Code's memory"
-        if (not private or edited) and not pending.due(
+        if not sharing:
+            reason = "memory sharing is off"
+        if (edited or (sharing and not private)) and not pending.due(
                 key, f"memory copy {path} ({reason}{'; you edited this copy' if edited else ''})"):
             continue
         if not dry:
@@ -210,8 +221,8 @@ def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()
             path.unlink()
             written.pop(path.name, None)
             pending.removed(key)
-        if private and not edited:
-            messages.append(f"{'would remove' if dry else 'removed'} {path}: the note is private now (backed up)")
+        if not edited and (private or not sharing):
+            messages.append(f"{'would remove' if dry else 'removed'} {path}: {reason} (backed up)")
         elif not dry:
             copied = True
     written = {name: value for name, value in written.items()
@@ -223,7 +234,7 @@ def mirror(home: Path, dry: bool, *, enabled, private_memory=(), share_memory=()
         check_dest()
         writes.update(marker, lambda _: data, check=check_dest, new_mode=0o600, follow_symlinks=False)
 
-    return messages + mirror_index(locations, claude, index_text, dry)
+    return messages + mirror_index(locations, claude, index_text, dry) if sharing else messages
 
 
 def mirror_index(locations: dict[str, Path], claude: Path, index_text: str, dry: bool) -> list[str]:

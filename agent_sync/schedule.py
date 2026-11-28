@@ -150,7 +150,10 @@ def install(home: Path, state_dir: Path, with_launcher: bool = False) -> list[st
     if sys.platform == "darwin":
         p = plist_path(home)
         p.parent.mkdir(parents=True, exist_ok=True)
-        state_dir.mkdir(parents=True, exist_ok=True)
+        state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        state_dir.chmod(0o700)
+        (state_dir / OUTPUT_FILE).touch(mode=0o600)    # launchd creates it world-readable otherwise
+        (state_dir / OUTPUT_FILE).chmod(0o600)
         p.write_text(plist(state_dir / OUTPUT_FILE))
         domain = f"gui/{os.getuid()}"
         subprocess.run(["launchctl", "bootout", f"{domain}/{LABEL}"], capture_output=True)

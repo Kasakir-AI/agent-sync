@@ -102,7 +102,9 @@ def test_package_skill_removals_require_approval_and_save_the_originals(tmp_path
             kept = json.loads(lock.read_text())
             del kept["skills"][name]
             lock.write_text(json.dumps(kept))
-            (dropped.parent.parent / name / "SKILL.md").unlink()
+            folder = dropped.parent.parent / name
+            (folder / "SKILL.md").unlink()
+            folder.rmdir()
         return 0, ""
 
     monkeypatch.setattr(tools, "checkout", checkout)
@@ -175,3 +177,59 @@ def test_a_package_prefix_keeps_every_major_version_of_it(tmp_path):
                        (["upgrade:npm:wrangler@6"], False), (["upgrade:npm:wrang"], False)):
         with pending.during(tmp_path, keep, lambda *_: None, True):
             assert pending.keeps("upgrade:npm:wrangler@5") is kept
+
+
+def test_state_records_are_private_when_created_or_unchanged(tmp_path):
+    from stat import S_IMODE
+
+    from agent_sync.textmerge import save_baselines
+
+    root = tmp_path / "state"
+    records = root / pending.FILENAME
+    with pending.during(root, [], lambda *_: None, False):
+        pending.due("skill:notes", "old notes")
+    assert S_IMODE(root.stat().st_mode) == 0o700
+    assert S_IMODE(records.stat().st_mode) == 0o600
+
+    root.chmod(0o755)
+    records.chmod(0o644)
+    save_baselines(records, pending.load(root))
+    assert S_IMODE(root.stat().st_mode) == 0o700
+    assert S_IMODE(records.stat().st_mode) == 0o600
+
+
+def test_package_sync_rejects_unsafe_skill_selectors(tmp_path, monkeypatch):
+    from agent_sync import cli, tools
+    from agent_sync.config import Config
+    from agent_sync.log import Log
+    from tests.test_inventory import write
+    from tests.test_skills import make_skill
+
+    cfg = Config(home=tmp_path, skill_packages=["org/pack"])
+    work = tmp_path / "work"
+    write(tmp_path, ".agents/.skill-lock.json", {"skills": {"*": {"source": "org/pack"}}})
+
+    def checkout(package, folder):
+        if not folder.exists():
+            make_skill(folder / "skills", "-invalid")
+            make_skill(folder / "skills", "notes")
+            make_skill(folder / "skills", "internal")
+            definition = folder / "skills/internal/SKILL.md"
+            definition.write_text(definition.read_text().replace(
+                "description:", "metadata:\n  internal: true\ndescription:"))
+        return 0, ""
+
+    commands = []
+    log = Log(tmp_path / "log", write=False)
+    monkeypatch.delenv("INSTALL_INTERNAL_SKILLS", raising=False)
+    monkeypatch.setattr(tools, "checkout", checkout)
+    monkeypatch.setattr(tools, "sh", lambda args, timeout: (commands.append(args) or 0, ""))
+    for _ in range(2):
+        with pending.during(cfg.state_dir, [], log, False):
+            cli.sync_packages(cfg, log, work, False)
+        if pending.load(cfg.state_dir):
+            approve_current(cfg.state_dir)
+
+    assert commands == [tools.skill_args(cfg.skills_cli, "org/pack", ["notes"], enabled=cfg.agents)] * 2
+    assert any("-invalid" in warning for warning in log.warnings)
+    assert any("'*'" in warning for warning in log.warnings)

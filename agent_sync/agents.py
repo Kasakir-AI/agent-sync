@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 from . import backups, pending, writes
@@ -100,6 +101,60 @@ FORMATS = {
 }
 
 
+def ownership(content: bytes, package: str) -> tuple[bytes, bytes] | None:
+    opening = b"---\n" if content.startswith(b"---\n") else b""
+    marker, _, rest = content[len(opening):].partition(b"\n")
+    prefix = f"# agent-sync: {package} ".encode()
+    digest = marker.removeprefix(prefix)
+    if marker.startswith(prefix) and re.fullmatch(rb"[0-9a-f]{64}", digest):
+        return digest, opening + rest
+    return None
+
+
+def mirror_agent(path: Path, text: str, package: str, key: str, dry: bool, changes: list[str]) -> None:
+    content = text.encode()
+    digest = sha256(content).hexdigest()
+    marker = f"# agent-sync: {package} {digest}\n"
+    marked = ("---\n" + marker + text[4:] if text.startswith("---\n") else marker + text).encode()
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        changes.append(f"WARN  {path} is not an agent owned by {package}; left alone")
+        return
+
+    approval = None
+
+    def plan(before: bytes | None) -> bytes | None:
+        nonlocal approval
+        approval = None
+        if before is not None and before != marked:
+            record = ownership(before, package)
+            if record is None:
+                if before == content:           # written before agent-sync marked its agents: adopt it as is
+                    return marked
+                approval = f"{key}@unmarked-{sha256(before).hexdigest()[:12]}-{digest[:12]}"   # a later edit asks again
+                if pending.keeps(key) or not pending.due(
+                        approval, f"replace the agent {path} with the version from {package} (it has no agent-sync "
+                                  "mark, so it may be your own)"):
+                    return None
+                return marked
+            old_digest, old_content = record
+            actual = sha256(old_content).hexdigest()
+            if old_digest != actual.encode():
+                approval = f"{key}@{actual[:12]}-{digest[:12]}"
+                if pending.keeps(key) or not pending.due(
+                        approval, f"replace the edited agent {path} with the version from {package}"):
+                    return None
+        return marked
+
+    if dry:
+        before = writes.read_bytes(path)
+        if (after := plan(before)) is not None and after != before:
+            changes.append(f"would update {path}")
+    elif writes.update(path, plan, follow_symlinks=False):
+        if approval is not None:
+            pending.removed(approval)
+        changes.append(f"updated {path}")
+
+
 def mirror(package_dir: Path, package: str, home: Path, models: AgentModels, version: str = "0",
            dry: bool = False, notes: dict[str, str] | None = None, *, enabled=DEFAULT_AGENTS) -> list[str]:
     """Write every agent of `package_dir/agents` for the enabled tools. Returns one line per changed file.
@@ -121,8 +176,8 @@ def mirror(package_dir: Path, package: str, home: Path, models: AgentModels, ver
                 continue
             suffix, render = FORMATS[fmt]
             path = folder / (a.name + suffix)
-            if write_if_changed(path, render(a, models), dry):
-                changes.append(f"{verb} {path}")
+            key = f"agent:{folder.relative_to(home)}:{a.name}"
+            mirror_agent(path, render(a, models), package, key, dry, changes)
     for folder, readers in targets.items():
         if not agents or TOOLS[readers[0]].agent_format != "cursor-plugin":
             continue
@@ -135,6 +190,9 @@ def mirror(package_dir: Path, package: str, home: Path, models: AgentModels, ver
         names = {f"{a.name}.md" for a in agents}
         for old in folder.glob("*.md"):
             if old.name in names:
+                continue
+            if old.is_symlink() or not old.is_file() or ownership(old.read_bytes(), package) is None:
+                changes.append(f"WARN  {old} is not an agent owned by {package}; left alone")
                 continue
             key = f"agent:{folder.relative_to(home)}:{old.stem}"
             what = f"Cursor agent {old} (no longer in {package})"

@@ -13,7 +13,7 @@ from importlib.resources import files
 from pathlib import Path
 from threading import Event, Thread
 
-from . import instructions, review, textmerge, writes
+from . import instructions, mcp, review, textmerge, writes
 from .config import Config
 from .locking import run_lock
 from .registry import TOOLS
@@ -74,18 +74,20 @@ def _leftovers(home: Path, group: review.Group, version: review.Version) -> dict
 def _group_data(home: Path, group: review.Group, source: str) -> dict:
     winner, reasons = review.recommend(group, source)
     gone = review.removals(group, winner)
+    bodies = {version.id: (json.dumps(mcp.without_secrets(json.loads(version.body))[0], indent=2, sort_keys=True)
+                           if version.needs else version.body) for version in group.versions}
     versions = []
     for version in group.versions:
         path = review.shown(home, version.path)
-        rows = textmerge.rows(version.body, winner.body) if version.id != winner.id else []
+        rows = textmerge.rows(bodies[version.id], bodies[winner.id]) if version.id != winner.id else []
         dropped = set(gone.get(version.id, ()))
         rows = [("x" if tag == "=" and line.rstrip() in dropped else tag, line) for tag, line in rows]
         versions.append({
             "id": version.id, "tools": version.tools, "path": path, "lines": version.lines,
             "modified": version.modified, "origin": version.origin, "label": review.ORIGIN_LABELS[version.origin],
             "note": version.note.replace(str(home) + "/", "~/"),
-            "cautions": review.cautions(version, winner) if version.id != winner.id else [],
-            "fixed": review.fixed(version),
+            "cautions": review.cautions(version, winner) if version.id != winner.id or version.needs else [],
+            "fixed": review.fixed(version) or bool(version.needs),
             "diff": _rows(rows), "own": sum(tag == "=" and textmerge.meaningful(line) for tag, line in rows),
             "only": _leftovers(home, group, version),
         })
@@ -94,6 +96,16 @@ def _group_data(home: Path, group: review.Group, source: str) -> dict:
             "summary": review.difference(group, winner) if differs else "",
             "missing": group.missing, "matched_by": group.matched_by, "winner": winner.id, "reasons": reasons,
             "snapshot": _snapshot(group), "versions": versions}
+
+
+def _mcp_preview(text: str, tool: str) -> str:
+    servers = mcp.codex_entries(text) if TOOLS[tool].mcp_format == "codex-toml" else mcp.json_servers(text)
+    entries = {}
+    for name, server in servers.items():
+        if isinstance(server, dict):
+            portable, _ = mcp.without_secrets(review.portable(server) or {})
+            entries[name] = {**dict.fromkeys(server, "[local setting]"), **portable}
+    return json.dumps(entries, indent=2, sort_keys=True)
 
 
 def _edit_data(home: Path, edit: writes.Edit) -> dict:
@@ -105,6 +117,8 @@ def _edit_data(home: Path, edit: writes.Edit) -> dict:
     if not data["binary"]:
         data["lines"] = len(after.splitlines())
         if edit.before is not None:
+            if edit.key.startswith("mcp:"):
+                before, after = (_mcp_preview(text, edit.tools[0]) for text in (before, after))
             data["diff"] = _rows(_changes(before, after))
             if edit.winner:
                 bodies = (instructions.split_front(text)[1] for text in (before, edit.winner))

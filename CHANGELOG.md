@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.8 (2026-11-27)
+
+**Security and safety fixes from a full review**
+
+- Upgrades never swap in a stranger's package of the same name. Upkeep now leaves alone a pipx tool installed with
+  its own pip arguments (such as a private index) or injected packages, a uv tool whose receipt names a git, folder or
+  index source or can't be read, and a global npm tool at a version the npm registry never published (installed from
+  git, a tarball or a fork).
+- MCP servers with a credential in their arguments or URL are no longer copied to other tools. The review page hides
+  credential values and won't copy such a server. Choosing a server with a different address in review no longer
+  carries the old address's headers, such as an Authorization token, to the new one.
+- Rules copied in review leave out text marked private. The shared memory index lists only notes that are shared.
+- Turning memory sharing off (`mirror_memory = false`) now removes the shared index and the copies upkeep made
+  (backed up). A copy you edited stays until you approve removing it.
+- Package agents carry an agent-sync mark. A same-name agent without the mark, or one you edited, is replaced only
+  after you approve. Skill names that could act as command options are skipped, and so are internal skills when
+  upkeep names a package's skills itself.
+- A crashed run no longer blocks the next ones for two hours. Replacing a mirrored skill keeps the old copy until the
+  new one is in place. Large backups are pruned before small ones, so one big program backup no longer pushes out the
+  rest.
+- agent-sync's state files, the log and the scheduled run's output are readable only by you.
+
 ## 0.9.7 (2026-11-27)
 
 **Linked npm tools are never "upgraded" to a stranger's package**

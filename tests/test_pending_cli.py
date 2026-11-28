@@ -9,7 +9,7 @@ import pytest
 
 from agent_sync import cli, notify, pending
 from agent_sync.config import Config, load
-from agent_sync.locking import MAX_AGE, run_lock
+from agent_sync.locking import run_lock
 from agent_sync.log import ACK_AGE, Log
 from tests.test_notify import available, inbox
 
@@ -94,7 +94,7 @@ def test_run_applies_choice_next_run_and_only_repeats_unacknowledged_warnings(
     lock = upkeep.state_dir / "lock"
 
     def assert_locked():
-        stale = time.time() - MAX_AGE - 1
+        stale = time.time() - 7201
         os.utime(lock, (stale, stale))
         with run_lock(lock) as held:
             assert not held
@@ -236,7 +236,7 @@ def test_disabled_step_retains_approval_and_completed_owner_expires_it(upkeep, m
     assert cli.main(["pending", "--approve", key]) == 0
     old.unlink()
 
-    cfg.mirror_memory = False
+    cfg.mirror_memory = None        # not chosen: no memory step runs (False now runs the opt-out cleanup)
     assert cli.main(["run", "--force"]) == 0
     assert pending.load(cfg.state_dir)[key]["approved"]
 
@@ -341,3 +341,32 @@ def test_a_later_failed_run_does_not_bring_back_a_cleared_warning(upkeep, capsys
 
     assert cli.main(["pending"]) == 0
     assert "on hold" not in capsys.readouterr().out
+
+
+def test_run_lock_recovers_a_recent_abandoned_lock(tmp_path):
+    lock = tmp_path / "state/lock"
+    lock.mkdir(parents=True)
+    with run_lock(lock) as held:
+        assert held and lock.is_dir()
+    assert not lock.exists()
+
+
+def test_run_lock_tightens_existing_state_files(tmp_path):
+    from stat import S_IMODE
+
+    state = tmp_path / "state"
+    state.mkdir(mode=0o755)
+    review = state / "review"
+    review.mkdir(mode=0o755)
+    baseline = review / "baselines.json"
+    baseline.write_text("{}\n")
+    baseline.chmod(0o644)
+    outside = tmp_path / "outside"
+    outside.touch(mode=0o644)
+    (state / "link").symlink_to(outside)
+    with run_lock(state / "lock") as held:
+        assert held
+        assert S_IMODE(state.stat().st_mode) == 0o700
+        assert S_IMODE(review.stat().st_mode) == 0o700
+        assert S_IMODE(baseline.stat().st_mode) == 0o600
+        assert S_IMODE(outside.stat().st_mode) == 0o644

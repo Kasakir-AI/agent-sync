@@ -686,3 +686,34 @@ def test_review_recognizes_plugin_servers_from_all_enabled_tools(tmp_path):
     assert scanned.managed["pack@remote plugin MCP servers"] == 1
     setting = next(v for v in group.versions if v.origin == review.Origin.SETTINGS)
     assert writes.plan(tmp_path, scanned, {group.key: setting.id}, "claude") == []
+
+
+@pytest.mark.parametrize("old_url", [
+    "https://old.example/docs",
+    "https://example.com:8443/docs",
+    "http://example.com/docs",
+    "https://example.com/other",            # a gateway can route servers by path on one host
+])
+def test_mcp_review_drops_target_credentials_when_the_address_changes(tmp_path, old_url):
+    """The old address's headers never reach a new address; the target's other settings stay."""
+    claude = write(tmp_path, ".claude.json", json.dumps({"mcpServers": {
+        "docs": {"url": "https://example.com/docs"},
+    }}))
+    codex = write(tmp_path, ".codex/config.toml",
+                  f'[mcp_servers.docs]\nurl = "{old_url}"\nstartup_timeout_sec = 22\n'
+                  '[mcp_servers.docs.headers]\nAuthorization = "fixture-header"\n'
+                  '[mcp_servers.other]\ncommand = "unrelated"\n')
+    cursor = write(tmp_path, ".cursor/mcp.json", json.dumps({"mcpServers": {
+        "docs": {"url": old_url, "headers": {"Authorization": "fixture-header"}, "custom": True},
+        "other": {"command": "unrelated"},
+    }}))
+
+    apply_choice(tmp_path, "mcp:docs", lambda version: version.path == claude)
+
+    for servers in (tomllib.loads(codex.read_text())["mcp_servers"], json.loads(cursor.read_text())["mcpServers"]):
+        assert servers["docs"]["url"] == "https://example.com/docs"
+        assert "headers" not in servers["docs"]
+        assert servers["other"] == {"command": "unrelated"}
+    assert "fixture-header" not in codex.read_text() + cursor.read_text()
+    assert tomllib.loads(codex.read_text())["mcp_servers"]["docs"]["startup_timeout_sec"] == 22
+    assert json.loads(cursor.read_text())["mcpServers"]["docs"]["custom"] is True
