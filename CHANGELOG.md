@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.1 (2026-11-28)
+
+**A stricter skill catalog**
+
+- Ten more skills are out of the catalog: ones that run a tool at its unpinned newest version against your
+  project (`npx auth@latest migrate`, `npx clerk@latest init`, `eas-cli@latest`), skip a tool's own prompt with
+  `--yes`, run an unpinned MCP server on every edit, update skills on their own, or fetch more instructions at
+  runtime. The catalog now has 130+ skills for 80+ technologies; `catalog/excluded.toml` lists all 51 left out and
+  why.
+- The README says exactly what was left out, and that skills may still run your project's own pinned tools.
+- The catalog's own skills follow the same rule: the SolidJS skill now names a checked scaffolder version
+  instead of `@latest`.
+
 ## 0.10.0 (2026-11-28)
 
 **A skill catalog, restoring backups, and a shorter README**

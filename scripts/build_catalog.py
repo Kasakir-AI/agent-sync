@@ -7,6 +7,7 @@ that commit's file tree: the folder holding its SKILL.md. A skill that can't be 
 
     scripts/build_catalog.py            # rebuild at the commits already pinned (new sources: their newest)
     scripts/build_catalog.py --update   # move every pin to its source's newest commit, and list what moved
+    scripts/build_catalog.py --update owner/repo ...   # move only these sources' pins
 
 catalog/excluded.toml lists skills left out after a review, each with its reason. A skill whose source moves to a
 new commit is worth reading again before it stays in.
@@ -63,6 +64,15 @@ def risky(fields: dict[str, str]) -> list[str]:
         found.append("pre-approves broad shell commands in allowed-tools")
     if re.search(r"(?<![\w`])!`[^`]+`", fields.get("_text", "")):
         found.append("runs a command when the skill loads (!`...`)")
+    text = fields.get("_text", "")
+    runner = r"(?:npx|bunx|pnpm dlx|uvx)(?:\s+(?:-y|--yes|-p|--package)\b)*\s+"
+    if (re.search(rf"\b{runner}(?!create-)[\w@/.-]+@latest\b", text)
+            or re.search(r'"(?:npx|bunx|uvx)"\s*,\s*"args"\s*:\s*\[[^\]]*@latest', text)):  # MCP settings JSON
+        found.append("runs a tool at its unpinned newest version (npx ...@latest)")
+    if re.search(r"(?m)^.*\b(?:npx|bunx|pnpm|npm|yarn|uvx|skills|remotion)\b.*\s--yes\b", text):
+        found.append("skips a tool's own prompt with --yes")
+    if re.search(r"\.well-known/skills|fetch[^\n]{0,40}skill[^\n]{0,40}https?://", text, re.I):
+        found.append("fetches more skill instructions at runtime")
     return found
 
 
@@ -94,12 +104,14 @@ def find(folders: list[str], skill: dict) -> str | None:
 
 
 def main() -> int:
-    keep = "--update" not in sys.argv
+    args = sys.argv[1:]
+    moving = set(args[args.index("--update") + 1:]) if "--update" in args else None    # empty: every source
     sources = tomllib.loads(SOURCES.read_text())
     excluded = tomllib.loads(EXCLUDED.read_text()).get("excluded", {}) if EXCLUDED.exists() else {}
     sources["skills"] = [skill for skill in sources["skills"] if skill["id"] not in excluded]
     previous_pins = json.loads(OUTPUT.read_text()).get("sources", {}) if OUTPUT.exists() else {}
-    previous = previous_pins if keep else {}
+    previous = {repo: pin for repo, pin in previous_pins.items()
+                if moving is None or (moving and repo not in moving)}
     commits, folders, problems = {}, {}, []
     for repo in sorted({skill["source"] for skill in sources["skills"]}):
         try:

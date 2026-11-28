@@ -2,7 +2,7 @@
  "version": 1,
  "built": "2026-11-28",
  "sources": {
-  "Kasakir-AI/agent-sync-skills": "f06506e7e079787a5c28db8f9dca652b504999fc",
+  "Kasakir-AI/agent-sync-skills": "8ac1893e68bdeb48b0547e91e53222d489abc610",
   "Kotlin/kotlin-agent-skills": "087f5689c1934135ed58718cdf524525e452b7e9",
   "addyosmani/web-quality-skills": "afa8da942115f2961fdbfa80807ea0b232ff6c00",
   "affaan-m/everything-claude-code": "4adeee6732a12d1540f49a4d50a38ce8c97f9a53",
@@ -10,9 +10,7 @@
   "angular/skills": "8be7db32d66e643c5e8e2a871dedd44435df6b7a",
   "antfu/skills": "0ecc25a6dcc805074133f7315fb6965450c70990",
   "anthropics/skills": "e4bb5d960d87126ff3b3a8af1a104b7db67560ba",
-  "astrolicious/agent-skills": "cb4839f3794189ebf35c55d3ba5d3876dff7acf0",
   "avdlee/swiftui-agent-skill": "62bd760f005093d1e2e4de5db156e456a5f96400",
-  "better-auth/skills": "20c9e88a5c007461a703f1c213572b073196113e",
   "clerk/skills": "0a5a49e6fe3d57c34d307a17e0f711ccd63fb409",
   "cloudai-x/threejs-skills": "0e181866f095b5f06d005133876e926515390d95",
   "cloudflare/skills": "ff191de7d903788eceaf516a514ae7d3b56b924a",
@@ -22,7 +20,6 @@
   "delexw/claude-code-misc": "c729be07588f3b64a3878cc9f5e99c362388554c",
   "denoland/skills": "d5f6ace6b113aee71ba5286612fa1bde34c7d102",
   "dominikmartn/nothing-design-skill": "6bec3c79022db860c739531e1c3bcecef3922d89",
-  "expo/skills": "8f2b6c0c65533e695243aa401eaa1cb6f1fe86c2",
   "github/awesome-copilot": "93fc8b9ee3ef56b9b5e7261e6ce92d314cb2c1cf",
   "greensock/gsap-skills": "aed9cfd3277740755f6bfc1155c7aa645403b760",
   "hyf0/vue-skills": "198f0cd8f7f9c0a3d9b566ccc16de6677519ee78",
@@ -33,10 +30,7 @@
   "mindrally/skills": "7682ca77710e0971eab4e0ae5dddfa281aea0ba5",
   "pproenca/dot-skills": "cf93c57cac89d6fc3e4194686000411567f5caf3",
   "prisma/skills": "b4bebffd0d0c3499c3d342f69380886a28e28880",
-  "remotion-dev/skills": "a3f4098a2afd0e13f6a6f8c8760e275f75457ea9",
-  "stripe/ai": "d4b19a989bf12bdbd4d42de1f9bfd3aec56fd9da",
   "supabase/agent-skills": "c9be0e931b7930f7d02126d04774d904c381e7d7",
-  "sveltejs/ai-tools": "5c3ad9bac30f332e3e539d0a36a2c7822c44def2",
   "vercel-labs/agent-skills": "5a37a6329fbad3666c3207392a6a7c0110e92efb",
   "vercel/ai": "71aa4dd03a840c9a98bc7426402a96fb9fe147c2",
   "vercel/turborepo": "64bf84900de7d64918059e491666a8411640fa3e",
@@ -231,14 +225,6 @@
    "summary": "Writing guide for Angular documentation contributions."
   },
   {
-   "id": "astrolicious-astro",
-   "name": "astro",
-   "source": "astrolicious/agent-skills",
-   "path": "skills/astro",
-   "title": "Astro Best Practices",
-   "summary": "Build Astro sites following framework best practices and patterns."
-  },
-  {
    "id": "azure-ai",
    "name": "azure-ai",
    "source": "microsoft/github-copilot-for-azure",
@@ -253,30 +239,6 @@
    "path": "plugins/azure-skills/skills/azure-diagnostics",
    "title": "Azure Diagnostics",
    "summary": "Diagnose and troubleshoot Azure resource issues."
-  },
-  {
-   "id": "better-auth-best-practices",
-   "name": "better-auth-best-practices",
-   "source": "better-auth/skills",
-   "path": "better-auth/best-practices",
-   "title": "Better Auth Best Practices",
-   "summary": "Implement authentication with Better Auth following best practices."
-  },
-  {
-   "id": "better-auth-email-password",
-   "name": "email-and-password-best-practices",
-   "source": "better-auth/skills",
-   "path": "better-auth/emailAndPassword",
-   "title": "Better Auth Email & Password",
-   "summary": "Implement email and password authentication with Better Auth."
-  },
-  {
-   "id": "better-auth-two-factor",
-   "name": "two-factor-authentication-best-practices",
-   "source": "better-auth/skills",
-   "path": "better-auth/twoFactor",
-   "title": "Better Auth Two-Factor",
-   "summary": "Implement two-factor authentication with Better Auth."
   },
   {
    "id": "clerk",
@@ -317,14 +279,6 @@
    "path": "skills/clerk-webhooks",
    "title": "Clerk Webhooks",
    "summary": "Handle Clerk webhooks for event-driven authentication flows."
-  },
-  {
-   "id": "clerk-testing",
-   "name": "clerk-testing",
-   "source": "clerk/skills",
-   "path": "skills/clerk-testing",
-   "title": "Clerk Testing",
-   "summary": "Test Clerk authentication integrations."
   },
   {
    "id": "clerk-nuxt-patterns",
@@ -415,14 +369,6 @@
    "summary": "Build Cloudflare Workers following best practices."
   },
   {
-   "id": "cloudflare-web-perf",
-   "name": "web-perf",
-   "source": "cloudflare/skills",
-   "path": "skills/web-perf",
-   "title": "Cloudflare Web Performance",
-   "summary": "Optimize web performance with Cloudflare."
-  },
-  {
    "id": "cloudflare-durable-objects",
    "name": "durable-objects",
    "source": "cloudflare/skills",
@@ -469,14 +415,6 @@
    "path": "deno-typescript",
    "title": "Deno TypeScript",
    "summary": "Write TypeScript applications for the Deno runtime."
-  },
-  {
-   "id": "expo-dev-client",
-   "name": "expo-dev-client",
-   "source": "expo/skills",
-   "path": "plugins/expo/skills/expo-dev-client",
-   "title": "Expo Dev Client",
-   "summary": "Configure and use Expo development client."
   },
   {
    "id": "gsap-core",
@@ -839,36 +777,12 @@
    "summary": "Use Bun for JavaScript runtime, package management, and tooling workflows."
   },
   {
-   "id": "remotion-best-practices",
-   "name": "remotion-best-practices",
-   "source": "remotion-dev/skills",
-   "path": "skills/remotion-best-practices",
-   "title": "Remotion Best Practices",
-   "summary": "Create programmatic videos with Remotion following best practices."
-  },
-  {
-   "id": "stripe-best-practices",
-   "name": "stripe-best-practices",
-   "source": "stripe/ai",
-   "path": "skills/stripe-best-practices",
-   "title": "Stripe Best Practices",
-   "summary": "Implement Stripe payments following recommended practices."
-  },
-  {
    "id": "supabase-postgres-best-practices",
    "name": "supabase-postgres-best-practices",
    "source": "supabase/agent-skills",
    "path": "skills/supabase-postgres-best-practices",
    "title": "Supabase Postgres Best Practices",
    "summary": "Use Supabase Postgres following best practices."
-  },
-  {
-   "id": "svelte-code-writer",
-   "name": "svelte-code-writer",
-   "source": "sveltejs/ai-tools",
-   "path": "packages/opencode/skills/svelte-code-writer",
-   "title": "Svelte Code Writer",
-   "summary": "Generate Svelte code with AI-assisted tooling."
   },
   {
    "id": "swiftui-expert",
@@ -1657,8 +1571,7 @@
     "accessibility",
     "performance",
     "core-web-vitals",
-    "seo",
-    "astrolicious-astro"
+    "seo"
    ],
    "detect": {
     "packages": [
@@ -1807,22 +1720,6 @@
    }
   },
   {
-   "id": "svelte",
-   "name": "Svelte",
-   "skills": [
-    "svelte-code-writer"
-   ],
-   "detect": {
-    "packages": [
-     "svelte",
-     "@sveltejs/kit"
-    ],
-    "files": [
-     "svelte.config.js"
-    ]
-   }
-  },
-  {
    "id": "angular",
    "name": "Angular",
    "skills": [
@@ -1884,18 +1781,6 @@
    }
   },
   {
-   "id": "expo",
-   "name": "Expo",
-   "skills": [
-    "expo-dev-client"
-   ],
-   "detect": {
-    "packages": [
-     "expo"
-    ]
-   }
-  },
-  {
    "id": "kotlin_multiplatform",
    "name": "Kotlin Multiplatform",
    "skills": [
@@ -1917,19 +1802,6 @@
       "kotlin-multiplatform"
      ]
     }
-   }
-  },
-  {
-   "id": "remotion",
-   "name": "Remotion",
-   "skills": [
-    "remotion-best-practices"
-   ],
-   "detect": {
-    "packages": [
-     "remotion",
-     "@remotion/cli"
-    ]
    }
   },
   {
@@ -1955,8 +1827,7 @@
     "clerk-custom-ui",
     "clerk-nextjs-patterns",
     "clerk-orgs",
-    "clerk-webhooks",
-    "clerk-testing"
+    "clerk-webhooks"
    ],
    "detect": {
     "packages": [
@@ -2087,20 +1958,6 @@
    }
   },
   {
-   "id": "better_auth",
-   "name": "Better Auth",
-   "skills": [
-    "better-auth-best-practices",
-    "better-auth-email-password",
-    "better-auth-two-factor"
-   ],
-   "detect": {
-    "packages": [
-     "better-auth"
-    ]
-   }
-  },
-  {
    "id": "turborepo",
    "name": "Turborepo",
    "skills": [
@@ -2225,27 +2082,12 @@
    }
   },
   {
-   "id": "stripe",
-   "name": "Stripe",
-   "skills": [
-    "stripe-best-practices"
-   ],
-   "detect": {
-    "packages": [
-     "stripe",
-     "@stripe/stripe-js",
-     "@stripe/react-stripe-js"
-    ]
-   }
-  },
-  {
    "id": "cloudflare",
    "name": "Cloudflare",
    "skills": [
     "cloudflare",
     "cloudflare-wrangler",
-    "cloudflare-workers-best-practices",
-    "cloudflare-web-perf"
+    "cloudflare-workers-best-practices"
    ],
    "detect": {
     "packages": [

@@ -52,7 +52,7 @@ agent-sync run --dry-run          # what the next run would change, without chan
 
 ## Skills
 
-agent-sync comes with a catalog of 140+ skills for 80+ technologies. A skill is a small bundle of instructions
+agent-sync comes with a catalog of 130+ skills for 80+ technologies. A skill is a small bundle of instructions
 that teaches an agent one kind of work. agent-sync spots what a project uses from its manifests and files
 (`package.json`, `pyproject.toml`, `Cargo.toml`, a `Dockerfile` and more) and suggests the skills that fit.
 
@@ -72,12 +72,15 @@ agent-sync skill list kubernetes
 
 - **[Kasakir-AI/agent-sync-skills](https://github.com/Kasakir-AI/agent-sync-skills)** holds the catalog's own
   skills. Improvements and new skills are welcome as pull requests.
-- **Skills from other makers**, such as Angular, Vercel, Cloudflare, Expo, Stripe and Anthropic, install from
+- **Skills from other makers**, such as Angular, Vercel, Cloudflare and Anthropic, install from
   their makers' own repositories, so you get the original, not a copy.
 - **Every skill was read before it was listed**, scripts included, and is pinned to the commit that was read. The
-  `skills` CLI records a hash of what it installed. Skills that steered agents to paid services, installed other
-  skills on their own, ran commands without asking, or gave unsafe advice were left out; the list and the reasons are
-  in [`catalog/excluded.toml`](catalog/excluded.toml).
+  `skills` CLI records a hash of what it installed. Left out: skills that steer agents to paid services, install
+  other skills or MCP servers, pre-approve commands or run them when they load, run tools at an unpinned newest
+  version (`npx tool@latest`) or skip a tool's own prompt (`--yes`), fetch more instructions at runtime, or give
+  unsafe advice. The list and the reasons are in [`catalog/excluded.toml`](catalog/excluded.toml).
+- Skills still tell your agent to run your project's own tools, such as `npx playwright test`, which use the
+  version your project pins. Your agent asks before running a command, as it always does.
 
 Skills install into the project you're in, for each agent you keep in step. Add `--global` to install for every
 project. `agent-sync skill install owner/repo/name` installs a skill the catalog doesn't list (`name` is the one in
